@@ -1,0 +1,21 @@
+{
+  "name": "@pwa/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@pwa/config": "0.1.0",
+    "@pwa/contracts": "0.1.0",
+    "fastify": "^5.12.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.13"
+  }
+}

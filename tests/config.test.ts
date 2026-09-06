@@ -28,8 +28,36 @@ describe("server configuration", () => {
     expect(config.concurrentSessionLimit).toBe(2);
   });
 
+  it.each(["mysql://localhost/pwa", "https://localhost/pwa"])(
+    "rejects non-PostgreSQL database URL %s",
+    (databaseUrl) => {
+      expect(() =>
+        parseServerConfig({ ...valid, DATABASE_URL: databaseUrl }),
+      ).toThrow(/DATABASE_URL/);
+    },
+  );
+
+  it.each(["MODEL_ALLOWLIST", "OUTBOUND_HOST_ALLOWLIST"] as const)(
+    "rejects a normalized-empty %s",
+    (name) => {
+      expect(() => parseServerConfig({ ...valid, [name]: " , " })).toThrow(
+        new RegExp(name),
+      );
+    },
+  );
+
+  it.each(["SESSION_DAILY_LIMIT", "MONTHLY_TOKEN_LIMIT"] as const)(
+    "rejects a blank %s",
+    (name) => {
+      expect(() => parseServerConfig({ ...valid, [name]: "   " })).toThrow(
+        new RegExp(name),
+      );
+    },
+  );
+
   it("fails readiness configuration without the server-only Ark key", () => {
-    const { ARK_API_KEY: _removed, ...invalid } = valid;
+    const invalid: Record<string, string> = { ...valid };
+    delete invalid.ARK_API_KEY;
 
     expect(() => parseServerConfig(invalid)).toThrow(/ARK_API_KEY/);
   });

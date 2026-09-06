@@ -1,15 +1,15 @@
 # 实施计划
 
-- [ ] 1. 建立 TypeScript 模块化单体工程
-  - [ ] 1.1 初始化 `apps/web`、`apps/api`、`apps/worker` 与共享 packages
+- [x] 1. 建立 TypeScript 模块化单体工程
+  - [x] 1.1 初始化 `apps/web`、`apps/api`、`apps/worker` 与共享 packages
     - 配置 workspace、TypeScript、React、Vite、Fastify、统一 lint、格式化、构建和测试命令。
     - 验证 Web、API 和 worker 可以从同一代码库独立构建和启动。
     - _需求: 16.1, 16.2, 16.3_
-  - [ ] 1.2 建立类型化配置与启动校验
+  - [x] 1.2 建立类型化配置与启动校验
     - 校验数据库、OIDC、方舟、共享 Environment、TOS、模型允许列表和默认配额配置。
     - 保证 `ARK_API_KEY` 只在服务端包可见，缺少必要配置时拒绝进入 ready 状态。
     - _需求: 11.1, 11.4, 12.1, 12.2, 16.6_
-  - [ ] 1.3 建立共享 API 契约与标准错误结构
+  - [x] 1.3 建立共享 API 契约与标准错误结构
     - 在 `packages/contracts` 定义 DTO、错误码、分页结构、Session 状态和前端事件类型。
     - 添加 Schema 校验测试，拒绝 `owner_id`、`tenant_id`、`role` 和未声明字段。
     - _需求: 1.5, 2.4, 16.4, 16.5_

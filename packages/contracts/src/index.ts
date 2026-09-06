@@ -18,16 +18,18 @@ export const errorCodeSchema = z.enum([
 
 export type ErrorCode = z.infer<typeof errorCodeSchema>;
 
-export const apiErrorSchema = z.object({
-  error: z
-    .object({
-      code: errorCodeSchema,
-      message: z.string().min(1),
-      requestId: z.string().min(1),
-      retryable: z.boolean(),
-    })
-    .strict(),
-});
+export const apiErrorSchema = z
+  .object({
+    error: z
+      .object({
+        code: errorCodeSchema,
+        message: z.string().min(1),
+        requestId: z.string().min(1),
+        retryable: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict();
 
 export type ApiError = z.infer<typeof apiErrorSchema>;
 
@@ -98,22 +100,19 @@ export const quotaSchema = z
 
 export type Quota = z.infer<typeof quotaSchema>;
 
-export const arkEventSchema = z.object({
-  id: z.string().min(1),
-  type: z.string().min(1),
-  createdAt: z.string().datetime(),
-  data: z.record(z.string(), z.unknown()),
-});
+export const arkEventSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    createdAt: z.string().datetime(),
+    data: z.record(z.string(), z.unknown()),
+  })
+  .strict();
 
 export type ArkEvent = z.infer<typeof arkEventSchema>;
 
 export type UiEventType =
-  | "message"
-  | "thinking"
-  | "tool"
-  | "status"
-  | "error"
-  | "unknown";
+  "message" | "thinking" | "tool" | "status" | "error" | "unknown";
 
 export interface UiEvent {
   id: string;

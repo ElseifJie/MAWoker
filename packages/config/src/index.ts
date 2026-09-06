@@ -1,9 +1,37 @@
 import { z } from "zod";
 
+function csv(value: string): string[] {
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+const postgresUrl = z.url().refine(
+  (value) => {
+    const protocol = new URL(value).protocol;
+    return protocol === "postgres:" || protocol === "postgresql:";
+  },
+  { message: "must use the PostgreSQL protocol" },
+);
+
+const nonEmptyCsv = z
+  .string()
+  .refine((value) => csv(value).length > 0, "must contain at least one value");
+
+const requiredNonnegativeInteger = z
+  .string()
+  .trim()
+  .min(1)
+  .transform(Number)
+  .pipe(z.number().int().min(0));
+
 const environmentSchema = z
   .object({
-    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-    DATABASE_URL: z.string().min(1),
+    NODE_ENV: z
+      .enum(["development", "test", "production"])
+      .default("development"),
+    DATABASE_URL: postgresUrl,
     APP_ORIGIN: z.url(),
     OIDC_ISSUER: z.url(),
     OIDC_CLIENT_ID: z.string().min(1),
@@ -13,24 +41,19 @@ const environmentSchema = z
     ARK_ENVIRONMENT_ID: z.string().min(1),
     TOS_ENDPOINT: z.url(),
     TOS_BUCKET: z.string().min(1),
-    MODEL_ALLOWLIST: z.string().min(1),
-    OUTBOUND_HOST_ALLOWLIST: z.string().min(1),
+    MODEL_ALLOWLIST: nonEmptyCsv,
+    OUTBOUND_HOST_ALLOWLIST: nonEmptyCsv,
     PERSONAL_AGENT_LIMIT: z.coerce.number().int().min(0).default(10),
     CONCURRENT_SESSION_LIMIT: z.coerce.number().int().min(0).default(2),
-    SESSION_DAILY_LIMIT: z.coerce.number().int().min(0),
-    MONTHLY_TOKEN_LIMIT: z.coerce.number().int().min(0),
+    SESSION_DAILY_LIMIT: requiredNonnegativeInteger,
+    MONTHLY_TOKEN_LIMIT: requiredNonnegativeInteger,
     PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   })
   .passthrough();
 
-function csv(value: string): string[] {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-export function parseServerConfig(environment: Record<string, string | undefined>) {
+export function parseServerConfig(
+  environment: Record<string, string | undefined>,
+) {
   const env = environmentSchema.parse(environment);
   const publicConfig = Object.freeze({
     appOrigin: env.APP_ORIGIN,
