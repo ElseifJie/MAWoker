@@ -40,6 +40,8 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     environmentId: "environment-1",
     title: "Task",
     status: "idle",
+    lastErrorCode: null,
+    errorRecoverable: null,
     archivedAt: null,
     deletionState: "none",
     lastEventAt: null,
@@ -182,6 +184,7 @@ function setup() {
         records.set(id, { ...current, status: "idle" });
       }
     },
+    async projectEvent() {},
     async audit(entry: Parameters<SessionRepository["audit"]>[0]) {
       audits.push(entry);
     },
@@ -206,6 +209,10 @@ function setup() {
       type: event.type,
       createdAt: now.toISOString(),
       data: event.data,
+    })),
+    listEvents: vi.fn(async () => []),
+    streamEvents: vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() {},
     })),
   };
   const resolveForNewSession = vi.fn(async () => agent);

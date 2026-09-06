@@ -1,9 +1,16 @@
 import type {
+  ArkEvent,
   ArkGateway,
   ArkRequestOptions,
   ArkSession,
 } from "@pwa/ark-client";
-import type { SessionStatus } from "@pwa/contracts";
+import {
+  isRecoverableArkError,
+  normalizeArkEvent,
+  sessionStatusSchema,
+  type SessionStatus,
+  type UiEvent,
+} from "@pwa/contracts";
 import type { AvailableAgentRecord } from "./user-agents.js";
 import { ResourceNotFoundError } from "./errors.js";
 
@@ -20,6 +27,8 @@ export interface SessionRecord {
   environmentId: string;
   title: string;
   status: SessionStatus;
+  lastErrorCode: string | null;
+  errorRecoverable: boolean | null;
   archivedAt: Date | null;
   deletionState: "none" | "pending" | "deletion_failed" | "deleted";
   lastEventAt: Date | null;
@@ -83,6 +92,17 @@ export interface SessionRepository {
     id: string,
     outcome: "accepted_or_unknown" | "definite_failure",
   ): PromiseLike<void>;
+  projectEvent(
+    userId: string,
+    id: string,
+    projection: {
+      eventId: string;
+      observedAt: Date;
+      status?: SessionStatus;
+      errorCode?: string | null;
+      errorRecoverable?: boolean | null;
+    },
+  ): PromiseLike<void>;
   audit(entry: SessionAuditEntry): PromiseLike<void>;
 }
 
@@ -133,6 +153,67 @@ function createOperationId(id: string): string {
   return `session-create:${id}`;
 }
 
+const liveEventBufferCapacity = 100;
+
+class BoundedAsyncQueue<T> {
+  private readonly values: T[] = [];
+  private readonly readers = new Set<() => void>();
+  private readonly writers = new Set<() => void>();
+  private closed = false;
+  private failure: unknown;
+
+  constructor(private readonly capacity: number) {}
+
+  get full(): boolean {
+    return this.values.length >= this.capacity;
+  }
+
+  async waitForSpace(signal: AbortSignal): Promise<boolean> {
+    while (
+      !this.closed &&
+      !signal.aborted &&
+      this.values.length >= this.capacity
+    ) {
+      await new Promise<void>((resolve) => this.writers.add(resolve));
+    }
+    return !this.closed && !signal.aborted;
+  }
+
+  push(value: T): boolean {
+    if (this.closed || this.values.length >= this.capacity) return false;
+    this.values.push(value);
+    this.wake(this.readers);
+    return true;
+  }
+
+  async shift(signal: AbortSignal): Promise<IteratorResult<T>> {
+    while (this.values.length === 0) {
+      if (this.failure !== undefined) throw this.failure;
+      if (this.closed || signal.aborted) {
+        return { done: true, value: undefined };
+      }
+      await new Promise<void>((resolve) => this.readers.add(resolve));
+    }
+    if (signal.aborted) return { done: true, value: undefined };
+    const value = this.values.shift()!;
+    this.wake(this.writers);
+    return { done: false, value };
+  }
+
+  close(failure?: unknown): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.failure = failure;
+    this.wake(this.readers);
+    this.wake(this.writers);
+  }
+
+  private wake(waiters: Set<() => void>): void {
+    for (const resolve of waiters) resolve();
+    waiters.clear();
+  }
+}
+
 export class SessionService {
   constructor(
     private readonly dependencies: {
@@ -143,7 +224,14 @@ export class SessionService {
           agentId: string,
         ): PromiseLike<AvailableAgentRecord>;
       };
-      ark: Pick<ArkGateway, "createSession" | "getSession" | "submitEvent">;
+      ark: Pick<
+        ArkGateway,
+        | "createSession"
+        | "getSession"
+        | "submitEvent"
+        | "listEvents"
+        | "streamEvents"
+      >;
       environmentId: string;
       createId: () => string;
       now?: () => Date;
@@ -173,6 +261,8 @@ export class SessionService {
       environmentId: this.dependencies.environmentId,
       title: input.title?.trim() ?? "",
       status: "idle",
+      lastErrorCode: null,
+      errorRecoverable: null,
       archivedAt: null,
       deletionState: "none",
       lastEventAt: null,
@@ -304,6 +394,107 @@ export class SessionService {
     }
   }
 
+  async openEvents(
+    id: string,
+    context: SessionContext,
+    downstreamSignal?: AbortSignal,
+  ): Promise<{ events: AsyncIterable<UiEvent> }> {
+    const session = await this.requireOwned(context.userId, id);
+    const upstreamController = new AbortController();
+    const abortUpstream = () => upstreamController.abort();
+    if (downstreamSignal?.aborted) {
+      upstreamController.abort();
+    } else {
+      downstreamSignal?.addEventListener("abort", abortUpstream, {
+        once: true,
+      });
+    }
+
+    let live: AsyncIterable<ArkEvent>;
+    try {
+      live = await this.dependencies.ark.streamEvents(session.arkSessionId, {
+        correlationId: context.requestId,
+        signal: upstreamController.signal,
+      });
+    } catch (error) {
+      downstreamSignal?.removeEventListener("abort", abortUpstream);
+      throw error;
+    }
+
+    const liveIterator = live[Symbol.asyncIterator]();
+    const buffered = new BoundedAsyncQueue<ArkEvent>(liveEventBufferCapacity);
+    upstreamController.signal.addEventListener(
+      "abort",
+      () => buffered.close(),
+      { once: true },
+    );
+    const pump = (async () => {
+      let streamError: unknown;
+      try {
+        while (!upstreamController.signal.aborted) {
+          if (
+            buffered.full &&
+            !(await buffered.waitForSpace(upstreamController.signal))
+          ) {
+            break;
+          }
+          const next = await liveIterator.next();
+          if (next.done) break;
+          if (!buffered.push(next.value)) break;
+          if (this.eventProjection(next.value).status === "terminated") break;
+        }
+      } catch (error) {
+        if (!upstreamController.signal.aborted) streamError = error;
+      } finally {
+        buffered.close(streamError);
+      }
+    })();
+    const history = this.dependencies.ark.listEvents(session.arkSessionId, {
+      correlationId: context.requestId,
+      signal: upstreamController.signal,
+    });
+    const projectEvent = (source: ArkEvent) =>
+      this.projectEvent(session, source, context.userId);
+
+    return {
+      events: {
+        async *[Symbol.asyncIterator]() {
+          const seen = new Set<string>();
+          try {
+            for (const source of await history) {
+              if (upstreamController.signal.aborted) return;
+              if (seen.has(source.id)) continue;
+              seen.add(source.id);
+              const projected = await projectEvent(source);
+              yield normalizeArkEvent(source);
+              if (projected.status === "terminated") return;
+            }
+
+            while (true) {
+              const next = await buffered.shift(upstreamController.signal);
+              if (next.done) return;
+              const source = next.value;
+              if (seen.has(source.id)) continue;
+              seen.add(source.id);
+              const projected = await projectEvent(source);
+              yield normalizeArkEvent(source);
+              if (projected.status === "terminated") return;
+            }
+          } finally {
+            upstreamController.abort();
+            buffered.close();
+            downstreamSignal?.removeEventListener("abort", abortUpstream);
+            try {
+              await liveIterator.return?.();
+            } finally {
+              await pump;
+            }
+          }
+        },
+      },
+    };
+  }
+
   async reconcileCreate(
     id: string,
     context: SessionContext,
@@ -363,6 +554,65 @@ export class SessionService {
       agentVersion: String(upstream.agentVersion),
       status: upstream.status,
     };
+  }
+
+  private eventProjection(event: ArkEvent): {
+    eventId: string;
+    observedAt: Date;
+    status?: SessionStatus;
+    errorCode?: string | null;
+    errorRecoverable?: boolean | null;
+  } {
+    const base = {
+      eventId: event.id,
+      observedAt: new Date(event.createdAt),
+    };
+    if (event.type === "agent.thinking" || event.type.startsWith("tool.")) {
+      return {
+        ...base,
+        status: "running",
+        errorCode: null,
+        errorRecoverable: null,
+      };
+    }
+    if (event.type === "session.status") {
+      const status = sessionStatusSchema.safeParse(event.data.status);
+      return status.success
+        ? {
+            ...base,
+            status: status.data,
+            errorCode: null,
+            errorRecoverable: null,
+          }
+        : base;
+    }
+    if (event.type === "session.error") {
+      const recoverable = isRecoverableArkError(event.data);
+      return {
+        ...base,
+        status: recoverable ? "rescheduled" : "terminated",
+        errorCode:
+          typeof event.data.code === "string"
+            ? event.data.code
+            : "SESSION_ERROR",
+        errorRecoverable: recoverable,
+      };
+    }
+    return base;
+  }
+
+  private async projectEvent(
+    session: SessionRecord,
+    event: ArkEvent,
+    userId: string,
+  ) {
+    const projection = this.eventProjection(event);
+    await this.dependencies.repository.projectEvent(
+      userId,
+      session.id,
+      projection,
+    );
+    return projection;
   }
 
   private async audit(

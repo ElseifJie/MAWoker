@@ -112,7 +112,7 @@ export interface ArkGateway {
   streamEvents(
     sessionId: string,
     options?: ArkRequestOptions,
-  ): AsyncIterable<ArkEvent>;
+  ): Promise<AsyncIterable<ArkEvent>>;
 
   uploadFile(
     input: ArkFileInput,

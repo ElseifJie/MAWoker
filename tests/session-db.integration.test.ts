@@ -50,6 +50,8 @@ function createIntent(userId: string, agentId: string): SessionRecord {
     environmentId: "environment-1",
     title: "Task",
     status: "idle",
+    lastErrorCode: null,
+    errorRecoverable: null,
     archivedAt: null,
     deletionState: "none",
     lastEventAt: null,
@@ -212,6 +214,72 @@ describe("Session database integration", () => {
       reservation_status: "consumed",
       job_status: "succeeded",
     });
+    await database.close();
+  });
+
+  it("projects each Ark event once with status and recoverable error state", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-projection",
+      arkAgentId: "ark-agent-1",
+      agentVersion: "7",
+      status: "idle",
+    });
+
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+      eventId: "event-1",
+      observedAt: new Date("2026-09-06T00:00:01.000Z"),
+      status: "running",
+      errorCode: null,
+      errorRecoverable: null,
+    });
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+      eventId: "event-1",
+      observedAt: new Date("2026-09-06T00:00:02.000Z"),
+      status: "terminated",
+      errorCode: "DUPLICATE",
+      errorRecoverable: false,
+    });
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+      eventId: "event-2",
+      observedAt: new Date("2026-09-06T00:00:03.000Z"),
+      status: "rescheduled",
+      errorCode: "TEMPORARY",
+      errorRecoverable: true,
+    });
+    await repositories.sessionLifecycle.projectEvent(id(), intent.id, {
+      eventId: "foreign-event",
+      observedAt: new Date("2026-09-06T00:00:04.000Z"),
+      status: "terminated",
+      errorCode: "FOREIGN",
+      errorRecoverable: false,
+    });
+
+    const projected = await repositories.sessionLifecycle.findOwned(
+      userId,
+      intent.id,
+    );
+    expect(projected).toMatchObject({
+      status: "rescheduled",
+      lastErrorCode: "TEMPORARY",
+      errorRecoverable: true,
+    });
+    expect(new Date(projected!.lastEventAt!).toISOString()).toBe(
+      "2026-09-06T00:00:03.000Z",
+    );
+    const cursor = await database.client.query<{
+      recent_event_ids: string[];
+    }>(
+      `select recent_event_ids
+         from session_event_cursors
+        where session_id = $1`,
+      [intent.id],
+    );
+    expect(cursor.rows[0]?.recent_event_ids).toEqual(["event-1", "event-2"]);
     await database.close();
   });
 

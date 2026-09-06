@@ -87,6 +87,8 @@ interface SessionRecord extends Row {
   environmentId: string;
   title: string;
   status: "idle" | "running" | "rescheduled" | "terminated";
+  lastErrorCode: string | null;
+  errorRecoverable: boolean | null;
   archivedAt: Date | null;
   deletionState: "none" | "pending" | "deletion_failed" | "deleted";
   lastEventAt: Date | null;
@@ -101,7 +103,8 @@ const sessionSelection = sql`
   personal_agent_id as "personalAgentId",
   ark_agent_id as "arkAgentId", agent_name as "agentName",
   agent_version as "agentVersion", environment_id as "environmentId",
-  title, status, archived_at as "archivedAt",
+  title, status, last_error_code as "lastErrorCode",
+  error_recoverable as "errorRecoverable", archived_at as "archivedAt",
   deletion_state as "deletionState", last_event_at as "lastEventAt",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
@@ -1415,6 +1418,99 @@ export function createRepositories(database: unknown) {
                 and owner_user_id = ${userId}
                 and message_in_flight_count > 0`,
         );
+      },
+      async projectEvent(
+        userId: string,
+        id: string,
+        projection: {
+          eventId: string;
+          observedAt: Date;
+          status?: SessionRecord["status"];
+          errorCode?: string | null;
+          errorRecoverable?: boolean | null;
+        },
+      ) {
+        await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`insert into session_event_cursors
+                  (session_id, recent_event_ids)
+                select id, '[]'::jsonb
+                  from sessions
+                 where id = ${id} and owner_user_id = ${userId}
+                on conflict (session_id) do nothing`,
+          );
+          const accepted = await first<{ sessionId: string }>(
+            transaction,
+            sql`update session_event_cursors
+                  set recent_event_ids = case
+                        when jsonb_array_length(recent_event_ids) >= 256
+                          then (recent_event_ids - 0)
+                               || jsonb_build_array(${projection.eventId}::text)
+                        else recent_event_ids
+                             || jsonb_build_array(${projection.eventId}::text)
+                      end,
+                      last_observed_at = greatest(
+                        coalesce(last_observed_at, ${projection.observedAt}),
+                        ${projection.observedAt}
+                      ),
+                      updated_at = now()
+                where session_id = ${id}
+                  and exists (
+                    select 1
+                      from sessions
+                     where sessions.id = ${id}
+                       and sessions.owner_user_id = ${userId}
+                  )
+                  and not recent_event_ids @>
+                    ${JSON.stringify([projection.eventId])}::jsonb
+                returning session_id as "sessionId"`,
+          );
+          if (!accepted) return;
+
+          const applies =
+            projection.status !== undefined ||
+            projection.errorCode !== undefined ||
+            projection.errorRecoverable !== undefined;
+          await transaction.execute(
+            sql`update sessions
+                  set status = case
+                        when ${applies}
+                          and (
+                            last_event_at is null
+                            or last_event_at <= ${projection.observedAt}
+                          )
+                          and ${projection.status !== undefined}
+                        then ${projection.status ?? null}::session_status
+                        else status
+                      end,
+                      last_error_code = case
+                        when ${applies}
+                          and (
+                            last_event_at is null
+                            or last_event_at <= ${projection.observedAt}
+                          )
+                          and ${projection.errorCode !== undefined}
+                        then ${projection.errorCode ?? null}
+                        else last_error_code
+                      end,
+                      error_recoverable = case
+                        when ${applies}
+                          and (
+                            last_event_at is null
+                            or last_event_at <= ${projection.observedAt}
+                          )
+                          and ${projection.errorRecoverable !== undefined}
+                        then ${projection.errorRecoverable ?? null}
+                        else error_recoverable
+                      end,
+                      last_event_at = greatest(
+                        coalesce(last_event_at, ${projection.observedAt}),
+                        ${projection.observedAt}
+                      ),
+                      updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}`,
+          );
+        });
       },
       async audit(input: {
         actorUserId: string;

@@ -201,6 +201,8 @@ export const sessions = pgTable(
     environmentId: text("environment_id").notNull(),
     title: text("title").default("").notNull(),
     status: sessionStatus("status").default("idle").notNull(),
+    lastErrorCode: text("last_error_code"),
+    errorRecoverable: boolean("error_recoverable"),
     messageInFlightCount: integer("message_in_flight_count")
       .default(0)
       .notNull(),

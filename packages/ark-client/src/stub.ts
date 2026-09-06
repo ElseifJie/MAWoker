@@ -252,10 +252,10 @@ export class InMemoryArkGateway implements ArkGateway {
     return structuredClone(this.events.get(sessionId) ?? []);
   }
 
-  async *streamEvents(
+  async streamEvents(
     sessionId: string,
     options?: ArkRequestOptions,
-  ): AsyncIterable<ArkEvent> {
+  ): Promise<AsyncIterable<ArkEvent>> {
     this.record("streamEvents", { sessionId }, options);
     this.requireSession(sessionId);
     const subscriber: Subscriber = {
@@ -267,24 +267,30 @@ export class InMemoryArkGateway implements ArkGateway {
     subscribers.add(subscriber);
     this.subscribers.set(sessionId, subscribers);
 
-    try {
-      while (!subscriber.closed && !options?.signal?.aborted) {
-        if (subscriber.events.length === 0) {
-          const onAbort = () => subscriber.notify?.();
-          await new Promise<void>((resolve) => {
-            subscriber.notify = resolve;
-            options?.signal?.addEventListener("abort", onAbort, { once: true });
-          });
-          options?.signal?.removeEventListener("abort", onAbort);
-          subscriber.notify = undefined;
+    return {
+      async *[Symbol.asyncIterator]() {
+        try {
+          while (!subscriber.closed && !options?.signal?.aborted) {
+            if (subscriber.events.length === 0) {
+              const onAbort = () => subscriber.notify?.();
+              await new Promise<void>((resolve) => {
+                subscriber.notify = resolve;
+                options?.signal?.addEventListener("abort", onAbort, {
+                  once: true,
+                });
+              });
+              options?.signal?.removeEventListener("abort", onAbort);
+              subscriber.notify = undefined;
+            }
+            if (subscriber.closed || options?.signal?.aborted) break;
+            const event = subscriber.events.shift();
+            if (event) yield structuredClone(event);
+          }
+        } finally {
+          subscribers.delete(subscriber);
         }
-        if (subscriber.closed || options?.signal?.aborted) break;
-        const event = subscriber.events.shift();
-        if (event) yield structuredClone(event);
-      }
-    } finally {
-      subscribers.delete(subscriber);
-    }
+      },
+    };
   }
 
   async uploadFile(

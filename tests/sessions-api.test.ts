@@ -1,3 +1,6 @@
+import { request as httpRequest } from "node:http";
+import type { AddressInfo } from "node:net";
+import { connect as netConnect } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { ArkGatewayError } from "../packages/ark-client/src/index.js";
 import {
@@ -48,6 +51,8 @@ const record: SessionRecord = {
   environmentId: "environment-secret",
   title: "Task",
   status: "idle",
+  lastErrorCode: null,
+  errorRecoverable: null,
   archivedAt: null,
   deletionState: "none",
   lastEventAt: null,
@@ -67,6 +72,19 @@ function sessionService() {
     interrupt: vi.fn(async () => ({
       eventId: "event-2",
       delivery: "accepted" as const,
+    })),
+    openEvents: vi.fn<SessionApiService["openEvents"]>(async () => ({
+      events: {
+        async *[Symbol.asyncIterator]() {
+          yield {
+            id: "event-3",
+            sourceType: "agent.message",
+            type: "message" as const,
+            createdAt: timestamp.toISOString(),
+            payload: { content: "Hello" },
+          };
+        },
+      },
     })),
   } satisfies SessionApiService;
 }
@@ -290,6 +308,7 @@ describe("Session API", () => {
       ["POST", "/api/v1/sessions", { agentId }],
       ["GET", "/api/v1/sessions", undefined],
       ["GET", `/api/v1/sessions/${sessionId}`, undefined],
+      ["GET", `/api/v1/sessions/${sessionId}/events`, undefined],
       [
         "POST",
         `/api/v1/sessions/${sessionId}/messages`,
@@ -311,5 +330,142 @@ describe("Session API", () => {
       Object.values(sessions).every((call) => call.mock.calls.length === 0),
     ).toBe(true);
     await app.close();
+  });
+
+  it("streams raw Ark identity with normalized UI events after upstream readiness", async () => {
+    const sessions = sessionService();
+    const app = buildApp({ auth: auth(), sessions });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${sessionId}/events`,
+      cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    expect(response.body).toBe(
+      [
+        ": ready",
+        "",
+        "id: event-3",
+        "event: agent.message",
+        `data: ${JSON.stringify({
+          id: "event-3",
+          sourceType: "agent.message",
+          type: "message",
+          createdAt: timestamp.toISOString(),
+          payload: { content: "Hello" },
+        })}`,
+        "",
+        "",
+      ].join("\n"),
+    );
+    expect(sessions.openEvents).toHaveBeenCalledWith(
+      sessionId,
+      expect.objectContaining({ userId }),
+      expect.any(AbortSignal),
+    );
+    await app.close();
+  });
+
+  it("aborts an upstream open when the downstream disconnects before readiness", async () => {
+    const sessions = sessionService();
+    let started!: () => void;
+    const opening = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let upstreamSignal: AbortSignal | undefined;
+    sessions.openEvents.mockImplementationOnce(
+      async (_id, _context, signal) => {
+        upstreamSignal = signal;
+        started();
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return {
+          events: {
+            async *[Symbol.asyncIterator]() {},
+          },
+        };
+      },
+    );
+    const app = buildApp({ auth: auth(), sessions });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: `/api/v1/sessions/${sessionId}/events`,
+      headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+    });
+    request.on("error", () => {});
+    request.end();
+
+    await opening;
+    request.destroy();
+    await vi.waitFor(() => expect(upstreamSignal?.aborted).toBe(true));
+    await app.close();
+  });
+
+  it("backpressures a slow SSE client and cancels the blocked stream", async () => {
+    const sessions = sessionService();
+    const payload = "x".repeat(256 * 1024);
+    const eventCount = 200;
+    let yielded = 0;
+    let released = false;
+    let started!: () => void;
+    const streaming = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    sessions.openEvents.mockImplementationOnce(async () => ({
+      events: {
+        async *[Symbol.asyncIterator]() {
+          try {
+            for (let index = 1; index <= eventCount; index += 1) {
+              yielded += 1;
+              if (index === 1) started();
+              yield {
+                id: `event-${index}`,
+                sourceType: "agent.message",
+                type: "message" as const,
+                createdAt: timestamp.toISOString(),
+                payload: { content: payload },
+              };
+            }
+          } finally {
+            released = true;
+          }
+        },
+      },
+    }));
+    const app = buildApp({ auth: auth(), sessions });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const socket = netConnect({ host: "127.0.0.1", port });
+    socket.on("error", () => {});
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    socket.write(
+      [
+        `GET /api/v1/sessions/${sessionId}/events HTTP/1.1`,
+        "Host: 127.0.0.1",
+        `Cookie: ${AUTH_COOKIE_NAME}=user-token`,
+        "Connection: close",
+        "",
+        "",
+      ].join("\r\n"),
+    );
+
+    await streaming;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const yieldedBeforeClose = yielded;
+    socket.destroy();
+    await vi.waitFor(() => expect(released).toBe(true));
+    await app.close();
+
+    expect(yieldedBeforeClose).toBeLessThan(eventCount);
   });
 });

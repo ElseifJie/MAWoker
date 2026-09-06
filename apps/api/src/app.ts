@@ -20,7 +20,9 @@ import {
   type TenantResource,
   type TenantResourceKind,
 } from "@pwa/domain";
+import type { UiEvent } from "@pwa/contracts";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import type { ServerResponse } from "node:http";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -164,6 +166,11 @@ export interface SessionApiService {
     eventId: string;
     delivery: "accepted";
   }>;
+  openEvents(
+    id: string,
+    context: { userId: string; requestId: string },
+    signal?: AbortSignal,
+  ): PromiseLike<{ events: AsyncIterable<UiEvent> }>;
 }
 
 interface BuildAppOptions {
@@ -419,6 +426,13 @@ function publicSession(session: SessionRecord) {
     id: session.id,
     title: session.title,
     status: session.status,
+    error:
+      session.lastErrorCode == null
+        ? null
+        : {
+            code: session.lastErrorCode,
+            recoverable: session.errorRecoverable === true,
+          },
     deletionState: session.deletionState,
     archivedAt: session.archivedAt,
     lastEventAt: session.lastEventAt,
@@ -434,6 +448,37 @@ function publicSession(session: SessionRecord) {
       version: session.agentVersion,
     },
   };
+}
+
+async function writeSseChunk(
+  response: ServerResponse,
+  chunk: string,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (signal.aborted || response.destroyed) return false;
+  if (response.write(chunk)) return true;
+
+  return new Promise<boolean>((resolve) => {
+    const finish = (writable: boolean) => {
+      response.removeListener("drain", drained);
+      response.removeListener("close", closed);
+      signal.removeEventListener("abort", aborted);
+      resolve(writable);
+    };
+    const drained = () => finish(true);
+    const closed = () => finish(false);
+    const aborted = () => finish(false);
+
+    response.once("drain", drained);
+    response.once("close", closed);
+    signal.addEventListener("abort", aborted, { once: true });
+
+    if (signal.aborted || response.destroyed) {
+      finish(false);
+    } else if (!response.writableNeedDrain) {
+      finish(true);
+    }
+  });
 }
 
 function sendAdminError(
@@ -925,6 +970,67 @@ export function buildApp(options: BuildAppOptions = {}) {
           } catch (error) {
             return sendSessionError(error, request, reply);
           }
+        },
+      );
+
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/sessions/:id/events",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          const controller = new AbortController();
+          const close = () => controller.abort();
+          reply.raw.once("close", close);
+          let opened: { events: AsyncIterable<UiEvent> };
+          try {
+            opened = await sessions.openEvents(
+              request.params.id,
+              context(request),
+              controller.signal,
+            );
+          } catch (error) {
+            controller.abort();
+            reply.raw.removeListener("close", close);
+            return sendSessionError(error, request, reply);
+          }
+
+          reply.hijack();
+          reply.raw.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache, no-transform",
+            connection: "keep-alive",
+          });
+          try {
+            if (
+              !(await writeSseChunk(
+                reply.raw,
+                ": ready\n\n",
+                controller.signal,
+              ))
+            ) {
+              return reply;
+            }
+            for await (const event of opened.events) {
+              if (controller.signal.aborted || reply.raw.destroyed) break;
+              const id = event.id.replace(/[\r\n]/g, "");
+              const sourceType = event.sourceType.replace(/[\r\n]/g, "");
+              if (
+                !(await writeSseChunk(
+                  reply.raw,
+                  `id: ${id}\nevent: ${sourceType}\ndata: ${JSON.stringify(event)}\n\n`,
+                  controller.signal,
+                ))
+              ) {
+                break;
+              }
+            }
+          } finally {
+            controller.abort();
+            reply.raw.removeListener("close", close);
+            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+              reply.raw.end();
+            }
+          }
+          return reply;
         },
       );
 

@@ -131,7 +131,9 @@ describe("InMemoryArkGateway", () => {
       environmentId: "environment-1",
       resources: [],
     });
-    const stream = gateway.streamEvents(session.id)[Symbol.asyncIterator]();
+    const stream = (await gateway.streamEvents(session.id))[
+      Symbol.asyncIterator
+    ]();
     const nextEvent = stream.next();
 
     const message = await gateway.submitEvent(session.id, {
@@ -239,7 +241,9 @@ describe("InMemoryArkGateway", () => {
       environmentId: "environment-1",
       resources: [],
     });
-    const stream = gateway.streamEvents(session.id)[Symbol.asyncIterator]();
+    const stream = (await gateway.streamEvents(session.id))[
+      Symbol.asyncIterator
+    ]();
     const nextEvent = stream.next();
 
     const emitted = gateway.emitEvent(session.id, {
@@ -274,7 +278,9 @@ describe("InMemoryArkGateway", () => {
       environmentId: "environment-1",
       resources: [],
     });
-    const stream = gateway.streamEvents(session.id)[Symbol.asyncIterator]();
+    const stream = (await gateway.streamEvents(session.id))[
+      Symbol.asyncIterator
+    ]();
     const pending = stream.next();
 
     await gateway.deleteSession(session.id);
@@ -301,7 +307,7 @@ describe("InMemoryArkGateway", () => {
     const controller = new AbortController();
     const addListener = vi.spyOn(controller.signal, "addEventListener");
     const removeListener = vi.spyOn(controller.signal, "removeEventListener");
-    const events = gateway.streamEvents(session.id, {
+    const events = await gateway.streamEvents(session.id, {
       signal: controller.signal,
     });
     const stream = events[Symbol.asyncIterator]();
@@ -783,7 +789,7 @@ describe("HttpArkGateway", () => {
     });
 
     const events = [];
-    for await (const event of gateway.streamEvents("session-1")) {
+    for await (const event of await gateway.streamEvents("session-1")) {
       events.push(event);
     }
 
@@ -808,7 +814,9 @@ describe("HttpArkGateway", () => {
       apiKey: "secret",
       fetch,
     });
-    const stream = gateway.streamEvents("session-1")[Symbol.asyncIterator]();
+    const stream = (await gateway.streamEvents("session-1"))[
+      Symbol.asyncIterator
+    ]();
 
     const error = await stream.next().catch((caught) => caught);
 
@@ -841,7 +849,7 @@ describe("HttpArkGateway", () => {
       apiKey: "secret",
       fetch,
     });
-    const events = gateway.streamEvents("session-1", {
+    const events = await gateway.streamEvents("session-1", {
       signal: controller.signal,
     });
     const stream = events[Symbol.asyncIterator]();

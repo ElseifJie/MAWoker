@@ -302,10 +302,10 @@ export class HttpArkGateway implements ArkGateway {
     });
   }
 
-  async *streamEvents(
+  async streamEvents(
     sessionId: string,
     options?: ArkRequestOptions,
-  ): AsyncIterable<ArkEvent> {
+  ): Promise<AsyncIterable<ArkEvent>> {
     const definition: RequestDefinition<unknown> = {
       method: "GET",
       path: `/api/v3/sessions/${encodeURIComponent(sessionId)}/events/stream`,
@@ -325,41 +325,47 @@ export class HttpArkGateway implements ArkGateway {
     const reader = response.body
       .pipeThrough(new TextDecoderStream())
       .getReader();
-    let buffer = "";
-    let completed = false;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        buffer += value ?? "";
-        const blocks = buffer.split(/\r?\n\r?\n/);
-        buffer = blocks.pop() ?? "";
-        for (const block of blocks) {
-          if (block.trim()) yield this.parseSseBlock(block);
-        }
-        if (done) {
-          if (buffer.trim()) yield this.parseSseBlock(buffer);
-          completed = true;
-          break;
-        }
-      }
-    } catch (error) {
-      if (options?.signal?.aborted) {
-        throw new ArkGatewayError("cancelled");
-      }
-      if (error instanceof ArkGatewayError) throw error;
-      throw new ArkGatewayError("unavailable");
-    } finally {
-      if (!completed) {
+    const parseSseBlock = (block: string) => this.parseSseBlock(block);
+
+    return {
+      async *[Symbol.asyncIterator]() {
+        let buffer = "";
+        let completed = false;
         try {
-          await reader.cancel();
-        } catch {
-          // Preserve the original stream result while still releasing resources.
+          while (true) {
+            const { done, value } = await reader.read();
+            buffer += value ?? "";
+            const blocks = buffer.split(/\r?\n\r?\n/);
+            buffer = blocks.pop() ?? "";
+            for (const block of blocks) {
+              if (block.trim()) yield parseSseBlock(block);
+            }
+            if (done) {
+              if (buffer.trim()) yield parseSseBlock(buffer);
+              completed = true;
+              break;
+            }
+          }
+        } catch (error) {
+          if (options?.signal?.aborted) {
+            throw new ArkGatewayError("cancelled");
+          }
+          if (error instanceof ArkGatewayError) throw error;
+          throw new ArkGatewayError("unavailable");
+        } finally {
+          if (!completed) {
+            try {
+              await reader.cancel();
+            } catch {
+              // Preserve the original stream result while releasing resources.
+            }
+          }
+          reader.releaseLock();
+          context.cancel();
+          context.cleanup();
         }
-      }
-      reader.releaseLock();
-      context.cancel();
-      context.cleanup();
-    }
+      },
+    };
   }
 
   uploadFile(

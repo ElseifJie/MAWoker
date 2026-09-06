@@ -38,6 +38,30 @@ describe("shared contracts", () => {
     });
   });
 
+  it("removes chain-of-thought and tool arguments from UI events", () => {
+    expect(
+      normalizeArkEvent({
+        id: "evt-thinking",
+        type: "agent.thinking",
+        createdAt: "2026-09-06T00:00:00.000Z",
+        data: { content: "private reasoning", status: "thinking" },
+      }),
+    ).toMatchObject({ type: "thinking", payload: {} });
+
+    const tool = normalizeArkEvent({
+      id: "evt-tool",
+      type: "tool.call",
+      createdAt: "2026-09-06T00:00:00.000Z",
+      data: {
+        name: "search",
+        status: "running",
+        arguments: { query: "sensitive" },
+      },
+    });
+    expect(tool.payload).toEqual({ name: "search", status: "running" });
+    expect(JSON.stringify(tool)).not.toContain("sensitive");
+  });
+
   it("defines a stable API error envelope", () => {
     expect(
       apiErrorSchema.parse({

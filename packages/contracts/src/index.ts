@@ -131,6 +131,49 @@ const eventTypes: Record<string, UiEventType> = {
   "session.error": "error",
 };
 
+function stringField(
+  data: Record<string, unknown>,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    if (typeof data[name] === "string") return data[name];
+  }
+  return undefined;
+}
+
+export function isRecoverableArkError(data: Record<string, unknown>): boolean {
+  return data.recoverable === true || data.retryable === true;
+}
+
+function publicEventPayload(event: ArkEvent): Record<string, unknown> {
+  if (event.type === "agent.thinking") return {};
+  if (event.type === "tool.call" || event.type === "tool.result") {
+    const name = stringField(event.data, "name", "toolName", "tool_name");
+    const status =
+      stringField(event.data, "status") ??
+      (event.type === "tool.call" ? "running" : "completed");
+    return {
+      ...(name === undefined ? {} : { name }),
+      ...(status === undefined ? {} : { status }),
+    };
+  }
+  if (event.type === "session.status") {
+    const status = stringField(event.data, "status");
+    return status === undefined ? {} : { status };
+  }
+  if (event.type === "session.error") {
+    const code = stringField(event.data, "code");
+    const message = stringField(event.data, "message");
+    const recoverable = isRecoverableArkError(event.data);
+    return {
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message }),
+      recoverable,
+    };
+  }
+  return event.data;
+}
+
 export function normalizeArkEvent(input: ArkEvent): UiEvent {
   const event = arkEventSchema.parse(input);
   return {
@@ -138,7 +181,7 @@ export function normalizeArkEvent(input: ArkEvent): UiEvent {
     sourceType: event.type,
     type: eventTypes[event.type] ?? "unknown",
     createdAt: event.createdAt,
-    payload: event.data,
+    payload: publicEventPayload(event),
   };
 }
 
