@@ -190,6 +190,45 @@ describe("modular monolith foundation", () => {
     }
   }, 10_000);
 
+  it("wires user Agent and Session routes in the production API entrypoint", async () => {
+    const port = await availablePort();
+    const api = spawn(
+      process.execPath,
+      ["--import", "tsx", "apps/api/src/index.ts"],
+      {
+        cwd: root,
+        env: {
+          ...serverEnvironment,
+          PORT: String(port),
+        },
+        stdio: "ignore",
+      },
+    );
+
+    try {
+      const origin = `http://127.0.0.1:${port}`;
+      await waitForApi(origin);
+      const [agents, sessions, emailCode] = await Promise.all([
+        fetch(`${origin}/api/v1/agents`),
+        fetch(`${origin}/api/v1/sessions`),
+        fetch(`${origin}/api/v1/auth/email-code`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: "user@example.com" }),
+        }),
+      ]);
+
+      expect(agents.status).toBe(401);
+      expect(sessions.status).toBe(401);
+      expect(emailCode.status).toBe(401);
+    } finally {
+      api.kill("SIGTERM");
+      if (api.exitCode === null) {
+        await once(api, "exit");
+      }
+    }
+  }, 10_000);
+
   it("keeps the worker process alive until shutdown", async () => {
     const worker = spawn(
       process.execPath,

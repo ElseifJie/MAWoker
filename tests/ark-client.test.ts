@@ -94,6 +94,32 @@ describe("InMemoryArkGateway", () => {
     expect(independent.id).toBe("agent-2");
   });
 
+  it("deduplicates Session creation by its durable idempotency key", async () => {
+    const gateway = new InMemoryArkGateway();
+    const agent = await gateway.createAgent(agentInput);
+    const input = {
+      agentId: agent.id,
+      agentVersion: agent.version,
+      environmentId: "environment-1",
+      resources: [],
+    };
+
+    const first = await gateway.createSession(input, {
+      correlationId: "first-attempt",
+      idempotencyKey: "session-create:durable-id",
+    });
+    const replay = await gateway.createSession(input, {
+      correlationId: "reconciliation-attempt",
+      idempotencyKey: "session-create:durable-id",
+    });
+    const independent = await gateway.createSession(input, {
+      correlationId: "first-attempt",
+    });
+
+    expect(replay).toEqual(first);
+    expect(independent.id).toBe("session-2");
+  });
+
   it("tracks session transitions, history, and deterministic live events", async () => {
     const gateway = new InMemoryArkGateway({
       now: () => new Date("2026-09-06T00:00:00.000Z"),

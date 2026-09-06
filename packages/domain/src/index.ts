@@ -75,4 +75,5 @@ export class TenantAuthorizationService {
 }
 
 export * from "./platform-agents.js";
+export * from "./sessions.js";
 export * from "./user-agents.js";

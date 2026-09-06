@@ -10,10 +10,12 @@ import {
   InvalidModelError,
   PersonalAgentQuotaExceededError,
   ResourceNotFoundError,
+  SessionTerminatedError,
   type AvailableAgentRecord,
   type DefaultAgentRecord,
   type PersonalAgentRecord,
   type PlatformAgentRecord,
+  type SessionRecord,
   type TenantAuthorizationService,
   type TenantResource,
   type TenantResourceKind,
@@ -140,10 +142,35 @@ export interface UserAgentApiService {
   ): PromiseLike<void>;
 }
 
+export interface SessionApiService {
+  create(
+    input: { agentId: string; title?: string },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<SessionRecord>;
+  list(userId: string, archived: boolean): PromiseLike<SessionRecord[]>;
+  get(userId: string, id: string): PromiseLike<SessionRecord>;
+  sendMessage(
+    id: string,
+    input: { content: string },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<{
+    eventId: string;
+    delivery: "accepted" | "queued";
+  }>;
+  interrupt(
+    id: string,
+    context: { userId: string; requestId: string },
+  ): PromiseLike<{
+    eventId: string;
+    delivery: "accepted";
+  }>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
   admin?: AdminService;
   userAgents?: UserAgentApiService;
+  sessions?: SessionApiService;
   isProduction?: boolean;
 }
 
@@ -264,6 +291,43 @@ const quotaBodySchema = {
   },
 } as const;
 
+const createSessionBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["agentId"],
+  properties: {
+    agentId: { type: "string", format: "uuid" },
+    title: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
+  },
+} as const;
+
+const listSessionsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    archived: { type: "boolean", default: false },
+  },
+} as const;
+
+const sendMessageBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["content"],
+  properties: {
+    content: {
+      type: "string",
+      minLength: 1,
+      maxLength: 100_000,
+      pattern: "\\S",
+    },
+  },
+} as const;
+
+const emptyBodySchema = {
+  type: "object",
+  additionalProperties: false,
+} as const;
+
 function cookieOptions(isProduction: boolean, expires?: Date) {
   return {
     path: "/",
@@ -347,6 +411,28 @@ function publicUserAgent(
     ...(includePrompt && (personal || agent.editable)
       ? { systemPrompt: agent.systemPrompt }
       : {}),
+  };
+}
+
+function publicSession(session: SessionRecord) {
+  return {
+    id: session.id,
+    title: session.title,
+    status: session.status,
+    deletionState: session.deletionState,
+    archivedAt: session.archivedAt,
+    lastEventAt: session.lastEventAt,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    agent: {
+      id:
+        session.agentKind === "platform"
+          ? session.platformAgentId
+          : session.personalAgentId,
+      kind: session.agentKind,
+      name: session.agentName,
+      version: session.agentVersion,
+    },
   };
 }
 
@@ -441,6 +527,102 @@ function sendAdminError(
     typeof error === "object" && error !== null && "category" in error
       ? error.category
       : undefined;
+  if (category === "rate_limited") {
+    return reply
+      .code(429)
+      .send(
+        applicationError(
+          request.id,
+          "ARK_RATE_LIMITED",
+          "Ark rate limit exceeded",
+          true,
+        ),
+      );
+  }
+  if (
+    category === "unavailable" ||
+    category === "unknown_write_outcome" ||
+    category === "timeout"
+  ) {
+    return reply
+      .code(503)
+      .send(
+        applicationError(
+          request.id,
+          "ARK_UNAVAILABLE",
+          "Ark service is unavailable",
+          category !== "unknown_write_outcome",
+        ),
+      );
+  }
+  throw error;
+}
+
+function sendSessionError(
+  error: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  if (
+    error instanceof ResourceNotFoundError ||
+    hasErrorName(error, "ResourceNotFoundError")
+  ) {
+    return reply.code(404).send(resourceNotFoundError(request.id));
+  }
+  if (
+    error instanceof SessionTerminatedError ||
+    hasErrorName(error, "SessionTerminatedError") ||
+    (typeof error === "object" &&
+      error !== null &&
+      "category" in error &&
+      error.category === "session_terminated")
+  ) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "SESSION_TERMINATED",
+          "Session is terminated",
+          false,
+        ),
+      );
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    error.name === "QuotaExceededError"
+  ) {
+    const concurrent =
+      "dimension" in error && error.dimension === "concurrent_sessions";
+    return reply
+      .code(429)
+      .send(
+        applicationError(
+          request.id,
+          concurrent ? "CONCURRENCY_LIMITED" : "QUOTA_EXCEEDED",
+          concurrent ? "Concurrent Session quota exceeded" : "Quota exceeded",
+          false,
+        ),
+      );
+  }
+  const category =
+    typeof error === "object" && error !== null && "category" in error
+      ? error.category
+      : undefined;
+  if (category === "runtime_busy") {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "SESSION_BUSY",
+          "Session runtime is busy",
+          true,
+        ),
+      );
+  }
   if (category === "rate_limited") {
     return reply
       .code(429)
@@ -687,6 +869,114 @@ export function buildApp(options: BuildAppOptions = {}) {
     });
 
     app.get("/api/v1/me", async (request) => ({ user: request.auth }));
+
+    if (options.sessions) {
+      const sessions = options.sessions;
+      const context = (request: FastifyRequest) => ({
+        userId: request.auth!.userId,
+        requestId: request.id,
+      });
+
+      app.post<{
+        Body: { agentId: string; title?: string };
+      }>(
+        "/api/v1/sessions",
+        { schema: { body: createSessionBodySchema } },
+        async (request, reply) => {
+          try {
+            const created = await sessions.create(
+              {
+                agentId: request.body.agentId,
+                ...(request.body.title !== undefined
+                  ? { title: request.body.title.trim() }
+                  : {}),
+              },
+              context(request),
+            );
+            return reply.code(201).send(publicSession(created));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.get<{ Querystring: { archived?: boolean } }>(
+        "/api/v1/sessions",
+        { schema: { querystring: listSessionsQuerySchema } },
+        async (request, reply) => {
+          const records = await sessions.list(
+            request.auth!.userId,
+            request.query.archived ?? false,
+          );
+          return reply.send({ sessions: records.map(publicSession) });
+        },
+      );
+
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/sessions/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const record = await sessions.get(
+              request.auth!.userId,
+              request.params.id,
+            );
+            return reply.send(publicSession(record));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{
+        Params: { id: string };
+        Body: { content: string };
+      }>(
+        "/api/v1/sessions/:id/messages",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: sendMessageBodySchema,
+          },
+        },
+        async (request, reply) => {
+          try {
+            const accepted = await sessions.sendMessage(
+              request.params.id,
+              { content: request.body.content.trim() },
+              context(request),
+            );
+            return reply.code(202).send(accepted);
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{
+        Params: { id: string };
+        Body: Record<string, never>;
+      }>(
+        "/api/v1/sessions/:id/interrupt",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: emptyBodySchema,
+          },
+        },
+        async (request, reply) => {
+          try {
+            const accepted = await sessions.interrupt(
+              request.params.id,
+              context(request),
+            );
+            return reply.code(202).send(accepted);
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+    }
 
     if (options.userAgents) {
       const userAgents = options.userAgents;

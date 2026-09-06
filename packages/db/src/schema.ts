@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  boolean,
   check,
   foreignKey,
   index,
@@ -195,10 +196,17 @@ export const sessions = pgTable(
     ),
     personalAgentId: uuid("personal_agent_id"),
     arkAgentId: text("ark_agent_id").notNull(),
+    agentName: text("agent_name").default("").notNull(),
     agentVersion: text("agent_version").notNull(),
     environmentId: text("environment_id").notNull(),
     title: text("title").default("").notNull(),
     status: sessionStatus("status").default("idle").notNull(),
+    messageInFlightCount: integer("message_in_flight_count")
+      .default(0)
+      .notNull(),
+    messageStartPending: boolean("message_start_pending")
+      .default(false)
+      .notNull(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     deletionState: deletionState("deletion_state").default("none").notNull(),
     lastEventAt: timestamp("last_event_at", { withTimezone: true }),
@@ -222,6 +230,10 @@ export const sessions = pgTable(
         or
         (${table.agentKind} = 'personal' and ${table.personalAgentId} is not null and ${table.platformAgentId} is null)
       )`,
+    ),
+    check(
+      "sessions_message_in_flight_nonnegative_check",
+      sql`${table.messageInFlightCount} >= 0`,
     ),
     index("sessions_owner_archived_idx").on(
       table.ownerUserId,

@@ -74,6 +74,37 @@ interface AvailableAgentRecord extends Row {
   editable: boolean;
 }
 
+interface SessionRecord extends Row {
+  id: string;
+  ownerUserId: string;
+  arkSessionId: string;
+  agentKind: "platform" | "personal";
+  platformAgentId: string | null;
+  personalAgentId: string | null;
+  arkAgentId: string;
+  agentName: string;
+  agentVersion: string;
+  environmentId: string;
+  title: string;
+  status: "idle" | "running" | "rescheduled" | "terminated";
+  archivedAt: Date | null;
+  deletionState: "none" | "pending" | "deletion_failed" | "deleted";
+  lastEventAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const sessionSelection = sql`
+  id, owner_user_id as "ownerUserId",
+  ark_session_id as "arkSessionId", agent_kind as "agentKind",
+  platform_agent_id as "platformAgentId",
+  personal_agent_id as "personalAgentId",
+  ark_agent_id as "arkAgentId", agent_name as "agentName",
+  agent_version as "agentVersion", environment_id as "environmentId",
+  title, status, archived_at as "archivedAt",
+  deletion_state as "deletionState", last_event_at as "lastEventAt",
+  created_at as "createdAt", updated_at as "updatedAt"`;
+
 const personalAgentSelection = sql`
   id, owner_user_id as "ownerUserId", ark_agent_id as "arkAgentId",
   name, description, model_id as "modelId",
@@ -1017,6 +1048,397 @@ export function createRepositories(database: unknown) {
       },
     },
     sessions: tenantRepository(db, sql.raw("sessions")),
+    sessionLifecycle: {
+      prepareCreate(input: SessionRecord) {
+        return db.transaction(async (transaction) => {
+          const user = await first(
+            transaction,
+            sql`select id from users
+                 where id = ${input.ownerUserId}
+                   and role = 'user'
+                   and status = 'active'
+                 for update`,
+          );
+          if (!user) throw new Error("Active user not found");
+
+          const quota = await effectiveQuota(transaction, input.ownerUserId);
+          const counters = await first<{
+            dailyCreateIntents: number;
+            monthlyTokens: number;
+          }>(
+            transaction,
+            sql`select
+                  (select count(*)::integer
+                     from (
+                       select id
+                         from sessions
+                        where owner_user_id = ${input.ownerUserId}
+                          and created_at >= date_trunc(
+                            'day',
+                            ${input.createdAt}::timestamptz
+                          )
+                       union
+                       select id
+                         from quota_reservations
+                        where user_id = ${input.ownerUserId}
+                          and status = 'active'
+                          and expires_at > ${input.createdAt}
+                          and created_at >= date_trunc(
+                            'day',
+                            ${input.createdAt}::timestamptz
+                          )
+                     ) as create_intents)
+                    as "dailyCreateIntents",
+                  (select coalesce(sum(quantity), 0)::bigint
+                     from usage_ledger
+                    where user_id = ${input.ownerUserId}
+                      and metric_type in ('input_tokens', 'output_tokens')
+                      and recorded_at >= date_trunc(
+                        'month',
+                        ${input.createdAt}::timestamptz
+                      ))
+                    as "monthlyTokens"`,
+          );
+          if (!counters) throw new Error("Unable to read quota counters");
+          if (counters.dailyCreateIntents >= quota.dailySessionLimit) {
+            throw new QuotaExceededError("daily_sessions");
+          }
+          if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
+            throw new QuotaExceededError("monthly_tokens");
+          }
+
+          await transaction.execute(
+            sql`insert into quota_reservations
+                  (id, user_id, expires_at, created_at)
+                values
+                  (${input.id}, ${input.ownerUserId},
+                   ${new Date(input.createdAt.getTime() + 5 * 60_000)},
+                   ${input.createdAt})`,
+          );
+          await transaction.execute(
+            sql`insert into sessions
+                  (id, owner_user_id, ark_session_id, agent_kind,
+                   platform_agent_id, personal_agent_id, ark_agent_id,
+                   agent_name, agent_version, environment_id, title, status,
+                   archived_at, deletion_state, last_event_at, created_at,
+                   updated_at)
+                values
+                  (${input.id}, ${input.ownerUserId}, ${input.arkSessionId},
+                   ${input.agentKind}, ${input.platformAgentId},
+                   ${input.personalAgentId}, ${input.arkAgentId},
+                   ${input.agentName}, ${input.agentVersion},
+                   ${input.environmentId}, ${input.title}, ${input.status},
+                   ${input.archivedAt}, ${input.deletionState},
+                   ${input.lastEventAt}, ${input.createdAt}, ${input.updatedAt})`,
+          );
+          await transaction.execute(
+            sql`insert into background_jobs
+                  (id, owner_user_id, type, status, priority, payload,
+                   attempts, run_after)
+                values
+                  (${input.id}, ${input.ownerUserId}, 'reconcile_session',
+                   'pending', 100,
+                   ${JSON.stringify({
+                     operation: "create",
+                     sessionId: input.id,
+                   })}::jsonb,
+                   0, now() + interval '30 seconds')`,
+          );
+        });
+      },
+      completeCreate(
+        id: string,
+        userId: string,
+        upstream: {
+          arkSessionId: string;
+          arkAgentId: string;
+          agentVersion: string;
+          status: SessionRecord["status"];
+        },
+      ) {
+        return db.transaction(async (transaction) => {
+          const job = await requiredFirst<{ status: string }>(
+            transaction,
+            sql`select status from background_jobs
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and type = 'reconcile_session'
+                 for update`,
+          );
+          if (job.status === "failed") {
+            throw new Error("Session create reconciliation is terminal");
+          }
+          const session = await requiredFirst<SessionRecord>(
+            transaction,
+            sql`update sessions
+                  set ark_session_id = ${upstream.arkSessionId},
+                      ark_agent_id = ${upstream.arkAgentId},
+                      agent_version = ${upstream.agentVersion},
+                      status = ${upstream.status},
+                      updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                returning ${sessionSelection}`,
+          );
+          await transaction.execute(
+            sql`update quota_reservations
+                  set status = 'consumed', resolved_at = now()
+                where id = ${id} and user_id = ${userId}
+                  and status = 'active'`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'succeeded', locked_at = null,
+                      locked_by = null, last_error = null, updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                  and type = 'reconcile_session'`,
+          );
+          return session;
+        });
+      },
+      async preserveCreateOutcome(
+        id: string,
+        userId: string,
+        upstream?: {
+          arkSessionId: string;
+          arkAgentId: string;
+          agentVersion: string;
+          status: SessionRecord["status"];
+        },
+      ) {
+        await db.transaction(async (transaction) => {
+          if (upstream) {
+            await transaction.execute(
+              sql`update sessions
+                    set ark_session_id = ${upstream.arkSessionId},
+                        ark_agent_id = ${upstream.arkAgentId},
+                        agent_version = ${upstream.agentVersion},
+                        status = ${upstream.status},
+                        updated_at = now()
+                  where id = ${id} and owner_user_id = ${userId}`,
+            );
+          }
+          await transaction.execute(
+            sql`update quota_reservations
+                  set status = 'consumed', resolved_at = now()
+                where id = ${id} and user_id = ${userId}
+                  and status = 'active'`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'pending', run_after = now() + interval '30 seconds',
+                      locked_at = null, locked_by = null, updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                  and type = 'reconcile_session'
+                  and status <> 'succeeded'`,
+          );
+        });
+      },
+      async failCreate(id: string, userId: string) {
+        await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`delete from sessions
+                 where id = ${id} and owner_user_id = ${userId}`,
+          );
+          await transaction.execute(
+            sql`update quota_reservations
+                  set status = 'released', resolved_at = now()
+                where id = ${id} and user_id = ${userId}
+                  and status = 'active'`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'failed', locked_at = null, locked_by = null,
+                      last_error = 'ARK_CREATE_FAILED', updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                  and type = 'reconcile_session'`,
+          );
+        });
+      },
+      listOwned(userId: string, archived: boolean) {
+        return rows<SessionRecord>(
+          db,
+          sql`select ${sessionSelection}
+                from sessions
+               where owner_user_id = ${userId}
+                 and (
+                   ark_session_id not like 'pending:%'
+                   or deletion_state = 'deletion_failed'
+                 )
+                 and deletion_state <> 'deleted'
+                 and ${
+                   archived
+                     ? sql`archived_at is not null`
+                     : sql`archived_at is null`
+                 }
+               order by created_at desc, id desc`,
+        );
+      },
+      findOwned(userId: string, id: string) {
+        return first<SessionRecord>(
+          db,
+          sql`select ${sessionSelection}
+                from sessions
+               where id = ${id} and owner_user_id = ${userId}
+                 and (
+                   ark_session_id not like 'pending:%'
+                   or deletion_state = 'deletion_failed'
+                 )
+                 and deletion_state <> 'deleted'
+               limit 1`,
+        );
+      },
+      findCreateIntent(userId: string, id: string) {
+        return first<SessionRecord>(
+          db,
+          sql`select ${sessionSelection}
+                from sessions
+               where id = ${id} and owner_user_id = ${userId}
+               limit 1`,
+        );
+      },
+      beginMessage(userId: string, id: string) {
+        return db.transaction(async (transaction) => {
+          const user = await first(
+            transaction,
+            sql`select id from users
+                 where id = ${userId}
+                   and role = 'user'
+                   and status = 'active'
+                 for update`,
+          );
+          if (!user) return undefined;
+          const session = await first<SessionRecord>(
+            transaction,
+            sql`select ${sessionSelection}
+                  from sessions
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and ark_session_id not like 'pending:%'
+                   and deletion_state <> 'deleted'
+                 for update`,
+          );
+          if (!session) return undefined;
+
+          const quota = await effectiveQuota(transaction, userId);
+          const usage = await first<{
+            concurrentSessions: number;
+            monthlyTokens: number;
+          }>(
+            transaction,
+            sql`select
+                  (select count(*)::integer
+                     from sessions
+                    where owner_user_id = ${userId}
+                      and status in ('running', 'rescheduled')
+                      and deletion_state <> 'deleted')
+                    as "concurrentSessions",
+                  (select coalesce(sum(quantity), 0)::bigint
+                     from usage_ledger
+                    where user_id = ${userId}
+                      and metric_type in ('input_tokens', 'output_tokens')
+                      and recorded_at >= date_trunc('month', now()))
+                    as "monthlyTokens"`,
+          );
+          if (!usage) throw new Error("Unable to read message quota");
+          if (usage.monthlyTokens >= quota.monthlyTokenLimit) {
+            throw new QuotaExceededError("monthly_tokens");
+          }
+          if (session.status !== "idle") {
+            if (session.status === "terminated") {
+              return {
+                session,
+                started: false,
+              };
+            }
+            const queued = await requiredFirst<SessionRecord>(
+              transaction,
+              sql`update sessions
+                    set message_in_flight_count = message_in_flight_count + 1,
+                        updated_at = now()
+                  where id = ${id}
+                    and owner_user_id = ${userId}
+                    and status in ('running', 'rescheduled')
+                  returning ${sessionSelection}`,
+            );
+            return {
+              session: queued,
+              started: false,
+            };
+          }
+          if (usage.concurrentSessions >= quota.concurrentSessionLimit) {
+            throw new QuotaExceededError("concurrent_sessions");
+          }
+
+          const started = await requiredFirst<SessionRecord>(
+            transaction,
+            sql`update sessions
+                  set status = 'running',
+                      message_in_flight_count = message_in_flight_count + 1,
+                      message_start_pending = true,
+                      updated_at = now()
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and status = 'idle'
+                returning ${sessionSelection}`,
+          );
+          return {
+            session: started,
+            started: true,
+          };
+        });
+      },
+      async finishMessage(
+        userId: string,
+        id: string,
+        outcome: "accepted_or_unknown" | "definite_failure",
+      ) {
+        await db.execute(
+          sql`update sessions
+                set status = case
+                      when ${outcome} = 'definite_failure'
+                        and message_start_pending
+                        and message_in_flight_count = 1
+                        and status = 'running'
+                      then 'idle'::session_status
+                      else status
+                    end,
+                    message_start_pending = case
+                      when ${outcome} = 'accepted_or_unknown'
+                        or message_in_flight_count = 1
+                      then false
+                      else message_start_pending
+                    end,
+                    message_in_flight_count =
+                      greatest(message_in_flight_count - 1, 0),
+                    updated_at = now()
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and message_in_flight_count > 0`,
+        );
+      },
+      async audit(input: {
+        actorUserId: string;
+        ownerUserId: string;
+        action: string;
+        resourceType: "session";
+        resourceId: string;
+        result: "succeeded" | "failed";
+        requestId: string;
+        arkRequestId?: string;
+        errorCode?: string;
+      }) {
+        await db.execute(
+          sql`insert into audit_logs
+                (id, actor_user_id, owner_user_id, action, resource_type,
+                 resource_id, result, request_id, ark_request_id, error_code)
+              values
+                (${randomUUID()}, ${input.actorUserId}, ${input.ownerUserId},
+                 ${input.action}, ${input.resourceType}, ${input.resourceId},
+                 ${input.result}, ${input.requestId},
+                 ${input.arkRequestId ?? null}, ${input.errorCode ?? null})`,
+        );
+      },
+    },
     sessionInputs: tenantRepository(db, sql.raw("session_inputs")),
     artifacts: tenantRepository(db, sql.raw("artifacts")),
 
@@ -1241,8 +1663,9 @@ export function createRepositories(database: unknown) {
                      and type in (${jobTypes})
                      and attempts >= max_attempts
                    for update skip locked
-                )
-                update background_jobs job
+                ),
+                failed_jobs as (
+                  update background_jobs job
                    set status = 'failed',
                        locked_at = null,
                        locked_by = null,
@@ -1252,7 +1675,26 @@ export function createRepositories(database: unknown) {
                        ),
                        updated_at = ${now}
                   from exhausted
-                 where job.id = exhausted.id`,
+                 where job.id = exhausted.id
+                 returning job.id, job.owner_user_id, job.type
+                ),
+                failed_sessions as (
+                  update sessions session
+                     set status = 'terminated',
+                         deletion_state = 'deletion_failed',
+                         updated_at = ${now}
+                    from failed_jobs job
+                   where job.type = 'reconcile_session'
+                     and session.id = job.id
+                     and session.owner_user_id = job.owner_user_id
+                  returning session.id, session.owner_user_id
+                )
+                update quota_reservations reservation
+                   set status = 'consumed',
+                       resolved_at = coalesce(reservation.resolved_at, ${now})
+                  from failed_sessions session
+                 where reservation.id = session.id
+                   and reservation.user_id = session.owner_user_id`,
           );
           return rows<JobRecord>(
             transaction,
@@ -1323,18 +1765,48 @@ export function createRepositories(database: unknown) {
         const runAfter = new Date(
           now.getTime() + Math.min(60_000, 2 ** 10 * 100),
         );
-        await db.execute(
-          sql`update background_jobs
-                set status = ${final ? "failed" : "pending"}::background_job_status,
-                    run_after = ${runAfter},
-                    locked_at = null,
-                    locked_by = null,
-                    last_error = ${error},
-                    updated_at = ${now}
-              where id = ${id}
-                and status = 'running'
-                and locked_by = ${workerId}`,
-        );
+        await db.transaction(async (transaction) => {
+          const updated = await first<{
+            id: string;
+            ownerUserId: string | null;
+            type: JobRecord["type"];
+          }>(
+            transaction,
+            sql`update background_jobs
+                  set status = ${final ? "failed" : "pending"}::background_job_status,
+                      run_after = ${runAfter},
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = ${error},
+                      updated_at = ${now}
+                where id = ${id}
+                  and status = 'running'
+                  and locked_by = ${workerId}
+                returning id, owner_user_id as "ownerUserId", type`,
+          );
+          if (
+            !final ||
+            updated?.type !== "reconcile_session" ||
+            !updated.ownerUserId
+          ) {
+            return;
+          }
+          await transaction.execute(
+            sql`update sessions
+                  set status = 'terminated',
+                      deletion_state = 'deletion_failed',
+                      updated_at = ${now}
+                where id = ${updated.id}
+                  and owner_user_id = ${updated.ownerUserId}`,
+          );
+          await transaction.execute(
+            sql`update quota_reservations
+                  set status = 'consumed',
+                      resolved_at = coalesce(resolved_at, ${now})
+                where id = ${updated.id}
+                  and user_id = ${updated.ownerUserId}`,
+          );
+        });
       },
     },
   };

@@ -66,6 +66,7 @@ export class InMemoryArkGateway implements ArkGateway {
   private readonly agents = new Map<string, ArkAgent>();
   private readonly agentsByCreateIdempotencyKey = new Map<string, string>();
   private readonly sessions = new Map<string, ArkSession>();
+  private readonly sessionsByCreateIdempotencyKey = new Map<string, string>();
   private readonly events = new Map<string, ArkEvent[]>();
   private readonly files = new Map<string, ArkFile>();
   private readonly resources = new Map<string, ArkResource[]>();
@@ -158,6 +159,12 @@ export class InMemoryArkGateway implements ArkGateway {
     options?: ArkRequestOptions,
   ): Promise<ArkSession> {
     this.record("createSession", input, options);
+    const existingId = options?.idempotencyKey
+      ? this.sessionsByCreateIdempotencyKey.get(options.idempotencyKey)
+      : undefined;
+    if (existingId) {
+      return structuredClone(this.requireSession(existingId));
+    }
     const agent = this.requireAgent(input.agentId);
     if (agent.version !== input.agentVersion) {
       throw new ArkGatewayError("version_conflict");
@@ -175,6 +182,12 @@ export class InMemoryArkGateway implements ArkGateway {
       status: "idle",
     };
     this.sessions.set(session.id, session);
+    if (options?.idempotencyKey) {
+      this.sessionsByCreateIdempotencyKey.set(
+        options.idempotencyKey,
+        session.id,
+      );
+    }
     this.events.set(session.id, []);
     this.resources.set(
       session.id,
@@ -202,6 +215,9 @@ export class InMemoryArkGateway implements ArkGateway {
     this.record("deleteSession", { sessionId }, options);
     this.requireSession(sessionId);
     this.sessions.delete(sessionId);
+    for (const [key, value] of this.sessionsByCreateIdempotencyKey) {
+      if (value === sessionId) this.sessionsByCreateIdempotencyKey.delete(key);
+    }
     this.events.delete(sessionId);
     this.resources.delete(sessionId);
     this.artifacts.delete(sessionId);
