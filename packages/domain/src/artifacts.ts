@@ -36,9 +36,11 @@ export interface ArtifactRepository {
   stageCleanup(input: {
     id: string;
     ownerUserId: string;
+    sessionId: string;
     objectKey: string;
     runAfter: Date;
-  }): PromiseLike<void>;
+    uploadInProgressUntil?: Date;
+  }): PromiseLike<boolean>;
   commitCandidate(input: {
     record: ArtifactRecord;
     stagingCleanupJobId: string;
@@ -102,6 +104,7 @@ export class ArtifactService {
         versionId: string;
       }) => string;
       now?: () => Date;
+      uploadLeaseMs?: number;
     },
   ) {}
 
@@ -145,12 +148,18 @@ export class ArtifactService {
         versionId: stagingCleanupJobId,
       });
       const timestamp = (this.dependencies.now ?? (() => new Date()))();
-      await this.dependencies.repository.stageCleanup({
+      const staged = await this.dependencies.repository.stageCleanup({
         id: stagingCleanupJobId,
         ownerUserId: context.userId,
+        sessionId,
         objectKey: tosObjectKey,
         runAfter: new Date(timestamp.getTime() + 24 * 60 * 60 * 1_000),
+        uploadInProgressUntil: new Date(
+          timestamp.getTime() +
+            (this.dependencies.uploadLeaseMs ?? 5 * 60 * 1_000),
+        ),
       });
+      if (!staged) throw new ResourceNotFoundError();
       try {
         const download = await this.dependencies.ark.downloadFile(artifact.id, {
           correlationId: context.requestId,

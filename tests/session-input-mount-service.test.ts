@@ -76,6 +76,12 @@ function setup(uploadOwner = userId) {
         ? record
         : undefined;
     },
+    async setArchived() {
+      return undefined;
+    },
+    async beginDelete() {
+      return undefined;
+    },
     async listInputs(ownerUserId, id) {
       return input.ownerUserId === ownerUserId && input.sessionId === id
         ? [input]

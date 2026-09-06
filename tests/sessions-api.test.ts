@@ -82,6 +82,12 @@ function sessionService() {
     create: vi.fn(async () => record),
     list: vi.fn(async () => [record]),
     get: vi.fn(async () => ({ ...record, inputs: [input] })),
+    archive: vi.fn(async () => ({ ...record, archivedAt: timestamp })),
+    restore: vi.fn(async () => ({ ...record, archivedAt: null })),
+    requestDelete: vi.fn(async () => ({
+      ...record,
+      deletionState: "pending" as const,
+    })),
     sendMessage: vi.fn(async () => ({
       eventId: "event-1",
       delivery: "queued" as const,
@@ -107,6 +113,52 @@ function sessionService() {
 }
 
 describe("Session API", () => {
+  it("archives, restores, and requires exact permanent-delete confirmation", async () => {
+    const sessions = sessionService();
+    const app = buildApp({ auth: auth(), sessions });
+    const cookies = { [AUTH_COOKIE_NAME]: "user-token" };
+
+    const archived = await app.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${sessionId}/archive`,
+      cookies,
+      payload: {},
+    });
+    const restored = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/sessions/${sessionId}/archive`,
+      cookies,
+    });
+    const unconfirmed = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/sessions/${sessionId}`,
+      cookies,
+      payload: { confirmation: "delete" },
+    });
+    const confirmed = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/sessions/${sessionId}`,
+      cookies,
+      payload: { confirmation: "DELETE" },
+    });
+
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().archivedAt).toBe(timestamp.toISOString());
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json().archivedAt).toBeNull();
+    expect(unconfirmed.statusCode).toBe(400);
+    expect(confirmed.statusCode).toBe(202);
+    expect(confirmed.json()).toEqual({
+      id: sessionId,
+      deletionState: "pending",
+    });
+    expect(sessions.archive).toHaveBeenCalledWith(sessionId, userId);
+    expect(sessions.restore).toHaveBeenCalledWith(sessionId, userId);
+    expect(sessions.requestDelete).toHaveBeenCalledOnce();
+    expect(sessions.requestDelete).toHaveBeenCalledWith(sessionId, userId);
+    await app.close();
+  });
+
   it("serves strict create/list/detail/message/interrupt routes with minimized output", async () => {
     const sessions = sessionService();
     const app = buildApp({ auth: auth(), sessions });
@@ -355,6 +407,42 @@ describe("Session API", () => {
     await app.close();
   });
 
+  it.each([
+    ["pending", "DELETION_PENDING", "Session deletion is pending"],
+    ["deletion_failed", "DELETION_FAILED", "Session deletion has failed"],
+  ] as const)(
+    "maps the %s deletion-state message conflict without exposing internals",
+    async (deletionState, code, message) => {
+      const sessions = sessionService();
+      sessions.sendMessage.mockRejectedValueOnce(
+        Object.assign(new Error(message), {
+          name: "SessionDeletionConflictError",
+          code,
+          deletionState,
+        }),
+      );
+      const app = buildApp({ auth: auth(), sessions });
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/sessions/${sessionId}/messages`,
+        cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+        payload: { content: "Do not restart" },
+      });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        error: {
+          code,
+          message,
+          requestId: expect.any(String),
+          retryable: false,
+        },
+      });
+      await app.close();
+    },
+  );
+
   it("requires user authentication for every Session route", async () => {
     const sessions = sessionService();
     const app = buildApp({ auth: auth(), sessions });
@@ -363,6 +451,9 @@ describe("Session API", () => {
       ["POST", "/api/v1/sessions", { agentId }],
       ["GET", "/api/v1/sessions", undefined],
       ["GET", `/api/v1/sessions/${sessionId}`, undefined],
+      ["POST", `/api/v1/sessions/${sessionId}/archive`, {}],
+      ["DELETE", `/api/v1/sessions/${sessionId}/archive`, undefined],
+      ["DELETE", `/api/v1/sessions/${sessionId}`, { confirmation: "DELETE" }],
       ["GET", `/api/v1/sessions/${sessionId}/events`, undefined],
       [
         "POST",

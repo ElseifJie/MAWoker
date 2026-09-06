@@ -36,10 +36,12 @@ function setup() {
     async (input: {
       id: string;
       ownerUserId: string;
+      sessionId: string;
       objectKey: string;
       runAfter: Date;
     }) => {
       cleanupJobs.set(input.id, { ...input, status: "pending" });
+      return true;
     },
   );
   const releaseCleanup = vi.fn(async (id: string, ownerUserId: string) => {

@@ -139,9 +139,36 @@ function setup() {
       const record = records.get(id);
       return record?.ownerUserId === ownerUserId ? record : undefined;
     },
+    async setArchived(
+      ownerUserId: string,
+      id: string,
+      archivedAt: Date | null,
+    ) {
+      const current = records.get(id);
+      if (!current || current.ownerUserId !== ownerUserId) return undefined;
+      const updated = { ...current, archivedAt };
+      records.set(id, updated);
+      return updated;
+    },
+    async beginDelete(ownerUserId: string, id: string) {
+      const current = records.get(id);
+      if (!current || current.ownerUserId !== ownerUserId) return undefined;
+      const updated = { ...current, deletionState: "pending" as const };
+      records.set(id, updated);
+      return updated;
+    },
     async beginMessage(ownerUserId: string, id: string) {
       const current = records.get(id);
       if (!current || current.ownerUserId !== ownerUserId) return undefined;
+      if (
+        current.deletionState === "pending" ||
+        current.deletionState === "deletion_failed"
+      ) {
+        return {
+          kind: "deletion_conflict" as const,
+          deletionState: current.deletionState,
+        };
+      }
       const accounting = messageAccounting.get(id) ?? {
         inFlight: 0,
         startPending: false,
@@ -150,6 +177,7 @@ function setup() {
       if (current.status !== "idle") {
         messageAccounting.set(id, accounting);
         return {
+          kind: "accepted" as const,
           session: current,
           started: false,
         };
@@ -159,6 +187,7 @@ function setup() {
       const started = { ...current, status: "running" as const };
       records.set(id, started);
       return {
+        kind: "accepted" as const,
         session: started,
         started: true,
       };
@@ -238,6 +267,47 @@ function setup() {
 }
 
 describe("SessionService", () => {
+  it("archives and restores only the owned Session without Ark calls", async () => {
+    const state = setup();
+    state.records.set(sessionId, session());
+
+    const archived = await state.service.archive(sessionId, userId);
+    const restored = await state.service.restore(sessionId, userId);
+
+    expect(archived.archivedAt).toEqual(now);
+    expect(restored.archivedAt).toBeNull();
+    expect(restored).toMatchObject({
+      arkSessionId: "ark-session-1",
+      status: "idle",
+      deletionState: "none",
+    });
+    expect(state.ark.createSession).not.toHaveBeenCalled();
+    expect(state.ark.getSession).not.toHaveBeenCalled();
+    expect(state.ark.submitEvent).not.toHaveBeenCalled();
+  });
+
+  it("creates an idempotent owned permanent deletion request", async () => {
+    const state = setup();
+    state.records.set(sessionId, session());
+
+    await expect(
+      state.service.requestDelete(sessionId, userId),
+    ).resolves.toMatchObject({
+      id: sessionId,
+      deletionState: "pending",
+    });
+    await expect(
+      state.service.requestDelete(sessionId, userId),
+    ).resolves.toMatchObject({
+      id: sessionId,
+      deletionState: "pending",
+    });
+    await expect(
+      state.service.requestDelete(sessionId, "other-user"),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    expect(state.ark.submitEvent).not.toHaveBeenCalled();
+  });
+
   it("creates an idle Session with fixed environment and immutable Agent snapshot", async () => {
     const state = setup();
 
@@ -421,6 +491,34 @@ describe("SessionService", () => {
       expect(state.records.get(sessionId)?.status).toBe(
         status === "idle" ? "running" : status,
       );
+    },
+  );
+
+  it.each([
+    ["pending", "DELETION_PENDING"],
+    ["deletion_failed", "DELETION_FAILED"],
+  ] as const)(
+    "rejects messages while Session deletion is %s without calling Ark",
+    async (deletionState, code) => {
+      const state = setup();
+      state.records.set(sessionId, session({ deletionState }));
+
+      await expect(
+        state.service.sendMessage(
+          sessionId,
+          { content: "Do not restart" },
+          { userId, requestId: "request-deleting" },
+        ),
+      ).rejects.toMatchObject({
+        name: "SessionDeletionConflictError",
+        code,
+        deletionState,
+      });
+      expect(state.ark.submitEvent).not.toHaveBeenCalled();
+      expect(state.records.get(sessionId)).toMatchObject({
+        status: "idle",
+        deletionState,
+      });
     },
   );
 

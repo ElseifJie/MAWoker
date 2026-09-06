@@ -81,14 +81,28 @@ export interface SessionRepository {
     userId: string,
     id: string,
   ): PromiseLike<SessionRecord | undefined>;
+  setArchived(
+    userId: string,
+    id: string,
+    archivedAt: Date | null,
+  ): PromiseLike<SessionRecord | undefined>;
+  beginDelete(
+    userId: string,
+    id: string,
+  ): PromiseLike<SessionRecord | undefined>;
   listInputs?(userId: string, id: string): PromiseLike<SessionInputRecord[]>;
   beginMessage(
     userId: string,
     id: string,
   ): PromiseLike<
     | {
+        kind: "accepted";
         session: SessionRecord;
         started: boolean;
+      }
+    | {
+        kind: "deletion_conflict";
+        deletionState: "pending" | "deletion_failed";
       }
     | undefined
   >;
@@ -122,6 +136,21 @@ export class SessionTerminatedError extends Error {
   constructor() {
     super("Session is terminated");
     this.name = "SessionTerminatedError";
+  }
+}
+
+export class SessionDeletionConflictError extends Error {
+  readonly code: "DELETION_PENDING" | "DELETION_FAILED";
+
+  constructor(public readonly deletionState: "pending" | "deletion_failed") {
+    super(
+      deletionState === "pending"
+        ? "Session deletion is pending"
+        : "Session deletion has failed",
+    );
+    this.name = "SessionDeletionConflictError";
+    this.code =
+      deletionState === "pending" ? "DELETION_PENDING" : "DELETION_FAILED";
   }
 }
 
@@ -335,6 +364,32 @@ export class SessionService {
     return { ...session, inputs };
   }
 
+  async archive(id: string, userId: string): Promise<SessionRecord> {
+    const session = await this.dependencies.repository.setArchived(
+      userId,
+      id,
+      (this.dependencies.now ?? (() => new Date()))(),
+    );
+    if (!session) throw new ResourceNotFoundError();
+    return session;
+  }
+
+  async restore(id: string, userId: string): Promise<SessionRecord> {
+    const session = await this.dependencies.repository.setArchived(
+      userId,
+      id,
+      null,
+    );
+    if (!session) throw new ResourceNotFoundError();
+    return session;
+  }
+
+  async requestDelete(id: string, userId: string): Promise<SessionRecord> {
+    const session = await this.dependencies.repository.beginDelete(userId, id);
+    if (!session) throw new ResourceNotFoundError();
+    return session;
+  }
+
   async sendMessage(
     id: string,
     input: { content: string },
@@ -345,6 +400,9 @@ export class SessionService {
       id,
     );
     if (!prepared) throw new ResourceNotFoundError();
+    if (prepared.kind === "deletion_conflict") {
+      throw new SessionDeletionConflictError(prepared.deletionState);
+    }
     const { session, started } = prepared;
     this.assertNotTerminated(session);
 

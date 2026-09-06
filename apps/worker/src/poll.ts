@@ -19,6 +19,7 @@ export function runProductionWorkerPoll(
   processors: {
     personalAgent: WorkerProcessor;
     session: WorkerProcessor;
+    sessionDeletion: WorkerProcessor;
     uploadCleanup: WorkerProcessor;
     artifactDeletion: WorkerProcessor;
     artifactCleanup: WorkerProcessor;
@@ -29,6 +30,7 @@ export function runProductionWorkerPoll(
     [
       processors.personalAgent,
       processors.session,
+      processors.sessionDeletion,
       processors.uploadCleanup,
       processors.artifactDeletion,
       processors.artifactCleanup,

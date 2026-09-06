@@ -34,8 +34,10 @@ describe("ArtifactObjectCleanupProcessor", () => {
   it("deletes a private staged object and completes the leased job", async () => {
     const jobs = {
       claim: vi.fn(async () => [job()]),
-      succeed: vi.fn(async () => undefined),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
       retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
     };
     const service = {
       cleanupStoredObject: vi.fn(async () => undefined),
@@ -56,7 +58,11 @@ describe("ArtifactObjectCleanupProcessor", () => {
       objectKey,
       ownerUserId,
     );
-    expect(jobs.succeed).toHaveBeenCalledWith(jobId, "worker-1");
+    expect(jobs.succeedArtifactCleanup).toHaveBeenCalledWith(
+      jobId,
+      "worker-1",
+      0,
+    );
   });
 
   it("retries cleanup failures with stable errors and later recovers", async () => {
@@ -65,8 +71,10 @@ describe("ArtifactObjectCleanupProcessor", () => {
         .fn()
         .mockResolvedValueOnce([job()])
         .mockResolvedValueOnce([job({ attempts: 2 })]),
-      succeed: vi.fn(async () => undefined),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
       retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
     };
     const service = {
       cleanupStoredObject: vi
@@ -88,21 +96,30 @@ describe("ArtifactObjectCleanupProcessor", () => {
     await processor.runOnce();
     await processor.runOnce();
 
-    expect(jobs.retry).toHaveBeenCalledWith(
+    expect(jobs.retryArtifactCleanup).toHaveBeenCalledWith(
       jobId,
       "worker-1",
+      0,
       "STORAGE_UNAVAILABLE",
       false,
     );
-    expect(jobs.succeed).toHaveBeenCalledWith(jobId, "worker-1");
-    expect(JSON.stringify(jobs.retry.mock.calls)).not.toContain(objectKey);
+    expect(jobs.succeedArtifactCleanup).toHaveBeenCalledWith(
+      jobId,
+      "worker-1",
+      0,
+    );
+    expect(JSON.stringify(jobs.retryArtifactCleanup.mock.calls)).not.toContain(
+      objectKey,
+    );
   });
 
   it("rejects malformed jobs without exposing or deleting arbitrary keys", async () => {
     const jobs = {
       claim: vi.fn(async () => [job({ payload: { objectKey: "../private" } })]),
-      succeed: vi.fn(async () => undefined),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
       retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
     };
     const service = {
       cleanupStoredObject: vi.fn(async () => undefined),
@@ -122,5 +139,44 @@ describe("ArtifactObjectCleanupProcessor", () => {
       "ARTIFACT_CLEANUP_INVALID_JOB",
       false,
     );
+  });
+
+  it("rearms cleanup claimed while its uploader fence is active", async () => {
+    const jobs = {
+      claim: vi.fn(async () => [
+        job({
+          lockedAt: new Date("2026-09-06T00:00:00.000Z"),
+          payload: {
+            objectKey,
+            uploadInProgressUntil: "2026-09-06T00:05:00.000Z",
+          },
+        }),
+      ]),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
+      retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
+    };
+    const service = {
+      cleanupStoredObject: vi.fn(async () => undefined),
+    };
+    const processor = new ArtifactObjectCleanupProcessor({
+      jobs,
+      service,
+      workerId: "worker-1",
+    });
+
+    await processor.runOnce();
+
+    expect(service.cleanupStoredObject).toHaveBeenCalledWith(
+      objectKey,
+      ownerUserId,
+    );
+    expect(jobs.deferArtifactCleanup).toHaveBeenCalledWith(
+      jobId,
+      "worker-1",
+      0,
+    );
+    expect(jobs.succeedArtifactCleanup).not.toHaveBeenCalled();
   });
 });

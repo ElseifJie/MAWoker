@@ -26,14 +26,31 @@ interface ArtifactObjectCleanupJobs {
     workerId: string;
     limit: number;
     types: ["cleanup_artifact_object"];
+    now?: Date;
   }): PromiseLike<ArtifactObjectCleanupJob[]>;
-  succeed(id: string, workerId: string): PromiseLike<void>;
+  deferArtifactCleanup(
+    id: string,
+    workerId: string,
+    cleanupGeneration: number,
+  ): PromiseLike<boolean>;
+  succeedArtifactCleanup(
+    id: string,
+    workerId: string,
+    cleanupGeneration: number,
+  ): PromiseLike<boolean>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
   ): PromiseLike<void>;
+  retryArtifactCleanup(
+    id: string,
+    workerId: string,
+    cleanupGeneration: number,
+    error: string,
+    final: boolean,
+  ): PromiseLike<boolean>;
 }
 
 interface ArtifactObjectCleanupService {
@@ -42,10 +59,14 @@ interface ArtifactObjectCleanupService {
 
 class InvalidArtifactObjectCleanupJobError extends Error {}
 
-function parseObjectKey(
+function parsePayload(
   payload: Record<string, unknown>,
   ownerUserId: string,
-): string {
+): {
+  objectKey: string;
+  cleanupGeneration: number;
+  uploadInProgressUntil?: Date;
+} {
   const objectKey = payload.objectKey;
   if (
     typeof objectKey !== "string" ||
@@ -65,7 +86,29 @@ function parseObjectKey(
   ) {
     throw new InvalidArtifactObjectCleanupJobError();
   }
-  return objectKey;
+  const uploadInProgressUntil = payload.uploadInProgressUntil;
+  if (
+    uploadInProgressUntil !== undefined &&
+    (typeof uploadInProgressUntil !== "string" ||
+      !Number.isFinite(Date.parse(uploadInProgressUntil)))
+  ) {
+    throw new InvalidArtifactObjectCleanupJobError();
+  }
+  const cleanupGeneration = payload.cleanupGeneration ?? 0;
+  if (
+    typeof cleanupGeneration !== "number" ||
+    !Number.isSafeInteger(cleanupGeneration) ||
+    cleanupGeneration < 0
+  ) {
+    throw new InvalidArtifactObjectCleanupJobError();
+  }
+  return {
+    objectKey,
+    cleanupGeneration,
+    ...(uploadInProgressUntil === undefined
+      ? {}
+      : { uploadInProgressUntil: new Date(uploadInProgressUntil) }),
+  };
 }
 
 function retryError(error: unknown): string {
@@ -90,36 +133,69 @@ export class ArtifactObjectCleanupProcessor {
       service: ArtifactObjectCleanupService;
       workerId: string;
       batchSize?: number;
+      now?: () => Date;
     },
   ) {}
 
   async runOnce(): Promise<number> {
+    const now = this.dependencies.now?.();
     const jobs = await this.dependencies.jobs.claim({
       workerId: this.dependencies.workerId,
       limit: this.dependencies.batchSize ?? 10,
       types: ["cleanup_artifact_object"],
+      ...(now ? { now } : {}),
     });
     for (const job of jobs) await this.process(job);
     return jobs.length;
   }
 
   private async process(job: ArtifactObjectCleanupJob): Promise<void> {
+    let cleanupGeneration: number | undefined;
     try {
       if (job.type !== "cleanup_artifact_object" || !job.ownerUserId) {
         throw new InvalidArtifactObjectCleanupJobError();
       }
+      const payload = parsePayload(job.payload, job.ownerUserId);
+      cleanupGeneration = payload.cleanupGeneration;
       await this.dependencies.service.cleanupStoredObject(
-        parseObjectKey(job.payload, job.ownerUserId),
+        payload.objectKey,
         job.ownerUserId,
       );
-      await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
-    } catch (error) {
-      await this.dependencies.jobs.retry(
+      if (
+        payload.uploadInProgressUntil &&
+        new Date(job.lockedAt).getTime() <
+          payload.uploadInProgressUntil.getTime()
+      ) {
+        await this.dependencies.jobs.deferArtifactCleanup(
+          job.id,
+          this.dependencies.workerId,
+          payload.cleanupGeneration,
+        );
+        return;
+      }
+      await this.dependencies.jobs.succeedArtifactCleanup(
         job.id,
         this.dependencies.workerId,
-        retryError(error),
-        job.attempts >= job.maxAttempts,
+        payload.cleanupGeneration,
       );
+    } catch (error) {
+      const code = retryError(error);
+      if (cleanupGeneration === undefined) {
+        await this.dependencies.jobs.retry(
+          job.id,
+          this.dependencies.workerId,
+          code,
+          job.attempts >= job.maxAttempts,
+        );
+      } else {
+        await this.dependencies.jobs.retryArtifactCleanup(
+          job.id,
+          this.dependencies.workerId,
+          cleanupGeneration,
+          code,
+          job.attempts >= job.maxAttempts,
+        );
+      }
     }
   }
 }

@@ -73,6 +73,7 @@ async function commitArtifact(
   await repository.stageCleanup({
     id: stagingCleanupJobId,
     ownerUserId: record.ownerUserId,
+    sessionId: record.sessionId,
     objectKey: record.tosObjectKey,
     runAfter: new Date("2030-09-06T00:00:00.000Z"),
   });
@@ -348,6 +349,7 @@ describe("Artifact database integration", () => {
     await repositories.artifacts.stageCleanup({
       id: stagingCleanupJobId,
       ownerUserId: userId,
+      sessionId,
       objectKey: stagedObjectKey,
       runAfter: new Date("2040-09-06T00:00:00.000Z"),
     });
@@ -431,6 +433,7 @@ describe("Artifact database integration", () => {
     await repositories.artifacts.stageCleanup({
       id: stagingCleanupJobId,
       ownerUserId: userId,
+      sessionId,
       objectKey: stagedObjectKey,
       runAfter: new Date("2040-09-06T00:00:00.000Z"),
     });
@@ -494,6 +497,7 @@ describe("Artifact database integration", () => {
     await repositories.artifacts.stageCleanup({
       id: stagingCleanupJobId,
       ownerUserId: userId,
+      sessionId,
       objectKey: stagedObjectKey,
       runAfter: new Date("2040-09-06T00:00:00.000Z"),
     });
@@ -615,13 +619,14 @@ describe("Artifact database integration", () => {
   it("leases, retries, and reclaims durable artifact object cleanup", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
-    const { userId } = await seed(database.client);
+    const { userId, sessionId } = await seed(database.client);
     const cleanupId = id();
     const firstClaimAt = new Date("2030-09-06T00:00:00.000Z");
     await repositories.artifacts.stageCleanup({
       id: cleanupId,
       ownerUserId: userId,
-      objectKey: `tenants/${userId}/sessions/session/artifacts/file/version`,
+      sessionId,
+      objectKey: `tenants/${userId}/sessions/${sessionId}/artifacts/file/version`,
       runAfter: firstClaimAt,
     });
 
@@ -683,6 +688,150 @@ describe("Artifact database integration", () => {
       expect.objectContaining({ id: cleanupId, attempts: 3 }),
     ]);
     await database.close();
+  });
+
+  it("rejects stale cleanup completion without releasing its lease", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const cleanupId = id();
+    const objectKey = `tenants/${userId}/sessions/${sessionId}/artifacts/file/late`;
+    const claimedAt = new Date("2030-09-06T00:00:00.000Z");
+    await repositories.artifacts.stageCleanup({
+      id: cleanupId,
+      ownerUserId: userId,
+      sessionId,
+      objectKey,
+      runAfter: claimedAt,
+      uploadInProgressUntil: new Date("2030-09-06T00:05:00.000Z"),
+    });
+    const [claimed] = await repositories.jobs.claim({
+      workerId: "stale-cleanup-worker",
+      limit: 1,
+      now: claimedAt,
+      types: ["cleanup_artifact_object"],
+    });
+    await repositories.sessionLifecycle.beginDelete(userId, sessionId);
+    await repositories.artifacts.commitCandidate({
+      record: artifact(userId, sessionId, { tosObjectKey: objectKey }),
+      stagingCleanupJobId: cleanupId,
+      replacementCleanupJobId: id(),
+    });
+
+    await expect(
+      repositories.jobs.succeedArtifactCleanup(
+        cleanupId,
+        "stale-cleanup-worker",
+        0,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.jobs.deferArtifactCleanup(
+        cleanupId,
+        "stale-cleanup-worker",
+        0,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.jobs.retryArtifactCleanup(
+        cleanupId,
+        "stale-cleanup-worker",
+        0,
+        "stale failure",
+        true,
+        claimedAt,
+      ),
+    ).resolves.toBe(false);
+
+    const stored = await database.client.query<{
+      status: string;
+      attempts: number;
+      locked_at: Date;
+      locked_by: string;
+      cleanup_generation: number;
+    }>(
+      `select status::text, attempts, locked_at, locked_by,
+              (payload ->> 'cleanupGeneration')::integer cleanup_generation
+         from background_jobs
+        where id = $1`,
+      [cleanupId],
+    );
+    await database.close();
+
+    expect(claimed).toMatchObject({
+      lockedBy: "stale-cleanup-worker",
+      payload: { cleanupGeneration: 0 },
+    });
+    expect(new Date(claimed!.lockedAt).getTime()).toBe(claimedAt.getTime());
+    expect(stored.rows[0]).toEqual({
+      status: "running",
+      attempts: 0,
+      locked_at: claimedAt,
+      locked_by: "stale-cleanup-worker",
+      cleanup_generation: 1,
+    });
+  });
+
+  it("derives retry delay from the current attempt and caps exponential backoff", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const retriedAt = new Date("2030-09-06T00:00:00.123Z");
+    const cases = [
+      { attempts: 1, delayMs: 200 },
+      { attempts: 4, delayMs: 1_600 },
+      { attempts: 10, delayMs: 60_000 },
+    ];
+    const jobIds: string[] = [];
+
+    for (const testCase of cases) {
+      const jobId = id();
+      jobIds.push(jobId);
+      await repositories.artifacts.stageCleanup({
+        id: jobId,
+        ownerUserId: userId,
+        sessionId,
+        objectKey: `tenants/${userId}/sessions/${sessionId}/artifacts/${jobId}/version`,
+        runAfter: retriedAt,
+      });
+      await database.client.query(
+        `update background_jobs
+            set status = 'running', attempts = $2, max_attempts = 20,
+                locked_at = $3, locked_by = 'retry-worker'
+          where id = $1`,
+        [jobId, testCase.attempts, retriedAt],
+      );
+
+      await repositories.jobs.retry(
+        jobId,
+        "retry-worker",
+        "temporary failure",
+        false,
+        retriedAt,
+      );
+    }
+
+    const scheduled = await database.client.query<{
+      id: string;
+      run_after: Date;
+    }>(
+      `select id, run_after
+         from background_jobs
+        where id = any($1::uuid[])`,
+      [jobIds],
+    );
+    await database.close();
+
+    expect(
+      jobIds.map((jobId, index) => ({
+        attempts: cases[index]!.attempts,
+        delayMs:
+          new Date(
+            scheduled.rows.find(({ id: storedId }) => storedId === jobId)!
+              .run_after,
+          ).getTime() - retriedAt.getTime(),
+      })),
+    ).toEqual(cases);
   });
 
   it("does not mutate another tenant's artifact", async () => {

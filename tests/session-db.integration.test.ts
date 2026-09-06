@@ -469,6 +469,508 @@ describe("Session database integration", () => {
     await database.close();
   });
 
+  it("archives and restores by changing only archived_at for the owning tenant", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-archive",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+    const before = await database.client.query<Record<string, unknown>>(
+      `select * from sessions where id = $1`,
+      [intent.id],
+    );
+    const archivedAt = new Date("2026-09-06T03:00:00.000Z");
+
+    const archivedRecord = await repositories.sessionLifecycle.setArchived(
+      userId,
+      intent.id,
+      archivedAt,
+    );
+    expect(new Date(archivedRecord!.archivedAt!)).toEqual(archivedAt);
+    await expect(
+      repositories.sessionLifecycle.setArchived(id(), intent.id, null),
+    ).resolves.toBeUndefined();
+    const archived = await database.client.query<Record<string, unknown>>(
+      `select * from sessions where id = $1`,
+      [intent.id],
+    );
+    expect(archived.rows[0]).toEqual({
+      ...before.rows[0],
+      archived_at: archivedAt,
+    });
+
+    await repositories.sessionLifecycle.setArchived(userId, intent.id, null);
+    await expect(
+      repositories.sessionLifecycle.listOwned(userId, false),
+    ).resolves.toEqual([expect.objectContaining({ id: intent.id })]);
+    await database.close();
+  });
+
+  it("checkpoints and removes only the owned Session deletion graph", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-saga",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+    const inputId = id();
+    const artifactId = id();
+    const objectKey = `tenants/${userId}/sessions/${intent.id}/artifacts/file/version`;
+    const stagedObjectKey = `tenants/${userId}/sessions/${intent.id}/artifacts/staged/version`;
+    await database.client.query(
+      `insert into session_inputs
+        (id, owner_user_id, session_id, ark_file_id, original_name, mime_type,
+         size_bytes, mount_path, status, expires_at)
+       values ($1, $2, $3, 'ark-input', 'input.txt', 'text/plain', 1,
+               '/mnt/session/inputs/input.txt', 'bound', now())`,
+      [inputId, userId, intent.id],
+    );
+    await database.client.query(
+      `insert into artifacts
+        (id, owner_user_id, session_id, ark_file_id, tos_object_key, name,
+         mime_type, size_bytes, generated_at)
+       values ($1, $2, $3, 'ark-output', $4, 'output.txt', 'text/plain', 1,
+               now())`,
+      [artifactId, userId, intent.id, objectKey],
+    );
+    await database.client.query(
+      `insert into usage_ledger
+        (id, user_id, ark_session_id, ark_event_id, metric_type, quantity)
+       values ($1, $2, 'ark-session-saga', 'event-1', 'input_tokens', 1)`,
+      [id(), userId],
+    );
+    await database.client.query(
+      `insert into background_jobs
+        (id, owner_user_id, type, status, priority, payload)
+       values ($1, $2, 'cleanup_artifact_object', 'pending', 90, $3::jsonb)`,
+      [id(), userId, JSON.stringify({ objectKey: stagedObjectKey })],
+    );
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    await expect(
+      repositories.artifacts.findSessionOwned(userId, intent.id),
+    ).resolves.toBeUndefined();
+    const [job] = await repositories.jobs.claim({
+      workerId: "worker-1",
+      limit: 1,
+      types: ["delete_session"],
+    });
+    const payload = {
+      sessionId: intent.id,
+      completed: { nonRunningObserved: true },
+    };
+
+    await repositories.jobs.updatePayload(job!.id, "worker-1", payload);
+    await expect(
+      repositories.sessionDeletion.findDeleting(id(), intent.id),
+    ).resolves.toBeUndefined();
+    await expect(
+      repositories.sessionDeletion.listArtifactObjectKeys(id(), intent.id),
+    ).resolves.toEqual([]);
+    await repositories.sessionDeletion.removeLocal(id(), intent.id);
+    await expect(
+      repositories.sessionDeletion.findDeleting(userId, intent.id),
+    ).resolves.toMatchObject({ id: intent.id });
+    await expect(
+      repositories.sessionDeletion.listArtifactObjectKeys(userId, intent.id),
+    ).resolves.toEqual([objectKey, stagedObjectKey].sort());
+
+    await expect(
+      repositories.sessionDeletion.removeLocal(userId, intent.id),
+    ).resolves.toBe("cleanup_pending");
+    await database.client.query(
+      `update background_jobs
+          set status = 'succeeded'
+        where owner_user_id = $1
+          and type = 'cleanup_artifact_object'
+          and payload ->> 'objectKey' = $2`,
+      [userId, stagedObjectKey],
+    );
+    await expect(
+      repositories.sessionDeletion.removeLocal(userId, intent.id),
+    ).resolves.toBe("removed");
+    const remaining = await database.client.query<{ count: number }>(
+      `select
+         (select count(*) from sessions where id = $1)
+         + (select count(*) from session_inputs where session_id = $1)
+         + (select count(*) from artifacts where session_id = $1)
+         + (select count(*) from usage_ledger
+             where ark_session_id = 'ark-session-saga')
+         + (select count(*) from quota_reservations where id = $1)
+           as count`,
+      [intent.id],
+    );
+    expect(remaining.rows[0]?.count).toBe(0);
+    const retainedJob = await database.client.query<{
+      payload: Record<string, unknown>;
+    }>(`select payload from background_jobs where id = $1`, [intent.id]);
+    expect(retainedJob.rows[0]?.payload).toEqual(payload);
+    await database.close();
+  });
+
+  it("creates one tenant-owned deletion job and preserves Saga progress when rearmed", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-delete",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+
+    await expect(
+      repositories.sessionLifecycle.beginDelete(id(), intent.id),
+    ).resolves.toBeUndefined();
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+
+    const initial = await database.client.query<{
+      type: string;
+      status: string;
+      count: number;
+      payload: Record<string, unknown>;
+    }>(
+      `select min(type::text) as type, min(status::text) as status,
+              count(*)::integer as count, min(payload::text)::jsonb as payload
+         from background_jobs
+        where id = $1`,
+      [intent.id],
+    );
+    expect(initial.rows[0]).toMatchObject({
+      type: "delete_session",
+      status: "pending",
+      count: 1,
+      payload: { sessionId: intent.id, completed: {} },
+    });
+
+    await database.client.query(
+      `update background_jobs
+          set status = 'failed', attempts = max_attempts,
+              payload = $2::jsonb, last_error = 'SESSION_DELETE_FAILED'
+        where id = $1`,
+      [
+        intent.id,
+        JSON.stringify({
+          sessionId: intent.id,
+          completed: { nonRunningObserved: true, arkDeleted: true },
+        }),
+      ],
+    );
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    const rearmed = await database.client.query<{
+      status: string;
+      attempts: number;
+      payload: Record<string, unknown>;
+    }>(`select status, attempts, payload from background_jobs where id = $1`, [
+      intent.id,
+    ]);
+    expect(rearmed.rows[0]).toMatchObject({
+      status: "pending",
+      attempts: 0,
+      payload: {
+        sessionId: intent.id,
+        completed: { nonRunningObserved: true, arkDeleted: true },
+      },
+    });
+    await database.close();
+  });
+
+  it("leaves pending and running deletion work untouched and rearms only terminal failure", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-repeat-delete",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    await database.client.query(
+      `update sessions
+          set deletion_state = 'deletion_failed',
+              updated_at = '2030-09-06T00:00:00.000Z'
+        where id = $1`,
+      [intent.id],
+    );
+    await database.client.query(
+      `update background_jobs
+          set status = 'pending', attempts = 2,
+              run_after = '2030-09-06T01:00:00.000Z',
+              last_error = 'SESSION_DELETE_FAILED',
+              updated_at = '2030-09-06T00:00:00.000Z'
+        where id = $1`,
+      [intent.id],
+    );
+    const readState = () =>
+      database.client.query<{
+        deletion_state: string;
+        session_updated_at: Date;
+        status: string;
+        attempts: number;
+        run_after: Date;
+        locked_at: Date | null;
+        locked_by: string | null;
+        last_error: string | null;
+        payload: Record<string, unknown>;
+        job_updated_at: Date;
+      }>(
+        `select session.deletion_state,
+                session.updated_at as session_updated_at,
+                job.status::text, job.attempts, job.run_after, job.locked_at,
+                job.locked_by, job.last_error, job.payload,
+                job.updated_at as job_updated_at
+           from sessions session
+           join background_jobs job on job.id = session.id
+          where session.id = $1`,
+        [intent.id],
+      );
+
+    const pendingBefore = await readState();
+    await expect(
+      repositories.sessionLifecycle.beginDelete(userId, intent.id),
+    ).resolves.toMatchObject({ deletionState: "deletion_failed" });
+    const pendingAfter = await readState();
+    expect(pendingAfter.rows).toEqual(pendingBefore.rows);
+
+    const [claimed] = await repositories.jobs.claim({
+      workerId: "active-delete-worker",
+      limit: 1,
+      now: new Date("2030-09-06T02:00:00.000Z"),
+      types: ["delete_session"],
+    });
+    expect(claimed).toMatchObject({ id: intent.id, attempts: 3 });
+    const runningBefore = await readState();
+    await expect(
+      repositories.sessionLifecycle.beginDelete(userId, intent.id),
+    ).resolves.toMatchObject({ deletionState: "deletion_failed" });
+    const runningAfter = await readState();
+    expect(runningAfter.rows).toEqual(runningBefore.rows);
+
+    const progress = {
+      sessionId: intent.id,
+      completed: { nonRunningObserved: true, arkDeleted: true },
+    };
+    await database.client.query(
+      `update background_jobs
+          set status = 'failed', attempts = max_attempts,
+              payload = $2::jsonb, locked_at = null, locked_by = null,
+              last_error = 'SESSION_DELETE_FAILED'
+        where id = $1`,
+      [intent.id, JSON.stringify(progress)],
+    );
+    await expect(
+      repositories.sessionLifecycle.beginDelete(userId, intent.id),
+    ).resolves.toMatchObject({ deletionState: "pending" });
+    const rearmed = await readState();
+    expect(rearmed.rows[0]).toMatchObject({
+      deletion_state: "pending",
+      status: "pending",
+      attempts: 0,
+      locked_at: null,
+      locked_by: null,
+      last_error: null,
+      payload: progress,
+    });
+    await database.close();
+  });
+
+  it("preserves a deletion lease when a repeated request races a claim", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-delete-race",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    await database.client.query(
+      `update sessions set deletion_state = 'deletion_failed' where id = $1`,
+      [intent.id],
+    );
+    await database.client.query(
+      `update background_jobs
+          set status = 'pending', attempts = 2,
+              run_after = '2030-09-06T00:00:00.000Z',
+              last_error = 'SESSION_DELETE_FAILED'
+        where id = $1`,
+      [intent.id],
+    );
+
+    const [requested, racedClaims] = await Promise.all([
+      repositories.sessionLifecycle.beginDelete(userId, intent.id),
+      repositories.jobs.claim({
+        workerId: "claim-worker",
+        limit: 1,
+        now: new Date("2030-09-06T01:00:00.000Z"),
+        types: ["delete_session"],
+      }),
+    ]);
+    const claims =
+      racedClaims.length > 0
+        ? racedClaims
+        : await repositories.jobs.claim({
+            workerId: "claim-worker",
+            limit: 1,
+            now: new Date("2030-09-06T01:00:00.000Z"),
+            types: ["delete_session"],
+          });
+
+    expect(requested).toMatchObject({ deletionState: "deletion_failed" });
+    expect(claims).toEqual([
+      expect.objectContaining({
+        id: intent.id,
+        attempts: 3,
+        lockedBy: "claim-worker",
+      }),
+    ]);
+    const leased = await database.client.query<{
+      deletion_state: string;
+      status: string;
+      attempts: number;
+      locked_by: string | null;
+      last_error: string | null;
+    }>(
+      `select session.deletion_state, job.status::text, job.attempts,
+              job.locked_by, job.last_error
+         from sessions session
+         join background_jobs job on job.id = session.id
+        where session.id = $1`,
+      [intent.id],
+    );
+    expect(leased.rows[0]).toEqual({
+      deletion_state: "deletion_failed",
+      status: "running",
+      attempts: 3,
+      locked_by: "claim-worker",
+      last_error: "SESSION_DELETE_FAILED",
+    });
+    await database.close();
+  });
+
+  it("marks an exhausted Session deletion lease as a visible stable failure", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-expired-delete",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    await database.client.query(
+      `update background_jobs
+          set status = 'running', attempts = max_attempts,
+              locked_at = $2, locked_by = 'dead-worker',
+              last_error = 'provider secret'
+        where id = $1`,
+      [intent.id, new Date("2026-09-06T00:00:00.000Z")],
+    );
+
+    await expect(
+      repositories.jobs.claim({
+        workerId: "worker-2",
+        limit: 1,
+        types: ["delete_session"],
+        now: new Date("2026-09-06T01:00:00.000Z"),
+      }),
+    ).resolves.toEqual([]);
+    await expect(
+      repositories.sessionLifecycle.findOwned(userId, intent.id),
+    ).resolves.toMatchObject({ deletionState: "deletion_failed" });
+    const failed = await database.client.query<{
+      status: string;
+      last_error: string;
+    }>(`select status, last_error from background_jobs where id = $1`, [
+      intent.id,
+    ]);
+    expect(failed.rows[0]).toEqual({
+      status: "failed",
+      last_error: "SESSION_DELETE_LEASE_EXPIRED",
+    });
+    await database.close();
+  });
+
+  it("lease-retries partial Session deletion failures from their saved payload", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-retry-delete",
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    const [firstAttempt] = await repositories.jobs.claim({
+      workerId: "worker-1",
+      limit: 1,
+      types: ["delete_session"],
+      now: new Date("2030-09-06T01:00:00.000Z"),
+    });
+    const payload = {
+      sessionId: intent.id,
+      completed: { nonRunningObserved: true, arkDeleted: true },
+    };
+    await repositories.jobs.updatePayload(
+      firstAttempt!.id,
+      "worker-1",
+      payload,
+    );
+    await repositories.jobs.retry(
+      firstAttempt!.id,
+      "worker-1",
+      "provider secret",
+      false,
+      new Date("2030-09-06T01:00:00.000Z"),
+    );
+
+    await expect(
+      repositories.sessionLifecycle.findOwned(userId, intent.id),
+    ).resolves.toMatchObject({ deletionState: "deletion_failed" });
+    const [retried] = await repositories.jobs.claim({
+      workerId: "worker-2",
+      limit: 1,
+      types: ["delete_session"],
+      now: new Date("2030-09-06T01:02:00.000Z"),
+    });
+    expect(retried).toMatchObject({
+      id: intent.id,
+      attempts: 2,
+      payload,
+    });
+    const stored = await database.client.query<{ last_error: string }>(
+      `select last_error from background_jobs where id = $1`,
+      [intent.id],
+    );
+    expect(stored.rows[0]?.last_error).toBe("SESSION_DELETE_FAILED");
+    await database.close();
+  });
+
   it("checks monthly message quota without blocking interrupts or reads", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
@@ -493,6 +995,67 @@ describe("Session database integration", () => {
     ).rejects.toMatchObject({ dimension: "monthly_tokens" });
     await database.close();
   });
+
+  it.each(["pending", "deletion_failed"] as const)(
+    "rejects message admission from deletion state %s without changing Session accounting",
+    async (deletionState) => {
+      const database = await createTestDatabase();
+      const repositories = createRepositories(database.db);
+      const { userId, agentId } = await seedUserAndAgent(database.client);
+      const intent = createIntent(userId, agentId);
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+        arkSessionId: `ark-session-message-${deletionState}`,
+        arkAgentId: intent.arkAgentId,
+        agentVersion: intent.agentVersion,
+        status: "idle",
+      });
+      await database.client.query(
+        `update sessions
+            set deletion_state = $2,
+                message_in_flight_count = 0,
+                message_start_pending = false,
+                updated_at = '2030-09-06T00:00:00.000Z'
+          where id = $1`,
+        [intent.id, deletionState],
+      );
+      const before = await database.client.query<{
+        status: string;
+        deletion_state: string;
+        message_in_flight_count: number;
+        message_start_pending: boolean;
+        updated_at: Date;
+      }>(
+        `select status, deletion_state, message_in_flight_count,
+                message_start_pending, updated_at
+           from sessions
+          where id = $1`,
+        [intent.id],
+      );
+
+      await expect(
+        repositories.sessionLifecycle.beginMessage(userId, intent.id),
+      ).resolves.toEqual({
+        kind: "deletion_conflict",
+        deletionState,
+      });
+      const after = await database.client.query<{
+        status: string;
+        deletion_state: string;
+        message_in_flight_count: number;
+        message_start_pending: boolean;
+        updated_at: Date;
+      }>(
+        `select status, deletion_state, message_in_flight_count,
+                message_start_pending, updated_at
+           from sessions
+          where id = $1`,
+        [intent.id],
+      );
+      expect(after.rows).toEqual(before.rows);
+      await database.close();
+    },
+  );
 
   it("atomically permits only one idle Session to claim the running quota", async () => {
     const database = await createTestDatabase();

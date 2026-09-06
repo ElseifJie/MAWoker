@@ -159,6 +159,9 @@ export interface SessionApiService {
     userId: string,
     id: string,
   ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
+  archive(id: string, userId: string): PromiseLike<SessionRecord>;
+  restore(id: string, userId: string): PromiseLike<SessionRecord>;
+  requestDelete(id: string, userId: string): PromiseLike<SessionRecord>;
   sendMessage(
     id: string,
     input: { content: string },
@@ -384,6 +387,15 @@ const sendMessageBodySchema = {
 const emptyBodySchema = {
   type: "object",
   additionalProperties: false,
+} as const;
+
+const deleteSessionBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["confirmation"],
+  properties: {
+    confirmation: { type: "string", const: "DELETE" },
+  },
 } as const;
 
 function cookieOptions(isProduction: boolean, expires?: Date) {
@@ -747,6 +759,25 @@ function sendSessionError(
           request.id,
           "SESSION_TERMINATED",
           "Session is terminated",
+          false,
+        ),
+      );
+  }
+  if (hasErrorName(error, "SessionDeletionConflictError")) {
+    const failed =
+      typeof error === "object" &&
+      error !== null &&
+      "deletionState" in error &&
+      error.deletionState === "deletion_failed";
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          failed ? "DELETION_FAILED" : "DELETION_PENDING",
+          failed
+            ? "Session deletion has failed"
+            : "Session deletion is pending",
           false,
         ),
       );
@@ -1336,6 +1367,73 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.params.id,
             );
             return reply.send(publicSession(record));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{
+        Params: { id: string };
+        Body: Record<string, never>;
+      }>(
+        "/api/v1/sessions/:id/archive",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: emptyBodySchema,
+          },
+        },
+        async (request, reply) => {
+          try {
+            return reply.send(
+              publicSession(
+                await sessions.archive(request.params.id, request.auth!.userId),
+              ),
+            );
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/sessions/:id/archive",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            return reply.send(
+              publicSession(
+                await sessions.restore(request.params.id, request.auth!.userId),
+              ),
+            );
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.delete<{
+        Params: { id: string };
+        Body: { confirmation: "DELETE" };
+      }>(
+        "/api/v1/sessions/:id",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: deleteSessionBodySchema,
+          },
+        },
+        async (request, reply) => {
+          try {
+            const session = await sessions.requestDelete(
+              request.params.id,
+              request.auth!.userId,
+            );
+            return reply.code(202).send({
+              id: session.id,
+              deletionState: session.deletionState,
+            });
           } catch (error) {
             return sendSessionError(error, request, reply);
           }

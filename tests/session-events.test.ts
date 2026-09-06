@@ -55,6 +55,8 @@ function baseRepository(record = session()) {
       ownerUserId === userId && id === sessionId ? record : undefined,
     ),
     findCreateIntent: vi.fn(),
+    setArchived: vi.fn(),
+    beginDelete: vi.fn(),
     beginMessage: vi.fn(),
     finishMessage: vi.fn(),
     projectEvent: vi.fn(),

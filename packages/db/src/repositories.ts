@@ -204,6 +204,12 @@ const ARTIFACT_CLEANUP_ERROR_CODES = new Set([
   "ARTIFACT_CLEANUP_LEASE_EXPIRED",
   "STORAGE_UNAVAILABLE",
 ]);
+const SESSION_DELETION_ERROR_CODES = new Set([
+  "SESSION_DELETE_FAILED",
+  "SESSION_DELETE_INVALID_JOB",
+  "SESSION_DELETE_LEASE_EXPIRED",
+  "SESSION_DELETE_WAITING",
+]);
 
 function artifactDeletionErrorCode(error: string): string {
   return ARTIFACT_DELETION_ERROR_CODES.has(error)
@@ -215,6 +221,12 @@ function artifactCleanupErrorCode(error: string): string {
   return ARTIFACT_CLEANUP_ERROR_CODES.has(error)
     ? error
     : "ARTIFACT_CLEANUP_FAILED";
+}
+
+function sessionDeletionErrorCode(error: string): string {
+  return SESSION_DELETION_ERROR_CODES.has(error)
+    ? error
+    : "SESSION_DELETE_FAILED";
 }
 
 export class QuotaExceededError extends Error {
@@ -1123,6 +1135,95 @@ export function createRepositories(database: unknown) {
         );
       },
     },
+    sessionDeletion: {
+      findDeleting(userId: string, id: string) {
+        return first<{
+          id: string;
+          ownerUserId: string;
+          arkSessionId: string;
+          status: SessionRecord["status"];
+        }>(
+          db,
+          sql`select id, owner_user_id as "ownerUserId",
+                     ark_session_id as "arkSessionId", status
+                from sessions
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and deletion_state in ('pending', 'deletion_failed')
+               limit 1`,
+        );
+      },
+      listArtifactObjectKeys(userId: string, id: string) {
+        return rows<{ objectKey: string }>(
+          db,
+          sql`select distinct source.object_key as "objectKey"
+                from (
+                  select artifact.tos_object_key as object_key
+                    from artifacts artifact
+                   where artifact.session_id = ${id}
+                     and artifact.owner_user_id = ${userId}
+                  union all
+                  select job.payload ->> 'objectKey' as object_key
+                    from background_jobs job
+                   where job.owner_user_id = ${userId}
+                     and job.type = 'cleanup_artifact_object'
+                     and job.payload ->> 'objectKey' like ${`tenants/${userId}/sessions/${id}/artifacts/%`}
+                ) source
+               where exists (
+                 select 1
+                   from sessions session
+                  where session.id = ${id}
+                    and session.owner_user_id = ${userId}
+                    and session.deletion_state in (
+                      'pending',
+                      'deletion_failed'
+                    )
+               )
+               order by source.object_key`,
+        ).then((records) => records.map(({ objectKey }) => objectKey));
+      },
+      async removeLocal(userId: string, id: string) {
+        return db.transaction(async (transaction) => {
+          const session = await first(
+            transaction,
+            sql`select id
+                  from sessions
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and deletion_state in ('pending', 'deletion_failed')
+                 for update`,
+          );
+          if (!session) return "missing" as const;
+          const cleanup = await first<{
+            pending: boolean;
+            failed: boolean;
+          }>(
+            transaction,
+            sql`select
+                  coalesce(
+                    bool_or(status in ('pending', 'running')),
+                    false
+                  ) as pending,
+                  coalesce(bool_or(status = 'failed'), false) as failed
+                from background_jobs
+               where owner_user_id = ${userId}
+                 and type = 'cleanup_artifact_object'
+                 and payload ->> 'objectKey' like ${`tenants/${userId}/sessions/${id}/artifacts/%`}`,
+          );
+          if (cleanup?.failed) return "cleanup_failed" as const;
+          if (cleanup?.pending) return "cleanup_pending" as const;
+          await transaction.execute(
+            sql`delete from quota_reservations
+                 where id = ${id} and user_id = ${userId}`,
+          );
+          await transaction.execute(
+            sql`delete from sessions
+                 where id = ${id} and owner_user_id = ${userId}`,
+          );
+          return "removed" as const;
+        });
+      },
+    },
     sessions: tenantRepository(db, sql.raw("sessions")),
     sessionLifecycle: {
       prepareCreate(input: SessionRecord, uploadIds: string[] = []) {
@@ -1435,6 +1536,122 @@ export function createRepositories(database: unknown) {
                limit 1`,
         );
       },
+      setArchived(userId: string, id: string, archivedAt: Date | null) {
+        return first<SessionRecord>(
+          db,
+          sql`update sessions
+                set archived_at = ${archivedAt}
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and ark_session_id not like 'pending:%'
+                and deletion_state <> 'deleted'
+              returning ${sessionSelection}`,
+        );
+      },
+      beginDelete(userId: string, id: string) {
+        return db.transaction(async (transaction) => {
+          const job = await first<{
+            type: JobRecord["type"];
+            status: "pending" | "running" | "succeeded" | "failed";
+          }>(
+            transaction,
+            sql`select type, status
+                  from background_jobs
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                 for update`,
+          );
+          const session = await first<SessionRecord>(
+            transaction,
+            sql`select ${sessionSelection}
+                  from sessions
+                 where id = ${id}
+                  and owner_user_id = ${userId}
+                  and ark_session_id not like 'pending:%'
+                  and deletion_state <> 'deleted'
+                 for update`,
+          );
+          if (!session) return undefined;
+
+          await transaction.execute(
+            sql`update background_jobs
+                  set run_after = now(), updated_at = now()
+                where owner_user_id = ${userId}
+                  and type = 'cleanup_artifact_object'
+                  and status = 'pending'
+                  and payload ->> 'objectKey'
+                    like ${`tenants/${userId}/sessions/${id}/artifacts/%`}`,
+          );
+
+          if (job?.type === "delete_session" && job.status !== "failed") {
+            return session;
+          }
+          if (job?.type === "delete_session") {
+            await requiredFirst(
+              transaction,
+              sql`update background_jobs
+                    set status = 'pending',
+                        priority = 80,
+                        attempts = 0,
+                        run_after = now(),
+                        locked_at = null,
+                        locked_by = null,
+                        last_error = null,
+                        updated_at = now()
+                  where id = ${id}
+                    and owner_user_id = ${userId}
+                    and type = 'delete_session'
+                    and status = 'failed'
+                  returning id`,
+            );
+          } else if (job?.type === "reconcile_session") {
+            await requiredFirst(
+              transaction,
+              sql`update background_jobs
+                    set type = 'delete_session',
+                        status = 'pending',
+                        priority = 80,
+                        payload = ${JSON.stringify({
+                          sessionId: id,
+                          completed: {},
+                        })}::jsonb,
+                        attempts = 0,
+                        run_after = now(),
+                        locked_at = null,
+                        locked_by = null,
+                        last_error = null,
+                        updated_at = now()
+                  where id = ${id}
+                    and owner_user_id = ${userId}
+                    and type = 'reconcile_session'
+                  returning id`,
+            );
+          } else if (!job) {
+            await transaction.execute(
+              sql`insert into background_jobs
+                  (id, owner_user_id, type, status, priority, payload,
+                   attempts, run_after)
+                values
+                  (${id}, ${userId}, 'delete_session', 'pending', 80,
+                   ${JSON.stringify({ sessionId: id, completed: {} })}::jsonb,
+                   0, now())`,
+            );
+          } else {
+            throw new Error("Session deletion job conflicts with existing job");
+          }
+
+          return requiredFirst<SessionRecord>(
+            transaction,
+            sql`update sessions
+                  set deletion_state = 'pending',
+                      updated_at = now()
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and deletion_state <> 'deleted'
+                returning ${sessionSelection}`,
+          );
+        });
+      },
       listInputs(userId: string, id: string) {
         return rows<SessionInputRecord>(
           db,
@@ -1467,6 +1684,15 @@ export function createRepositories(database: unknown) {
                  for update`,
           );
           if (!session) return undefined;
+          if (
+            session.deletionState === "pending" ||
+            session.deletionState === "deletion_failed"
+          ) {
+            return {
+              kind: "deletion_conflict" as const,
+              deletionState: session.deletionState,
+            };
+          }
 
           const quota = await effectiveQuota(transaction, userId);
           const usage = await first<{
@@ -1495,6 +1721,7 @@ export function createRepositories(database: unknown) {
           if (session.status !== "idle") {
             if (session.status === "terminated") {
               return {
+                kind: "accepted" as const,
                 session,
                 started: false,
               };
@@ -1507,9 +1734,11 @@ export function createRepositories(database: unknown) {
                   where id = ${id}
                     and owner_user_id = ${userId}
                     and status in ('running', 'rescheduled')
+                    and deletion_state = 'none'
                   returning ${sessionSelection}`,
             );
             return {
+              kind: "accepted" as const,
               session: queued,
               started: false,
             };
@@ -1528,9 +1757,11 @@ export function createRepositories(database: unknown) {
                 where id = ${id}
                   and owner_user_id = ${userId}
                   and status = 'idle'
+                  and deletion_state = 'none'
                 returning ${sessionSelection}`,
           );
           return {
+            kind: "accepted" as const,
             session: started,
             started: true,
           };
@@ -1819,7 +2050,7 @@ export function createRepositories(database: unknown) {
                where id = ${sessionId}
                  and owner_user_id = ${userId}
                  and ark_session_id not like 'pending:%'
-                 and deletion_state <> 'deleted'
+                 and deletion_state = 'none'
                limit 1`,
         );
       },
@@ -1837,19 +2068,43 @@ export function createRepositories(database: unknown) {
       async stageCleanup(input: {
         id: string;
         ownerUserId: string;
+        sessionId: string;
         objectKey: string;
         runAfter: Date;
+        uploadInProgressUntil?: Date;
       }) {
-        await db.execute(
-          sql`insert into background_jobs
-                (id, owner_user_id, type, status, priority, payload,
-                 attempts, run_after)
-              values
-                (${input.id}, ${input.ownerUserId}, 'cleanup_artifact_object',
-                 'pending', 90,
-                 ${JSON.stringify({ objectKey: input.objectKey })}::jsonb,
-                 0, ${input.runAfter})`,
-        );
+        return db.transaction(async (transaction) => {
+          const session = await first(
+            transaction,
+            sql`select id
+                  from sessions
+                 where id = ${input.sessionId}
+                   and owner_user_id = ${input.ownerUserId}
+                   and deletion_state = 'none'
+                 for update`,
+          );
+          if (!session) return false;
+          await transaction.execute(
+            sql`insert into background_jobs
+                  (id, owner_user_id, type, status, priority, payload,
+                   attempts, run_after)
+                values
+                  (${input.id}, ${input.ownerUserId}, 'cleanup_artifact_object',
+                   'pending', 90,
+                   ${JSON.stringify({
+                     objectKey: input.objectKey,
+                     cleanupGeneration: 0,
+                     ...(input.uploadInProgressUntil
+                       ? {
+                           uploadInProgressUntil:
+                             input.uploadInProgressUntil.toISOString(),
+                         }
+                       : {}),
+                   })}::jsonb,
+                   0, ${input.runAfter})`,
+          );
+          return true;
+        });
       },
       commitCandidate(input: {
         record: ArtifactRecord;
@@ -1857,13 +2112,71 @@ export function createRepositories(database: unknown) {
         replacementCleanupJobId: string;
       }) {
         return db.transaction(async (transaction) => {
-          await transaction.execute(
-            sql`select id
+          const session = await first<{ deletionState: string }>(
+            transaction,
+            sql`select deletion_state as "deletionState"
                   from sessions
                  where id = ${input.record.sessionId}
                    and owner_user_id = ${input.record.ownerUserId}
                    for update`,
           );
+          const stagingCleanup = await first<{
+            status: "pending" | "running" | "succeeded" | "failed";
+            uploadInProgressUntil: string | null;
+          }>(
+            transaction,
+            sql`select status,
+                       payload ->> 'uploadInProgressUntil'
+                         as "uploadInProgressUntil"
+                  from background_jobs
+                 where id = ${input.stagingCleanupJobId}
+                   and owner_user_id = ${input.record.ownerUserId}
+                   and type = 'cleanup_artifact_object'
+                   and payload ->> 'objectKey' = ${input.record.tosObjectKey}
+                 for update`,
+          );
+          if (!stagingCleanup) {
+            throw new Error("Artifact staging cleanup intent was not found");
+          }
+          const rearmStagingCleanup = () =>
+            transaction.execute(
+              sql`update background_jobs
+                    set payload =
+                          (payload - 'uploadInProgressUntil')
+                          || jsonb_build_object(
+                            'cleanupGeneration',
+                            coalesce(
+                              (payload ->> 'cleanupGeneration')::integer,
+                              0
+                            ) + 1
+                          ),
+                        status = case
+                          when status = 'running' then status
+                          else 'pending'
+                        end,
+                        attempts = 0,
+                        run_after = case
+                          when status = 'running' then run_after
+                          else now()
+                        end,
+                        locked_at = case
+                          when status = 'running' then locked_at
+                          else null
+                        end,
+                        locked_by = case
+                          when status = 'running' then locked_by
+                          else null
+                        end,
+                        last_error = null,
+                        updated_at = now()
+                  where id = ${input.stagingCleanupJobId}
+                    and owner_user_id = ${input.record.ownerUserId}
+                    and type = 'cleanup_artifact_object'`,
+            );
+          if (!session || session.deletionState !== "none") {
+            await rearmStagingCleanup();
+            return { artifact: input.record, activated: false };
+          }
           const existing = await first<ArtifactRecord & Row>(
             transaction,
             sql`select ${artifactSelection}
@@ -1877,20 +2190,12 @@ export function createRepositories(database: unknown) {
             existing?.deletionState !== undefined &&
             existing.deletionState !== "none"
           ) {
-            await transaction.execute(
-              sql`update background_jobs
-                    set status = 'pending',
-                        attempts = 0,
-                        run_after = now(),
-                        locked_at = null,
-                        locked_by = null,
-                        last_error = null,
-                        updated_at = now()
-                  where id = ${input.stagingCleanupJobId}
-                    and owner_user_id = ${input.record.ownerUserId}
-                    and type = 'cleanup_artifact_object'
-                    and status = 'failed'`,
-            );
+            if (
+              stagingCleanup.uploadInProgressUntil ||
+              stagingCleanup.status === "failed"
+            ) {
+              await rearmStagingCleanup();
+            }
             await transaction.execute(
               sql`update background_jobs
                     set status = 'pending',
@@ -1906,6 +2211,10 @@ export function createRepositories(database: unknown) {
                     and status = 'failed'`,
             );
             return { artifact: existing, activated: false };
+          }
+          if (stagingCleanup.status !== "pending") {
+            await rearmStagingCleanup();
+            return { artifact: existing ?? input.record, activated: false };
           }
           const artifact = await requiredFirst<ArtifactRecord & Row>(
             transaction,
@@ -1934,6 +2243,7 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`update background_jobs
                   set status = 'succeeded',
+                      payload = payload - 'uploadInProgressUntil',
                       locked_at = null,
                       locked_by = null,
                       last_error = null,
@@ -1959,6 +2269,7 @@ export function createRepositories(database: unknown) {
                      'pending', 90,
                      ${JSON.stringify({
                        objectKey: existing.tosObjectKey,
+                       cleanupGeneration: 0,
                      })}::jsonb,
                      0, now())`,
             );
@@ -1969,12 +2280,37 @@ export function createRepositories(database: unknown) {
       async releaseCleanup(id: string, userId: string) {
         await db.execute(
           sql`update background_jobs
-                set run_after = now(),
+                set payload =
+                      (payload - 'uploadInProgressUntil')
+                      || jsonb_build_object(
+                        'cleanupGeneration',
+                        coalesce(
+                          (payload ->> 'cleanupGeneration')::integer,
+                          0
+                        ) + 1
+                      ),
+                    status = case
+                      when status = 'running' then status
+                      else 'pending'
+                    end,
+                    attempts = 0,
+                    run_after = case
+                      when status = 'running' then run_after
+                      else now()
+                    end,
+                    locked_at = case
+                      when status = 'running' then locked_at
+                      else null
+                    end,
+                    locked_by = case
+                      when status = 'running' then locked_by
+                      else null
+                    end,
+                    last_error = null,
                     updated_at = now()
               where id = ${id}
                 and owner_user_id = ${userId}
-                and type = 'cleanup_artifact_object'
-                and status = 'pending'`,
+                and type = 'cleanup_artifact_object'`,
         );
       },
       listOwned(userId: string, sessionId?: string) {
@@ -2243,6 +2579,37 @@ export function createRepositories(database: unknown) {
                limit 1`,
         );
       },
+      listReconcilable(input: { cutoff: Date; limit: number }) {
+        return rows<{
+          sessionId: string;
+          ownerUserId: string;
+          arkSessionId: string;
+          status: SessionRecord["status"];
+        }>(
+          db,
+          sql`select id as "sessionId", owner_user_id as "ownerUserId",
+                     ark_session_id as "arkSessionId", status
+                from sessions
+               where ark_session_id not like 'pending:%'
+                 and deletion_state not in ('pending', 'deleted')
+                 and (
+                   status in ('running', 'rescheduled')
+                   or updated_at >= ${input.cutoff}
+                 )
+               order by updated_at
+               limit ${input.limit}`,
+        );
+      },
+      monthlyTokens(userId: string, now: Date) {
+        return first<{ total: number }>(
+          db,
+          sql`select coalesce(sum(quantity), 0)::bigint as total
+                from usage_ledger
+               where user_id = ${userId}
+                 and metric_type in ('input_tokens', 'output_tokens')
+                 and recorded_at >= date_trunc('month', ${now}::timestamptz)`,
+        ).then((row) => Number(row?.total ?? 0));
+      },
       async record(input: {
         id: string;
         userId: string;
@@ -2309,6 +2676,8 @@ export function createRepositories(database: unknown) {
                        locked_at = null,
                        locked_by = null,
                        last_error = case
+                         when job.type = 'delete_session'
+                           then 'SESSION_DELETE_LEASE_EXPIRED'
                          when job.type = 'delete_artifact'
                            then 'ARTIFACT_DELETE_LEASE_EXPIRED'
                          when job.type = 'cleanup_artifact_object'
@@ -2345,6 +2714,16 @@ export function createRepositories(database: unknown) {
                      and artifact.id = job.id
                      and artifact.owner_user_id = job.owner_user_id
                   returning artifact.id
+                ),
+                failed_delete_sessions as (
+                  update sessions session
+                     set deletion_state = 'deletion_failed',
+                         updated_at = ${now}
+                    from failed_jobs job
+                   where job.type = 'delete_session'
+                     and session.id = job.id
+                     and session.owner_user_id = job.owner_user_id
+                  returning session.id
                 ),
                 failed_sessions as (
                   update sessions session
@@ -2423,6 +2802,131 @@ export function createRepositories(database: unknown) {
                 and locked_by = ${workerId}`,
         );
       },
+      async succeedArtifactCleanup(
+        id: string,
+        workerId: string,
+        cleanupGeneration: number,
+      ) {
+        const updated = await rows(
+          db,
+          sql`update background_jobs
+                set status = 'succeeded',
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = null,
+                    updated_at = now()
+              where id = ${id}
+                and type = 'cleanup_artifact_object'
+                and status = 'running'
+                and locked_by = ${workerId}
+                and coalesce(
+                      (payload ->> 'cleanupGeneration')::integer,
+                      0
+                    ) = ${cleanupGeneration}
+              returning id`,
+        );
+        return updated.length === 1;
+      },
+      async deferArtifactCleanup(
+        id: string,
+        workerId: string,
+        cleanupGeneration: number,
+      ) {
+        const updated = await rows(
+          db,
+          sql`update background_jobs
+                set status = 'pending',
+                    attempts = greatest(attempts - 1, 0),
+                    run_after = case
+                      when payload ? 'uploadInProgressUntil'
+                        then greatest(
+                          now(),
+                          (payload ->> 'uploadInProgressUntil')::timestamptz
+                        )
+                      else now()
+                    end,
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = null,
+                    updated_at = now()
+              where id = ${id}
+                and type = 'cleanup_artifact_object'
+                and status = 'running'
+                and locked_by = ${workerId}
+                and coalesce(
+                      (payload ->> 'cleanupGeneration')::integer,
+                      0
+                    ) = ${cleanupGeneration}
+              returning id`,
+        );
+        return updated.length === 1;
+      },
+      async retryArtifactCleanup(
+        id: string,
+        workerId: string,
+        cleanupGeneration: number,
+        error: string,
+        final: boolean,
+        now = new Date(),
+      ) {
+        return db.transaction(async (transaction) => {
+          const leased = await first<{ attempts: number }>(
+            transaction,
+            sql`select attempts
+                  from background_jobs
+                 where id = ${id}
+                   and type = 'cleanup_artifact_object'
+                   and status = 'running'
+                   and locked_by = ${workerId}
+                   and coalesce(
+                         (payload ->> 'cleanupGeneration')::integer,
+                         0
+                       ) = ${cleanupGeneration}
+                 for update`,
+          );
+          if (!leased) return false;
+          const runAfter = new Date(
+            now.getTime() + Math.min(60_000, 2 ** leased.attempts * 100),
+          );
+          const updated = await rows(
+            transaction,
+            sql`update background_jobs
+                  set status = ${final ? "failed" : "pending"}::background_job_status,
+                      run_after = ${runAfter},
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = ${artifactCleanupErrorCode(error)},
+                      updated_at = ${now}
+                where id = ${id}
+                  and type = 'cleanup_artifact_object'
+                  and status = 'running'
+                  and locked_by = ${workerId}
+                  and coalesce(
+                        (payload ->> 'cleanupGeneration')::integer,
+                        0
+                      ) = ${cleanupGeneration}
+                returning id`,
+          );
+          return updated.length === 1;
+        });
+      },
+      async updatePayload(
+        id: string,
+        workerId: string,
+        payload: Record<string, unknown>,
+      ) {
+        await requiredFirst(
+          db,
+          sql`update background_jobs
+                set payload = ${JSON.stringify(payload)}::jsonb,
+                    updated_at = now()
+              where id = ${id}
+                and type = 'delete_session'
+                and status = 'running'
+                and locked_by = ${workerId}
+              returning id`,
+        );
+      },
       async retry(
         id: string,
         workerId: string,
@@ -2430,12 +2934,23 @@ export function createRepositories(database: unknown) {
         final: boolean,
         now = new Date(),
       ) {
-        const runAfter = new Date(
-          now.getTime() + Math.min(60_000, 2 ** 10 * 100),
-        );
         const artifactError = artifactDeletionErrorCode(error);
         const artifactCleanupError = artifactCleanupErrorCode(error);
+        const sessionError = sessionDeletionErrorCode(error);
         await db.transaction(async (transaction) => {
+          const leased = await first<{ attempts: number }>(
+            transaction,
+            sql`select attempts
+                  from background_jobs
+                 where id = ${id}
+                   and status = 'running'
+                   and locked_by = ${workerId}
+                 for update`,
+          );
+          if (!leased) return;
+          const runAfter = new Date(
+            now.getTime() + Math.min(60_000, 2 ** leased.attempts * 100),
+          );
           const updated = await first<{
             id: string;
             ownerUserId: string | null;
@@ -2448,6 +2963,7 @@ export function createRepositories(database: unknown) {
                       locked_at = null,
                       locked_by = null,
                       last_error = case
+                        when type = 'delete_session' then ${sessionError}
                         when type = 'delete_artifact' then ${artifactError}
                         when type = 'cleanup_artifact_object'
                           then ${artifactCleanupError}
@@ -2476,6 +2992,16 @@ export function createRepositories(database: unknown) {
               sql`update artifacts
                     set deletion_state = 'deletion_failed',
                         last_error_code = ${artifactError},
+                        updated_at = ${now}
+                  where id = ${updated.id}
+                    and owner_user_id = ${updated.ownerUserId}`,
+            );
+            return;
+          }
+          if (updated?.type === "delete_session" && updated.ownerUserId) {
+            await transaction.execute(
+              sql`update sessions
+                    set deletion_state = 'deletion_failed',
                         updated_at = ${now}
                   where id = ${updated.id}
                     and owner_user_id = ${updated.ownerUserId}`,

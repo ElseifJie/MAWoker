@@ -14,6 +14,7 @@ import { ArtifactObjectCleanupProcessor } from "./artifact-object-cleanup.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
 import { runProductionWorkerPoll } from "./poll.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
+import { SessionDeletionProcessor } from "./session-deletion.js";
 import { UploadCleanupProcessor } from "./upload-cleanup.js";
 
 const config = parseServerConfig(process.env);
@@ -45,6 +46,13 @@ const sessionProcessor = new SessionReconciliationProcessor({
     createId: randomUUID,
   }),
   workerId: `session-worker:${process.pid}:${randomUUID()}`,
+});
+const sessionDeletionProcessor = new SessionDeletionProcessor({
+  jobs: repositories.jobs,
+  repository: repositories.sessionDeletion,
+  ark,
+  storage: artifactStorage,
+  workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
 });
 const uploadCleanupProcessor = new UploadCleanupProcessor({
   jobs: repositories.jobs,
@@ -87,6 +95,7 @@ await new Promise<void>((resolve) => {
       await runProductionWorkerPoll({
         personalAgent: personalAgentProcessor,
         session: sessionProcessor,
+        sessionDeletion: sessionDeletionProcessor,
         uploadCleanup: uploadCleanupProcessor,
         artifactDeletion: artifactDeletionProcessor,
         artifactCleanup: artifactObjectCleanupProcessor,
