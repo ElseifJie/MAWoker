@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 
 type Row = Record<string, unknown>;
@@ -24,6 +25,28 @@ interface DefaultAgentRecord extends Row {
   assignedBy: string;
   assignedAt: Date;
 }
+
+interface PlatformAgentRecord extends Row {
+  id: string;
+  arkAgentId: string;
+  name: string;
+  description: string;
+  modelId: string;
+  systemPrompt: string;
+  arkVersion: string;
+  status: "provisioning" | "active" | "disabled" | "failed" | "deleting";
+  createdBy: string;
+  updatedBy: string;
+  lastErrorCode: string | null;
+}
+
+const platformAgentSelection = sql`
+  id, ark_agent_id as "arkAgentId", name, description,
+  model_id as "modelId", system_prompt as "systemPrompt",
+  ark_version as "arkVersion", status,
+  created_by as "createdBy", updated_by as "updatedBy",
+  last_error_code as "lastErrorCode",
+  created_at as "createdAt", updated_at as "updatedAt"`;
 
 interface EffectiveQuota extends Row {
   personalAgentLimit: number;
@@ -156,9 +179,10 @@ export function createRepositories(database: unknown) {
 
     platformAgents: {
       findById(id: string) {
-        return first(
+        return first<PlatformAgentRecord>(
           db,
-          sql`select * from platform_agents where id = ${id} limit 1`,
+          sql`select ${platformAgentSelection}
+                from platform_agents where id = ${id} limit 1`,
         );
       },
       findAssignedToUser(userId: string, platformAgentId: string) {
@@ -172,6 +196,279 @@ export function createRepositories(database: unknown) {
                  and pa.id = ${platformAgentId}
                  and pa.status = 'active'
                limit 1`,
+        );
+      },
+      list() {
+        return rows<PlatformAgentRecord>(
+          db,
+          sql`select ${platformAgentSelection}
+                from platform_agents
+               order by created_at asc, id asc`,
+        );
+      },
+      createProvisioning(input: {
+        id: string;
+        name: string;
+        description: string;
+        modelId: string;
+        systemPrompt: string;
+        createdBy: string;
+        updatedBy: string;
+      }) {
+        return first<PlatformAgentRecord>(
+          db,
+          sql`insert into platform_agents
+                (id, ark_agent_id, name, description, model_id, system_prompt,
+                 ark_version, status, created_by, updated_by)
+              values
+                (${input.id}, ${`pending:${input.id}`}, ${input.name},
+                 ${input.description}, ${input.modelId}, ${input.systemPrompt},
+                 '0', 'provisioning', ${input.createdBy}, ${input.updatedBy})
+              returning ${platformAgentSelection}`,
+        );
+      },
+      markProvisioned(
+        id: string,
+        upstream: { arkAgentId: string; arkVersion: string },
+      ) {
+        return first<PlatformAgentRecord>(
+          db,
+          sql`update platform_agents
+                set ark_agent_id = ${upstream.arkAgentId},
+                    ark_version = ${upstream.arkVersion},
+                    status = 'active',
+                    last_error_code = null,
+                    updated_at = now()
+              where id = ${id}
+              returning ${platformAgentSelection}`,
+        );
+      },
+      markFailure(
+        id: string,
+        status: "provisioning" | "failed" | "deleting",
+        errorCode: string,
+      ) {
+        return first<PlatformAgentRecord>(
+          db,
+          sql`update platform_agents
+                set status = ${status},
+                    last_error_code = ${errorCode},
+                    updated_at = now()
+              where id = ${id}
+              returning ${platformAgentSelection}`,
+        );
+      },
+      update(
+        id: string,
+        input: {
+          name?: string;
+          description?: string;
+          modelId?: string;
+          systemPrompt?: string;
+          arkVersion?: string;
+          status?: string;
+          updatedBy?: string;
+          lastErrorCode?: string | null;
+        },
+      ) {
+        return first<PlatformAgentRecord>(
+          db,
+          sql`update platform_agents
+                set name = coalesce(${input.name ?? null}, name),
+                    description = coalesce(${input.description ?? null}, description),
+                    model_id = coalesce(${input.modelId ?? null}, model_id),
+                    system_prompt = coalesce(${input.systemPrompt ?? null}, system_prompt),
+                    ark_version = coalesce(${input.arkVersion ?? null}, ark_version),
+                    status = coalesce(${input.status ?? null}, status::text)::agent_status,
+                    updated_by = coalesce(${input.updatedBy ?? null}, updated_by),
+                    last_error_code = case
+                      when ${input.lastErrorCode === null} then null
+                      else coalesce(${input.lastErrorCode ?? null}, last_error_code)
+                    end,
+                    updated_at = now()
+              where id = ${id}
+              returning ${platformAgentSelection}`,
+        );
+      },
+      beginDelete(id: string, updatedBy: string) {
+        return db.transaction(async (transaction) => {
+          const current = await first<PlatformAgentRecord>(
+            transaction,
+            sql`select ${platformAgentSelection}
+                  from platform_agents
+                 where id = ${id}
+                 for update`,
+          );
+          if (!current) return undefined;
+
+          const references = (await first<{
+            assignments: number;
+            sessions: number;
+          }>(
+            transaction,
+            sql`select
+                    (select count(*)::integer from user_default_agents
+                      where platform_agent_id = ${id}) as assignments,
+                    (select count(*)::integer from sessions
+                      where platform_agent_id = ${id}) as sessions`,
+          )) ?? { assignments: 0, sessions: 0 };
+          if (references.assignments > 0 || references.sessions > 0) {
+            return {
+              agent: current,
+              previousStatus: current.status,
+              references,
+            };
+          }
+
+          const agent = await first<PlatformAgentRecord>(
+            transaction,
+            sql`update platform_agents
+                  set status = 'deleting',
+                      updated_by = ${updatedBy},
+                      updated_at = now()
+                where id = ${id}
+                returning ${platformAgentSelection}`,
+          );
+          if (!agent) return undefined;
+          return {
+            agent,
+            previousStatus: current.status,
+            references,
+          };
+        });
+      },
+      async remove(id: string) {
+        await db.execute(sql`delete from platform_agents where id = ${id}`);
+      },
+      assignDefault(input: {
+        userId: string;
+        platformAgentId: string;
+        assignedBy: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const eligible = await first(
+            transaction,
+            sql`select pa.id
+                  from platform_agents pa
+                  join users target on target.id = ${input.userId}
+                  join users administrator on administrator.id = ${input.assignedBy}
+                 where pa.id = ${input.platformAgentId}
+                   and pa.status = 'active'
+                   and target.role = 'user'
+                   and target.status = 'active'
+                   and administrator.role = 'admin'
+                   and administrator.status = 'active'
+                 for update of pa, target`,
+          );
+          if (!eligible) return undefined;
+          return first<DefaultAgentRecord>(
+            transaction,
+            sql`insert into user_default_agents
+                  (user_id, platform_agent_id, assigned_by)
+                values
+                  (${input.userId}, ${input.platformAgentId}, ${input.assignedBy})
+                on conflict (user_id) do update
+                  set platform_agent_id = excluded.platform_agent_id,
+                      assigned_by = excluded.assigned_by,
+                      assigned_at = now()
+                returning user_id as "userId",
+                          platform_agent_id as "platformAgentId",
+                          assigned_by as "assignedBy",
+                          assigned_at as "assignedAt"`,
+          );
+        });
+      },
+      listUsers() {
+        return rows<{
+          id: string;
+          email: string;
+          status: "active" | "disabled";
+          defaultAgentId: string | null;
+        }>(
+          db,
+          sql`select u.id, u.email, u.status,
+                     uda.platform_agent_id as "defaultAgentId"
+                from users u
+                left join user_default_agents uda on uda.user_id = u.id
+               where u.role = 'user'
+               order by u.created_at asc, u.id asc`,
+        );
+      },
+      updateUserQuota(input: {
+        userId: string;
+        personalAgentLimit: number;
+        concurrentSessionLimit: number;
+        dailySessionLimit: number;
+        monthlyTokenLimit: number;
+        updatedBy: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const eligible = await first(
+            transaction,
+            sql`select target.id
+                  from users target
+                  join users administrator on administrator.id = ${input.updatedBy}
+                 where target.id = ${input.userId}
+                   and target.role = 'user'
+                   and administrator.role = 'admin'
+                   and administrator.status = 'active'
+                 for update of target`,
+          );
+          if (!eligible) return undefined;
+          return first<{
+            userId: string;
+            personalAgentLimit: number;
+            concurrentSessionLimit: number;
+            dailySessionLimit: number;
+            monthlyTokenLimit: number;
+          }>(
+            transaction,
+            sql`insert into user_quota_overrides
+                  (user_id, personal_agent_limit, concurrent_session_limit,
+                   daily_session_limit, monthly_token_limit, updated_by)
+                values
+                  (${input.userId}, ${input.personalAgentLimit},
+                   ${input.concurrentSessionLimit}, ${input.dailySessionLimit},
+                   ${input.monthlyTokenLimit}, ${input.updatedBy})
+                on conflict (user_id) do update
+                  set personal_agent_limit = excluded.personal_agent_limit,
+                      concurrent_session_limit = excluded.concurrent_session_limit,
+                      daily_session_limit = excluded.daily_session_limit,
+                      monthly_token_limit = excluded.monthly_token_limit,
+                      updated_by = excluded.updated_by,
+                      updated_at = now()
+                returning user_id as "userId",
+                          personal_agent_limit as "personalAgentLimit",
+                          concurrent_session_limit as "concurrentSessionLimit",
+                          daily_session_limit as "dailySessionLimit",
+                          monthly_token_limit::bigint as "monthlyTokenLimit"`,
+          );
+        });
+      },
+      async audit(input: {
+        actorUserId: string;
+        ownerUserId?: string;
+        action: string;
+        resourceType: string;
+        resourceId?: string;
+        result: "succeeded" | "failed";
+        requestId: string;
+        arkRequestId?: string;
+        errorCode?: string;
+        metadata?: Record<string, unknown>;
+      }) {
+        await db.execute(
+          sql`insert into audit_logs
+                (id, actor_user_id, owner_user_id, action, resource_type,
+                 resource_id, result, request_id, ark_request_id, error_code,
+                 metadata)
+              values
+                (${randomUUID()}, ${input.actorUserId},
+                 ${input.ownerUserId ?? null}, ${input.action},
+                 ${input.resourceType}, ${input.resourceId ?? null},
+                 ${input.result}, ${input.requestId},
+                 ${input.arkRequestId ?? null}, ${input.errorCode ?? null},
+                 ${input.metadata ? JSON.stringify(input.metadata) : null}::jsonb)`,
         );
       },
     },

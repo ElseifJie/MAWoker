@@ -1,3 +1,7 @@
+import { ResourceNotFoundError } from "./errors.js";
+
+export { ResourceNotFoundError } from "./errors.js";
+
 export type TenantResourceKind =
   | "personalAgent"
   | "platformAgent"
@@ -29,15 +33,6 @@ export interface TenantAuthorizationRepositories {
   sessionInputs: OwnedResourceRepository;
   artifacts: OwnedResourceRepository;
   usage: OwnedResourceRepository;
-}
-
-export class ResourceNotFoundError extends Error {
-  readonly code = "RESOURCE_NOT_FOUND";
-
-  constructor() {
-    super("Resource not found");
-    this.name = "ResourceNotFoundError";
-  }
 }
 
 export class TenantAuthorizationService {
@@ -78,3 +73,5 @@ export class TenantAuthorizationService {
     return repositories[kind];
   }
 }
+
+export * from "./platform-agents.js";

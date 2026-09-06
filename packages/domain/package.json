@@ -16,6 +16,7 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@pwa/ark-client": "0.1.0",
     "@pwa/contracts": "0.1.0"
   }
 }

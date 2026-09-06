@@ -10,6 +10,8 @@ export interface ArkAgentInput {
   description: string;
   modelId: string;
   systemPrompt: string;
+  toolsetId?: string | undefined;
+  toolPermission?: "always_allow" | undefined;
 }
 
 export interface ArkAgent extends ArkAgentInput {

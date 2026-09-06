@@ -25,6 +25,8 @@ const agentSchema = z
     description: z.string(),
     modelId: z.string(),
     systemPrompt: z.string(),
+    toolsetId: z.string().optional(),
+    toolPermission: z.literal("always_allow").optional(),
   })
   .strict();
 
