@@ -14,20 +14,20 @@
     - 添加 Schema 校验测试，拒绝 `owner_id`、`tenant_id`、`role` 和未声明字段。
     - _需求: 1.5, 2.4, 16.4, 16.5_
 
-- [ ] 2. 建立 PostgreSQL 数据模型与 Repository
-  - [ ] 2.1 实现用户、登录会话和角色 Schema
+- [x] 2. 建立 PostgreSQL 数据模型与 Repository
+  - [x] 2.1 实现用户、登录会话和角色 Schema
     - 创建 `users`、`auth_sessions` 表、索引和迁移，确保 OIDC `sub` 唯一并只保存会话令牌哈希。
     - 添加迁移与 Repository 集成测试。
     - _需求: 1.2, 1.5, 15.1_
-  - [ ] 2.2 实现平台 Agent、个人 Agent 和默认分配 Schema
+  - [x] 2.2 实现平台 Agent、个人 Agent 和默认分配 Schema
     - 创建 `platform_agents`、`personal_agents`、`user_default_agents`，落实唯一约束、状态枚举和单用户单默认分配。
     - 添加平台/个人 Agent 类型约束与分配事务测试。
     - _需求: 2.1, 3.1, 3.6, 4.1, 15.2, 15.5_
-  - [ ] 2.3 实现 Session、输入附件和产物 Schema
+  - [x] 2.3 实现 Session、输入附件和产物 Schema
     - 创建 `sessions`、`session_event_cursors`、`session_inputs`、`artifacts`，保证 Session 只引用一种 Agent 类型。
     - 添加归属、归档、删除状态和文件关联约束测试。
     - _需求: 2.1, 5.2, 5.3, 8.3, 9.2, 10.1_
-  - [ ] 2.4 实现配额、用量、后台作业和审计 Schema
+  - [x] 2.4 实现配额、用量、后台作业和审计 Schema
     - 创建 `quota_policies`、`user_quota_overrides`、`usage_ledger`、`background_jobs`、`audit_logs`。
     - 验证用量去重约束和 `FOR UPDATE SKIP LOCKED` 作业领取。
     - _需求: 10.6, 10.7, 13.1, 13.2, 13.3, 13.4, 13.7, 13.8, 16.4_

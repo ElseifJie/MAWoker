@@ -5,3 +5,4 @@ package-lock.json
 specs
 .superpowers
 .vscode
+packages/db/migrations/*.sql

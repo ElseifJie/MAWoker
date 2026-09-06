@@ -13,6 +13,12 @@
   },
   "scripts": {
     "build": "tsc -b",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:check": "drizzle-kit check --config=drizzle.config.ts",
     "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.2",
+    "pg": "^8.23.0"
   }
 }
