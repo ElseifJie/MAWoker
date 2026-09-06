@@ -1,4 +1,5 @@
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 import {
   AuthRequiredError,
   AuthVerificationError,
@@ -8,6 +9,7 @@ import {
   AgentConflictError,
   AgentReferencedError,
   InvalidModelError,
+  InvalidUploadNameError,
   PersonalAgentQuotaExceededError,
   ResourceNotFoundError,
   SessionTerminatedError,
@@ -16,6 +18,7 @@ import {
   type PersonalAgentRecord,
   type PlatformAgentRecord,
   type SessionRecord,
+  type SessionInputRecord,
   type TenantAuthorizationService,
   type TenantResource,
   type TenantResourceKind,
@@ -146,11 +149,14 @@ export interface UserAgentApiService {
 
 export interface SessionApiService {
   create(
-    input: { agentId: string; title?: string },
+    input: { agentId: string; title?: string; uploadIds?: string[] },
     context: { userId: string; requestId: string },
-  ): PromiseLike<SessionRecord>;
+  ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
   list(userId: string, archived: boolean): PromiseLike<SessionRecord[]>;
-  get(userId: string, id: string): PromiseLike<SessionRecord>;
+  get(
+    userId: string,
+    id: string,
+  ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
   sendMessage(
     id: string,
     input: { content: string },
@@ -173,11 +179,19 @@ export interface SessionApiService {
   ): PromiseLike<{ events: AsyncIterable<UiEvent> }>;
 }
 
+export interface SessionInputApiService {
+  upload(
+    input: { name: string; contentType: string; bytes: Uint8Array },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<SessionInputRecord>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
   admin?: AdminService;
   userAgents?: UserAgentApiService;
   sessions?: SessionApiService;
+  inputs?: SessionInputApiService;
   isProduction?: boolean;
 }
 
@@ -305,6 +319,12 @@ const createSessionBodySchema = {
   properties: {
     agentId: { type: "string", format: "uuid" },
     title: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
+    uploadIds: {
+      type: "array",
+      maxItems: 20,
+      uniqueItems: true,
+      items: { type: "string", format: "uuid" },
+    },
   },
 } as const;
 
@@ -421,7 +441,25 @@ function publicUserAgent(
   };
 }
 
-function publicSession(session: SessionRecord) {
+function publicInput(input: SessionInputRecord) {
+  return {
+    id: input.id,
+    name: input.originalName,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+    mountPath: input.mountPath,
+    ...(input.sessionId === null
+      ? {
+          status: input.status,
+          expiresAt: input.expiresAt,
+        }
+      : {}),
+  };
+}
+
+function publicSession(
+  session: SessionRecord & { inputs?: SessionInputRecord[] },
+) {
   return {
     id: session.id,
     title: session.title,
@@ -447,6 +485,9 @@ function publicSession(session: SessionRecord) {
       name: session.agentName,
       version: session.agentVersion,
     },
+    ...("inputs" in session
+      ? { inputs: (session.inputs ?? []).map(publicInput) }
+      : {}),
   };
 }
 
@@ -833,6 +874,13 @@ export function buildApp(options: BuildAppOptions = {}) {
   const isProduction = options.isProduction ?? false;
 
   void app.register(cookie);
+  void app.register(multipart, {
+    limits: {
+      files: 20,
+      fields: 20,
+      fileSize: 20 * 1024 * 1024,
+    },
+  });
 
   app.get("/health", async () => ({ status: "ok" }));
 
@@ -915,6 +963,85 @@ export function buildApp(options: BuildAppOptions = {}) {
 
     app.get("/api/v1/me", async (request) => ({ user: request.auth }));
 
+    if (options.inputs) {
+      const inputs = options.inputs;
+      app.post(
+        "/api/v1/uploads",
+        {
+          schema: {
+            headers: {
+              type: "object",
+              required: ["content-type"],
+              properties: {
+                "content-type": {
+                  type: "string",
+                  pattern: "^multipart/form-data(?:;|$)",
+                },
+              },
+            },
+          },
+        },
+        async (request, reply) => {
+          try {
+            let file:
+              | {
+                  name: string;
+                  contentType: string;
+                  bytes: Uint8Array;
+                }
+              | undefined;
+            let invalid = false;
+            for await (const part of request.parts()) {
+              if (part.type !== "file" || file || part.fieldname !== "file") {
+                invalid = true;
+                if (part.type === "file") await part.toBuffer();
+                continue;
+              }
+              file = {
+                name: part.filename,
+                contentType: part.mimetype,
+                bytes: new Uint8Array(await part.toBuffer()),
+              };
+            }
+            if (!file || invalid) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "INVALID_MULTIPART",
+                    "Exactly one file is required",
+                    false,
+                  ),
+                );
+            }
+            const uploaded = await inputs.upload(file, {
+              userId: request.auth!.userId,
+              requestId: request.id,
+            });
+            return reply.code(201).send(publicInput(uploaded));
+          } catch (error) {
+            if (
+              error instanceof InvalidUploadNameError ||
+              hasErrorName(error, "InvalidUploadNameError")
+            ) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "INVALID_UPLOAD_NAME",
+                    "Invalid upload filename",
+                    false,
+                  ),
+                );
+            }
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+    }
+
     if (options.sessions) {
       const sessions = options.sessions;
       const context = (request: FastifyRequest) => ({
@@ -923,7 +1050,7 @@ export function buildApp(options: BuildAppOptions = {}) {
       });
 
       app.post<{
-        Body: { agentId: string; title?: string };
+        Body: { agentId: string; title?: string; uploadIds?: string[] };
       }>(
         "/api/v1/sessions",
         { schema: { body: createSessionBodySchema } },
@@ -934,6 +1061,9 @@ export function buildApp(options: BuildAppOptions = {}) {
                 agentId: request.body.agentId,
                 ...(request.body.title !== undefined
                   ? { title: request.body.title.trim() }
+                  : {}),
+                ...(request.body.uploadIds !== undefined
+                  ? { uploadIds: request.body.uploadIds }
                   : {}),
               },
               context(request),

@@ -96,6 +96,22 @@ interface SessionRecord extends Row {
   updatedAt: Date;
 }
 
+interface SessionInputRecord extends Row {
+  id: string;
+  ownerUserId: string;
+  sessionId: string | null;
+  arkFileId: string | null;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  mountPath: string;
+  status: "uploading" | "uploaded" | "bound" | "failed" | "deleting";
+  expiresAt: Date;
+  lastErrorCode: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const sessionSelection = sql`
   id, owner_user_id as "ownerUserId",
   ark_session_id as "arkSessionId", agent_kind as "agentKind",
@@ -106,6 +122,14 @@ const sessionSelection = sql`
   title, status, last_error_code as "lastErrorCode",
   error_recoverable as "errorRecoverable", archived_at as "archivedAt",
   deletion_state as "deletionState", last_event_at as "lastEventAt",
+  created_at as "createdAt", updated_at as "updatedAt"`;
+
+const sessionInputSelection = sql`
+  id, owner_user_id as "ownerUserId", session_id as "sessionId",
+  ark_file_id as "arkFileId", original_name as "originalName",
+  mime_type as "mimeType", size_bytes as "sizeBytes",
+  mount_path as "mountPath", status, expires_at as "expiresAt",
+  last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
 const personalAgentSelection = sql`
@@ -1052,7 +1076,7 @@ export function createRepositories(database: unknown) {
     },
     sessions: tenantRepository(db, sql.raw("sessions")),
     sessionLifecycle: {
-      prepareCreate(input: SessionRecord) {
+      prepareCreate(input: SessionRecord, uploadIds: string[] = []) {
         return db.transaction(async (transaction) => {
           const user = await first(
             transaction,
@@ -1063,6 +1087,31 @@ export function createRepositories(database: unknown) {
                  for update`,
           );
           if (!user) throw new Error("Active user not found");
+
+          const selectedUploadIds = [...new Set(uploadIds)];
+          let selectedInputs: SessionInputRecord[] = [];
+          if (selectedUploadIds.length > 0) {
+            const uploadIdList = sql.join(
+              selectedUploadIds.map((uploadId) => sql`${uploadId}`),
+              sql`, `,
+            );
+            selectedInputs = await rows<SessionInputRecord>(
+              transaction,
+              sql`select ${sessionInputSelection}
+                    from session_inputs
+                   where owner_user_id = ${input.ownerUserId}
+                     and id in (${uploadIdList})
+                     and session_id is null
+                     and status = 'uploaded'
+                     and expires_at > ${input.createdAt}
+                   for update`,
+            );
+            if (selectedInputs.length !== selectedUploadIds.length) {
+              const error = new Error("Resource not found");
+              error.name = "ResourceNotFoundError";
+              throw error;
+            }
+          }
 
           const quota = await effectiveQuota(transaction, input.ownerUserId);
           const counters = await first<{
@@ -1147,6 +1196,24 @@ export function createRepositories(database: unknown) {
                    })}::jsonb,
                    0, now() + interval '30 seconds')`,
           );
+          if (selectedUploadIds.length > 0) {
+            const uploadIdList = sql.join(
+              selectedUploadIds.map((uploadId) => sql`${uploadId}`),
+              sql`, `,
+            );
+            await transaction.execute(
+              sql`update session_inputs
+                    set session_id = ${input.id}, updated_at = now()
+                  where owner_user_id = ${input.ownerUserId}
+                    and id in (${uploadIdList})`,
+            );
+          }
+          return selectedInputs.length > 0
+            ? selectedInputs.map((selected) => ({
+                ...selected,
+                sessionId: input.id,
+              }))
+            : undefined;
         });
       },
       completeCreate(
@@ -1181,6 +1248,26 @@ export function createRepositories(database: unknown) {
                       updated_at = now()
                 where id = ${id} and owner_user_id = ${userId}
                 returning ${sessionSelection}`,
+          );
+          await transaction.execute(
+            sql`update session_inputs
+                  set status = 'bound', last_error_code = null,
+                      updated_at = now()
+                where session_id = ${id}
+                  and owner_user_id = ${userId}
+                  and status = 'uploaded'`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'succeeded', locked_at = null,
+                      locked_by = null, last_error = null, updated_at = now()
+                where type = 'cleanup_upload'
+                  and owner_user_id = ${userId}
+                  and id in (
+                    select id from session_inputs
+                     where session_id = ${id}
+                       and owner_user_id = ${userId}
+                  )`,
           );
           await transaction.execute(
             sql`update quota_reservations
@@ -1297,6 +1384,16 @@ export function createRepositories(database: unknown) {
                 from sessions
                where id = ${id} and owner_user_id = ${userId}
                limit 1`,
+        );
+      },
+      listInputs(userId: string, id: string) {
+        return rows<SessionInputRecord>(
+          db,
+          sql`select ${sessionInputSelection}
+                from session_inputs
+               where owner_user_id = ${userId}
+                 and session_id = ${id}
+               order by created_at asc, id asc`,
         );
       },
       beginMessage(userId: string, id: string) {
@@ -1535,7 +1632,135 @@ export function createRepositories(database: unknown) {
         );
       },
     },
-    sessionInputs: tenantRepository(db, sql.raw("session_inputs")),
+    sessionInputs: {
+      prepareUpload(input: SessionInputRecord) {
+        return db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`insert into session_inputs
+                  (id, owner_user_id, session_id, ark_file_id, original_name,
+                   mime_type, size_bytes, mount_path, status, expires_at,
+                   last_error_code, created_at, updated_at)
+                values
+                  (${input.id}, ${input.ownerUserId}, ${input.sessionId},
+                   ${input.arkFileId}, ${input.originalName}, ${input.mimeType},
+                   ${input.sizeBytes}, ${input.mountPath}, ${input.status},
+                   ${input.expiresAt}, ${input.lastErrorCode},
+                   ${input.createdAt}, ${input.updatedAt})`,
+          );
+          await transaction.execute(
+            sql`insert into background_jobs
+                  (id, owner_user_id, type, status, priority, payload,
+                   attempts, run_after)
+                values
+                  (${input.id}, ${input.ownerUserId}, 'cleanup_upload',
+                   'pending', 200,
+                   ${JSON.stringify({ uploadId: input.id })}::jsonb,
+                   0, ${input.expiresAt})`,
+          );
+        });
+      },
+      completeUpload(
+        id: string,
+        userId: string,
+        upstream: {
+          arkFileId: string;
+          mimeType: string;
+          sizeBytes: number;
+        },
+      ) {
+        return requiredFirst<SessionInputRecord>(
+          db,
+          sql`update session_inputs
+                set ark_file_id = ${upstream.arkFileId},
+                    mime_type = ${upstream.mimeType},
+                    size_bytes = ${upstream.sizeBytes},
+                    status = 'uploaded',
+                    last_error_code = null,
+                    updated_at = now()
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and session_id is null
+                and status = 'uploading'
+              returning ${sessionInputSelection}`,
+        );
+      },
+      async preserveUploadOutcome(
+        id: string,
+        userId: string,
+        upstream: {
+          arkFileId: string;
+          mimeType: string;
+          sizeBytes: number;
+        },
+      ) {
+        await db.execute(
+          sql`update session_inputs
+                set ark_file_id = ${upstream.arkFileId},
+                    mime_type = ${upstream.mimeType},
+                    size_bytes = ${upstream.sizeBytes},
+                    status = 'uploaded',
+                    last_error_code = 'DB_PERSISTENCE_FAILED',
+                    updated_at = now()
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and session_id is null
+                and status = 'uploading'`,
+        );
+      },
+      async failUpload(id: string, userId: string, errorCode: string) {
+        await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`update session_inputs
+                  set status = 'failed', last_error_code = ${errorCode},
+                      updated_at = now()
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and session_id is null`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'pending', locked_at = null, locked_by = null,
+                      last_error = ${errorCode}, updated_at = now()
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and type = 'cleanup_upload'`,
+          );
+        });
+      },
+      findOwned(userId: string, id: string) {
+        return first<SessionInputRecord>(
+          db,
+          sql`select ${sessionInputSelection}
+                from session_inputs
+               where id = ${id} and owner_user_id = ${userId}
+               limit 1`,
+        );
+      },
+      findExpiredUnbound(userId: string, id: string, now = new Date()) {
+        return first<SessionInputRecord>(
+          db,
+          sql`update session_inputs
+                set status = 'deleting', updated_at = ${now}
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and session_id is null
+                and status in ('uploading', 'uploaded', 'failed', 'deleting')
+                and expires_at <= ${now}
+              returning ${sessionInputSelection}`,
+        );
+      },
+      async removeUnbound(id: string, userId: string) {
+        const removed = await rows(
+          db,
+          sql`delete from session_inputs
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and session_id is null
+                returning id`,
+        );
+        return removed.length === 1;
+      },
+    },
     artifacts: tenantRepository(db, sql.raw("artifacts")),
 
     defaultAgents: {
@@ -1774,6 +1999,18 @@ export function createRepositories(database: unknown) {
                  where job.id = exhausted.id
                  returning job.id, job.owner_user_id, job.type
                 ),
+                failed_uploads as (
+                  update session_inputs input
+                     set status = 'failed',
+                         last_error_code = 'Cleanup lease expired after final attempt',
+                         updated_at = ${now}
+                    from failed_jobs job
+                   where job.type = 'cleanup_upload'
+                     and input.id = job.id
+                     and input.owner_user_id = job.owner_user_id
+                     and input.session_id is null
+                  returning input.id
+                ),
                 failed_sessions as (
                   update sessions session
                      set status = 'terminated',
@@ -1880,6 +2117,18 @@ export function createRepositories(database: unknown) {
                   and locked_by = ${workerId}
                 returning id, owner_user_id as "ownerUserId", type`,
           );
+          if (updated?.type === "cleanup_upload" && updated.ownerUserId) {
+            await transaction.execute(
+              sql`update session_inputs
+                    set status = ${final ? "failed" : "deleting"}::upload_status,
+                        last_error_code = ${error},
+                        updated_at = ${now}
+                  where id = ${updated.id}
+                    and owner_user_id = ${updated.ownerUserId}
+                    and session_id is null`,
+            );
+            return;
+          }
           if (
             !final ||
             updated?.type !== "reconcile_session" ||

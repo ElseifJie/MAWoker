@@ -118,6 +118,7 @@ export interface ArkGateway {
     input: ArkFileInput,
     options?: ArkRequestOptions,
   ): Promise<ArkFile>;
+  deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void>;
   listSessionResources(
     sessionId: string,
     options?: ArkRequestOptions,
@@ -140,6 +141,7 @@ export type ArkOperation =
   | "listEvents"
   | "streamEvents"
   | "uploadFile"
+  | "deleteFile"
   | "listSessionResources"
   | "listArtifacts";
 

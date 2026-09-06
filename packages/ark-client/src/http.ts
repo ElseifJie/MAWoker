@@ -391,6 +391,18 @@ export class HttpArkGateway implements ArkGateway {
     });
   }
 
+  async deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void> {
+    await this.request(
+      {
+        method: "DELETE",
+        path: `/api/v3/files/${encodeURIComponent(fileId)}`,
+        safe: false,
+        options,
+      },
+      async () => undefined,
+    );
+  }
+
   listSessionResources(
     sessionId: string,
     options?: ArkRequestOptions,

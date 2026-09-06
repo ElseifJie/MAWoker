@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import { HttpArkGateway } from "@pwa/ark-client";
 import { parseServerConfig } from "@pwa/config";
 import { createDatabase, createRepositories } from "@pwa/db";
-import { SessionService, UserAgentService } from "@pwa/domain";
+import {
+  SessionInputService,
+  SessionService,
+  UserAgentService,
+} from "@pwa/domain";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
+import { UploadCleanupProcessor } from "./upload-cleanup.js";
 
 const config = parseServerConfig(process.env);
 const database = createDatabase(config.databaseUrl);
@@ -35,6 +40,15 @@ const sessionProcessor = new SessionReconciliationProcessor({
   }),
   workerId: `session-worker:${process.pid}:${randomUUID()}`,
 });
+const uploadCleanupProcessor = new UploadCleanupProcessor({
+  jobs: repositories.jobs,
+  service: new SessionInputService({
+    repository: repositories.sessionInputs,
+    ark,
+    createId: randomUUID,
+  }),
+  workerId: `upload-cleanup-worker:${process.pid}:${randomUUID()}`,
+});
 
 console.info("Worker ready");
 
@@ -46,6 +60,7 @@ await new Promise<void>((resolve) => {
     try {
       await personalAgentProcessor.runOnce();
       await sessionProcessor.runOnce();
+      await uploadCleanupProcessor.runOnce();
     } catch (error) {
       console.error("Personal Agent reconciliation poll failed", error);
     } finally {

@@ -3,7 +3,11 @@ import { HttpArkGateway } from "@pwa/ark-client";
 import { ApplicationSessionService, AuthVerificationError } from "@pwa/auth";
 import { parseServerConfig } from "@pwa/config";
 import { createAuthStore, createDatabase, createRepositories } from "@pwa/db";
-import { SessionService, UserAgentService } from "@pwa/domain";
+import {
+  SessionInputService,
+  SessionService,
+  UserAgentService,
+} from "@pwa/domain";
 
 const config = parseServerConfig(process.env);
 const { buildApp } = await import("./app.js");
@@ -41,10 +45,16 @@ const sessions = new SessionService({
   environmentId: config.ark.environmentId,
   createId: randomUUID,
 });
+const inputs = new SessionInputService({
+  repository: repositories.sessionInputs,
+  ark,
+  createId: randomUUID,
+});
 const app = buildApp({
   auth,
   userAgents,
   sessions,
+  inputs,
   isProduction: config.nodeEnv === "production",
 });
 

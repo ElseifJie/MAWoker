@@ -60,11 +60,28 @@ const record: SessionRecord = {
   updatedAt: timestamp,
 };
 
+const input = {
+  id: "00000000-0000-4000-8000-000000000004",
+  ownerUserId: userId,
+  sessionId,
+  arkFileId: "ark-file-secret",
+  originalName: "brief.txt",
+  mimeType: "text/plain",
+  sizeBytes: 5,
+  mountPath:
+    "/mnt/session/inputs/00000000-0000-4000-8000-000000000004-brief.txt",
+  status: "bound" as const,
+  expiresAt: new Date("2026-09-07T00:00:00.000Z"),
+  lastErrorCode: null,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
 function sessionService() {
   return {
     create: vi.fn(async () => record),
     list: vi.fn(async () => [record]),
-    get: vi.fn(async () => record),
+    get: vi.fn(async () => ({ ...record, inputs: [input] })),
     sendMessage: vi.fn(async () => ({
       eventId: "event-1",
       delivery: "queued" as const,
@@ -143,7 +160,18 @@ describe("Session API", () => {
       },
     });
     expect(list.json()).toEqual({ sessions: [create.json()] });
-    expect(detail.json()).toEqual(create.json());
+    expect(detail.json()).toEqual({
+      ...create.json(),
+      inputs: [
+        {
+          id: input.id,
+          name: "brief.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+          mountPath: input.mountPath,
+        },
+      ],
+    });
     expect(JSON.stringify(create.json())).not.toMatch(
       /ownerUserId|arkSessionId|arkAgentId|environmentId/,
     );
@@ -228,6 +256,33 @@ describe("Session API", () => {
     expect(sessions.create).not.toHaveBeenCalled();
     expect(sessions.sendMessage).not.toHaveBeenCalled();
     expect(sessions.interrupt).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("accepts only UUID upload IDs on Session create", async () => {
+    const sessions = sessionService();
+    const app = buildApp({ auth: auth(), sessions });
+    const cookies = { [AUTH_COOKIE_NAME]: "user-token" };
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      cookies,
+      payload: { agentId, uploadIds: [input.id] },
+    });
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/sessions",
+      cookies,
+      payload: { agentId, uploadIds: ["not-a-uuid"] },
+    });
+
+    expect(accepted.statusCode).toBe(201);
+    expect(rejected.statusCode).toBe(400);
+    expect(sessions.create).toHaveBeenCalledWith(
+      { agentId, uploadIds: [input.id] },
+      expect.objectContaining({ userId }),
+    );
     await app.close();
   });
 

@@ -318,6 +318,12 @@ export class InMemoryArkGateway implements ArkGateway {
     return structuredClone(file);
   }
 
+  async deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void> {
+    this.record("deleteFile", { fileId }, options);
+    if (!this.files.has(fileId)) throw new ArkGatewayError("not_found");
+    this.files.delete(fileId);
+  }
+
   async listSessionResources(
     sessionId: string,
     options?: ArkRequestOptions,

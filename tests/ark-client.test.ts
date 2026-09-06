@@ -211,6 +211,16 @@ describe("InMemoryArkGateway", () => {
     await expect(gateway.listArtifacts(session.id)).resolves.toMatchObject([
       { id: "artifact-1", name: "result.txt", size: 2 },
     ]);
+
+    await gateway.deleteFile(file.id);
+    await expect(
+      gateway.createSession({
+        agentId: agent.id,
+        agentVersion: agent.version,
+        environmentId: "environment-1",
+        resources: [{ fileId: file.id, mountPath: "/mnt/session/brief.txt" }],
+      }),
+    ).rejects.toMatchObject({ category: "not_found" });
   });
 
   it("injects failures and records inspectable calls without credentials", async () => {
@@ -391,6 +401,31 @@ describe("HttpArkGateway", () => {
       correlationId: "create-operation",
       idempotencyKey: "create-operation",
     });
+  });
+
+  it("deletes files through the typed Files API", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 204 }));
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      maxAttempts: 1,
+    });
+
+    await gateway.deleteFile("file/one", { correlationId: "cleanup-1" });
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ark.example.com/api/v3/files/file%2Fone",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.any(Headers),
+      }),
+    );
+    expect(
+      new Headers(fetch.mock.calls[0]?.[1]?.headers).get("x-correlation-id"),
+    ).toBe("cleanup-1");
   });
 
   it.each(unsafeJsonWrites)(

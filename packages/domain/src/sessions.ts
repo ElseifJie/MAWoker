@@ -13,6 +13,7 @@ import {
 } from "@pwa/contracts";
 import type { AvailableAgentRecord } from "./user-agents.js";
 import { ResourceNotFoundError } from "./errors.js";
+import type { SessionInputRecord } from "./session-inputs.js";
 
 export interface SessionRecord {
   id: string;
@@ -49,7 +50,10 @@ interface SessionAuditEntry {
 }
 
 export interface SessionRepository {
-  prepareCreate(record: SessionRecord): PromiseLike<void>;
+  prepareCreate(
+    record: SessionRecord,
+    uploadIds?: string[],
+  ): PromiseLike<SessionInputRecord[] | void>;
   completeCreate(
     id: string,
     userId: string,
@@ -77,6 +81,7 @@ export interface SessionRepository {
     userId: string,
     id: string,
   ): PromiseLike<SessionRecord | undefined>;
+  listInputs?(userId: string, id: string): PromiseLike<SessionInputRecord[]>;
   beginMessage(
     userId: string,
     id: string,
@@ -239,9 +244,9 @@ export class SessionService {
   ) {}
 
   async create(
-    input: { agentId: string; title?: string },
+    input: { agentId: string; title?: string; uploadIds?: string[] },
     context: SessionContext,
-  ): Promise<SessionRecord> {
+  ): Promise<SessionRecord & { inputs?: SessionInputRecord[] }> {
     const agent = await this.dependencies.agentResolver.resolveForNewSession(
       context.userId,
       input.agentId,
@@ -269,16 +274,19 @@ export class SessionService {
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    await this.dependencies.repository.prepareCreate(intent);
+    const uploadIds = [...new Set(input.uploadIds ?? [])];
+    const inputs =
+      (await this.dependencies.repository.prepareCreate(intent, uploadIds)) ??
+      [];
 
     let upstream: ArkSession;
     try {
       upstream = await this.dependencies.ark.createSession(
-        this.arkCreateInput(intent),
+        this.arkCreateInput(intent, inputs),
         this.createOptions(id),
       );
     } catch (error) {
-      if (isArkCategory(error, "unknown_write_outcome")) {
+      if (inputs.length > 0 || isArkCategory(error, "unknown_write_outcome")) {
         await this.dependencies.repository.preserveCreateOutcome(
           id,
           context.userId,
@@ -298,7 +306,7 @@ export class SessionService {
         upstreamSnapshot,
       );
       await this.audit(context, "session.create", id, "succeeded");
-      return created;
+      return inputs.length > 0 ? { ...created, inputs } : created;
     } catch (error) {
       await this.dependencies.repository.preserveCreateOutcome(
         id,
@@ -316,8 +324,15 @@ export class SessionService {
     return this.dependencies.repository.listOwned(userId, archived);
   }
 
-  async get(userId: string, id: string): Promise<SessionRecord> {
-    return this.requireOwned(userId, id);
+  async get(
+    userId: string,
+    id: string,
+  ): Promise<SessionRecord & { inputs: SessionInputRecord[] }> {
+    const session = await this.requireOwned(userId, id);
+    const inputs = this.dependencies.repository.listInputs
+      ? await this.dependencies.repository.listInputs(userId, id)
+      : [];
+    return { ...session, inputs };
   }
 
   async sendMessage(
@@ -504,10 +519,13 @@ export class SessionService {
       id,
     );
     if (!intent) throw new ResourceNotFoundError();
+    const inputs = this.dependencies.repository.listInputs
+      ? await this.dependencies.repository.listInputs(context.userId, id)
+      : [];
 
     const upstream = intent.arkSessionId.startsWith("pending:")
       ? await this.dependencies.ark.createSession(
-          this.arkCreateInput(intent),
+          this.arkCreateInput(intent, inputs),
           this.createOptions(id),
         )
       : await this.dependencies.ark.getSession(intent.arkSessionId, {
@@ -533,12 +551,18 @@ export class SessionService {
     if (session.status === "terminated") throw new SessionTerminatedError();
   }
 
-  private arkCreateInput(session: SessionRecord) {
+  private arkCreateInput(
+    session: SessionRecord,
+    inputs: SessionInputRecord[] = [],
+  ) {
     return {
       agentId: session.arkAgentId,
       agentVersion: Number(session.agentVersion),
       environmentId: session.environmentId,
-      resources: [],
+      resources: inputs.map((input) => ({
+        fileId: input.arkFileId!,
+        mountPath: input.mountPath,
+      })),
     };
   }
 
