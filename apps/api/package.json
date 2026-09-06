@@ -11,6 +11,8 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@pwa/auth": "0.1.0",
     "@pwa/config": "0.1.0",
     "@pwa/contracts": "0.1.0",
     "fastify": "^5.12.3"

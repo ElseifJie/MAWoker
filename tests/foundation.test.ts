@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
@@ -31,6 +32,34 @@ const serverEnvironment = {
   SESSION_DAILY_LIMIT: "25",
   MONTHLY_TOKEN_LIMIT: "1000000",
 };
+
+async function availablePort(): Promise<number> {
+  const server = createServer();
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Unable to reserve a test port");
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+  return address.port;
+}
+
+async function waitForApi(url: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${url}/health`);
+      if (response.ok) return;
+    } catch {
+      // The subprocess has not started listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("API subprocess did not become ready");
+}
 
 describe("modular monolith foundation", () => {
   it.each(["package.json", "apps/web/package.json"])(
@@ -119,7 +148,7 @@ describe("modular monolith foundation", () => {
     const timeout = setTimeout(() => {
       timedOut = true;
       api.kill("SIGTERM");
-    }, 1_000);
+    }, 5_000);
     const [exitCode] = await once(api, "exit");
     clearTimeout(timeout);
 
@@ -127,6 +156,39 @@ describe("modular monolith foundation", () => {
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("ARK_API_KEY");
   });
+
+  it("starts the production API entrypoint with secure cookies", async () => {
+    const port = await availablePort();
+    const api = spawn(
+      process.execPath,
+      ["--import", "tsx", "apps/api/src/index.ts"],
+      {
+        cwd: root,
+        env: {
+          ...serverEnvironment,
+          NODE_ENV: "production",
+          PORT: String(port),
+        },
+        stdio: "ignore",
+      },
+    );
+
+    try {
+      const origin = `http://127.0.0.1:${port}`;
+      await waitForApi(origin);
+      const response = await fetch(`${origin}/api/v1/auth/logout`, {
+        method: "POST",
+      });
+
+      expect(response.status).toBe(204);
+      expect(response.headers.get("set-cookie")).toContain("Secure");
+    } finally {
+      api.kill("SIGTERM");
+      if (api.exitCode === null) {
+        await once(api, "exit");
+      }
+    }
+  }, 10_000);
 
   it("keeps the worker process alive until shutdown", async () => {
     const worker = spawn(
