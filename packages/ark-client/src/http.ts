@@ -419,11 +419,18 @@ export class HttpArkGateway implements ArkGateway {
     definition: RequestDefinition<T> & { schema: z.ZodType<T> },
   ): Promise<T> {
     return this.request(definition, async (response) => {
+      const invalidResponse = () =>
+        new ArkGatewayError(
+          definition.safe ? "invalid_response" : "unknown_write_outcome",
+          {
+            arkRequestId: response.headers.get("x-request-id") ?? undefined,
+          },
+        );
       let payload: unknown;
       try {
         payload = await response.json();
       } catch {
-        throw new ArkGatewayError("invalid_response");
+        throw invalidResponse();
       }
       const unwrapped =
         payload !== null &&
@@ -434,9 +441,7 @@ export class HttpArkGateway implements ArkGateway {
           : payload;
       const parsed = definition.schema.safeParse(unwrapped);
       if (!parsed.success) {
-        throw new ArkGatewayError("invalid_response", {
-          arkRequestId: response.headers.get("x-request-id") ?? undefined,
-        });
+        throw invalidResponse();
       }
       return parsed.data;
     });
@@ -523,6 +528,9 @@ export class HttpArkGateway implements ArkGateway {
       authorization: `Bearer ${this.apiKey}`,
       "x-correlation-id": correlationId,
     });
+    if (definition.options?.idempotencyKey) {
+      headers.set("idempotency-key", definition.options.idempotencyKey);
+    }
     if (definition.contentType) {
       headers.set("content-type", definition.contentType);
     }
@@ -590,6 +598,13 @@ export class HttpArkGateway implements ArkGateway {
     safe: boolean,
     context: RequestContext,
   ): ArkGatewayError {
+    if (
+      !safe &&
+      error instanceof ArkGatewayError &&
+      error.category === "unknown_write_outcome"
+    ) {
+      return error;
+    }
     if (context.signal.aborted && !context.timedOut()) {
       return new ArkGatewayError("cancelled");
     }

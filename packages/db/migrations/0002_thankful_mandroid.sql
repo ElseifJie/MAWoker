@@ -1,0 +1,1 @@
+ALTER TYPE "public"."background_job_type" ADD VALUE 'reconcile_personal_agent';

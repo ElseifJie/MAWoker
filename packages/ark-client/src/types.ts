@@ -2,6 +2,7 @@ import type { ArkEvent, SessionStatus } from "@pwa/contracts";
 
 export interface ArkRequestOptions {
   correlationId?: string;
+  idempotencyKey?: string;
   signal?: AbortSignal;
 }
 
@@ -146,6 +147,7 @@ export interface ArkCall {
   operation: ArkOperation;
   input: Record<string, unknown>;
   correlationId?: string;
+  idempotencyKey?: string;
 }
 
 export type { ArkEvent, SessionStatus };

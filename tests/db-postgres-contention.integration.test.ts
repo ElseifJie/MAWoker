@@ -98,12 +98,15 @@ describeWithPostgres("background job contention in real PostgreSQL", () => {
     const highPriorityId = randomUUID();
     const nextPriorityId = randomUUID();
     const now = new Date();
+    const staleLock = new Date(now.getTime() - 10 * 60 * 1_000);
     await workerPool.query(
       `insert into background_jobs
-        (id, type, priority, run_after, created_at)
-       values ($1, 'delete_session', 10, $3, $3),
-              ($2, 'cleanup_upload', 20, $3, $3)`,
-      [highPriorityId, nextPriorityId, now],
+        (id, type, status, priority, attempts, run_after, locked_at, locked_by,
+         created_at)
+       values ($1, 'delete_session', 'running', 10, 1, $3, $4,
+               'crashed-worker', $3),
+              ($2, 'cleanup_upload', 'pending', 20, 0, $3, null, null, $3)`,
+      [highPriorityId, nextPriorityId, now, staleLock],
     );
 
     const locker = await workerPool.connect();
@@ -133,7 +136,13 @@ describeWithPostgres("background job contention in real PostgreSQL", () => {
       limit: 1,
       now,
     });
-    expect(claimedAfterRelease.map(({ id }) => id)).toEqual([highPriorityId]);
+    expect(claimedAfterRelease).toMatchObject([
+      {
+        id: highPriorityId,
+        attempts: 2,
+        lockedBy: "worker-2",
+      },
+    ]);
   });
 
   it.each([

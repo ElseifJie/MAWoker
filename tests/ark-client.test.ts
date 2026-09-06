@@ -12,6 +12,48 @@ const agentInput = {
   systemPrompt: "Be precise.",
 };
 
+const unsafeJsonWrites: Array<
+  [string, (gateway: HttpArkGateway) => Promise<unknown>]
+> = [
+  ["createAgent", (gateway) => gateway.createAgent(agentInput)],
+  [
+    "updateAgent",
+    (gateway) =>
+      gateway.updateAgent("agent-1", {
+        ...agentInput,
+        currentVersion: 1,
+      }),
+  ],
+  [
+    "createSession",
+    (gateway) =>
+      gateway.createSession({
+        agentId: "agent-1",
+        agentVersion: 1,
+        environmentId: "environment-1",
+        resources: [],
+      }),
+  ],
+  [
+    "submitEvent",
+    (gateway) =>
+      gateway.submitEvent("session-1", {
+        type: "user.message",
+        data: { content: "hello" },
+      }),
+  ],
+  [
+    "uploadFile",
+    (gateway) =>
+      gateway.uploadFile({
+        name: "input.txt",
+        contentType: "text/plain",
+        bytes: new TextEncoder().encode("content"),
+        purpose: "agent",
+      }),
+  ],
+];
+
 describe("InMemoryArkGateway", () => {
   it("creates deterministic agents and requires the current version on update", async () => {
     const gateway = new InMemoryArkGateway();
@@ -31,6 +73,25 @@ describe("InMemoryArkGateway", () => {
         currentVersion: 1,
       }),
     ).rejects.toMatchObject({ category: "version_conflict" });
+  });
+
+  it("deduplicates create by idempotency key without conflating correlation IDs", async () => {
+    const gateway = new InMemoryArkGateway();
+
+    const first = await gateway.createAgent(agentInput, {
+      correlationId: "trace-id",
+      idempotencyKey: "personal-agent-create:durable-id",
+    });
+    const replay = await gateway.createAgent(agentInput, {
+      correlationId: "retry-trace-id",
+      idempotencyKey: "personal-agent-create:durable-id",
+    });
+    const independent = await gateway.createAgent(agentInput, {
+      correlationId: "trace-id",
+    });
+
+    expect(replay).toEqual(first);
+    expect(independent.id).toBe("agent-2");
   });
 
   it("tracks session transitions, history, and deterministic live events", async () => {
@@ -272,6 +333,138 @@ describe("HttpArkGateway", () => {
     });
   });
 
+  it("sends explicit create idempotency metadata", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(new Headers(init?.headers).get("x-correlation-id")).toBe(
+          "create-operation",
+        );
+        expect(new Headers(init?.headers).get("idempotency-key")).toBe(
+          "create-operation",
+        );
+        return Response.json({
+          id: "agent-1",
+          version: 1,
+          ...agentInput,
+        });
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await gateway.createAgent(agentInput, {
+      correlationId: "create-operation",
+      idempotencyKey: "create-operation",
+    });
+  });
+
+  it.each(unsafeJsonWrites)(
+    "classifies a successful %s with an invalid response as an unknown write outcome",
+    async (_operation, invoke) => {
+      const fetch = vi.fn().mockResolvedValue(Response.json({ id: "partial" }));
+      const gateway = new HttpArkGateway({
+        baseUrl: "https://ark.example.com",
+        apiKey: "secret",
+        fetch,
+        maxAttempts: 3,
+      });
+
+      await expect(invoke(gateway)).rejects.toMatchObject({
+        category: "unknown_write_outcome",
+        retryable: false,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ["parse", () => new Response("{malformed")],
+    [
+      "consume",
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error("body stream failed"));
+            },
+          }),
+        ),
+    ],
+  ])(
+    "classifies a successful write response body %s failure as an unknown outcome",
+    async (_failure, response) => {
+      const gateway = new HttpArkGateway({
+        baseUrl: "https://ark.example.com",
+        apiKey: "secret",
+        fetch: vi.fn().mockResolvedValue(response()),
+        maxAttempts: 1,
+      });
+
+      await expect(gateway.createAgent(agentInput)).rejects.toMatchObject({
+        category: "unknown_write_outcome",
+      });
+    },
+  );
+
+  it.each([
+    [
+      "consumption",
+      (caller: AbortController) =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              caller.abort(new Error("caller cancelled"));
+              controller.error(new Error("body stream failed"));
+            },
+          }),
+        ),
+    ],
+    [
+      "validation",
+      (caller: AbortController) => {
+        const response = Response.json({ id: "partial" });
+        vi.spyOn(response, "json").mockImplementation(async () => {
+          caller.abort(new Error("caller cancelled"));
+          return { id: "partial" };
+        });
+        return response;
+      },
+    ],
+  ])(
+    "preserves an unknown write outcome when caller abort races with 2xx body %s failure",
+    async (_failure, response) => {
+      const caller = new AbortController();
+      const gateway = new HttpArkGateway({
+        baseUrl: "https://ark.example.com",
+        apiKey: "secret",
+        fetch: vi.fn().mockResolvedValue(response(caller)),
+        maxAttempts: 1,
+      });
+
+      await expect(
+        gateway.createAgent(agentInput, { signal: caller.signal }),
+      ).rejects.toMatchObject({
+        category: "unknown_write_outcome",
+      });
+    },
+  );
+
+  it("keeps malformed successful safe reads classified as invalid responses", async () => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch: vi.fn().mockResolvedValue(new Response("{malformed")),
+      maxAttempts: 1,
+    });
+
+    await expect(gateway.getAgent("agent-1")).rejects.toMatchObject({
+      category: "invalid_response",
+    });
+  });
+
   it.each([
     [429, { code: "RATE_LIMITED" }, "rate_limited", true],
     [503, { code: "UNAVAILABLE" }, "unavailable", true],
@@ -444,6 +637,31 @@ describe("HttpArkGateway", () => {
     await expect(
       gateway.getAgent("agent-1", { signal: controller.signal }),
     ).rejects.toMatchObject({ category: "cancelled" });
+  });
+
+  it("keeps safe pre-response caller cancellation classified as cancelled", async () => {
+    const caller = new AbortController();
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(init.signal?.reason),
+            { once: true },
+          );
+        }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      maxAttempts: 1,
+    });
+    const request = gateway.getAgent("agent-1", { signal: caller.signal });
+
+    caller.abort(new Error("caller cancelled"));
+
+    await expect(request).rejects.toMatchObject({ category: "cancelled" });
   });
 
   it.each([

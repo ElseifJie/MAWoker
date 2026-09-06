@@ -48,6 +48,39 @@ const platformAgentSelection = sql`
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
+interface PersonalAgentRecord extends Row {
+  id: string;
+  ownerUserId: string;
+  arkAgentId: string;
+  name: string;
+  description: string;
+  modelId: string;
+  systemPrompt: string;
+  arkVersion: string;
+  status: "provisioning" | "active" | "disabled" | "failed" | "deleting";
+  lastErrorCode: string | null;
+}
+
+interface AvailableAgentRecord extends Row {
+  id: string;
+  arkAgentId: string;
+  name: string;
+  description: string;
+  modelId: string;
+  systemPrompt: string;
+  arkVersion: string;
+  status: PersonalAgentRecord["status"];
+  kind: "platform" | "personal";
+  editable: boolean;
+}
+
+const personalAgentSelection = sql`
+  id, owner_user_id as "ownerUserId", ark_agent_id as "arkAgentId",
+  name, description, model_id as "modelId",
+  system_prompt as "systemPrompt", ark_version as "arkVersion", status,
+  last_error_code as "lastErrorCode",
+  created_at as "createdAt", updated_at as "updatedAt"`;
+
 interface EffectiveQuota extends Row {
   personalAgentLimit: number;
   concurrentSessionLimit: number;
@@ -62,7 +95,8 @@ interface JobRecord extends Row {
     | "delete_session"
     | "delete_artifact"
     | "cleanup_upload"
-    | "reconcile_session";
+    | "reconcile_session"
+    | "reconcile_personal_agent";
   status: "running";
   priority: number;
   payload: Record<string, unknown>;
@@ -73,6 +107,8 @@ interface JobRecord extends Row {
   lockedBy: string;
   createdAt: Date;
 }
+
+const JOB_LEASE_DURATION_MS = 5 * 60 * 1_000;
 
 export class QuotaExceededError extends Error {
   constructor(
@@ -97,6 +133,15 @@ async function first<T extends Row>(
   query: SQL,
 ): Promise<T | undefined> {
   return (await rows<T>(database, query))[0];
+}
+
+async function requiredFirst<T extends Row>(
+  database: DatabaseClient,
+  query: SQL,
+): Promise<T> {
+  const result = await first<T>(database, query);
+  if (!result) throw new Error("Expected repository mutation to return a row");
+  return result;
 }
 
 function tenantRepository(database: DatabaseClient, tableName: SQL) {
@@ -137,6 +182,38 @@ async function effectiveQuota(
     throw new Error("Default quota policy is not configured");
   }
   return quota;
+}
+
+async function enqueuePersonalAgentReconciliation(
+  database: DatabaseClient,
+  input: {
+    id: string;
+    ownerUserId: string;
+    payload: Record<string, unknown>;
+  },
+): Promise<void> {
+  await database.execute(
+    sql`insert into background_jobs
+          (id, owner_user_id, type, status, priority, payload, attempts,
+           run_after, locked_at, locked_by, last_error)
+        values
+          (${input.id}, ${input.ownerUserId}, 'reconcile_personal_agent',
+           'pending', 100, ${JSON.stringify(input.payload)}::jsonb, 0,
+           now() + interval '30 seconds',
+           null, null, null)
+        on conflict (id) do update
+          set owner_user_id = excluded.owner_user_id,
+              type = excluded.type,
+              status = 'pending',
+              priority = excluded.priority,
+              payload = excluded.payload,
+              attempts = 0,
+              run_after = now() + interval '30 seconds',
+              locked_at = null,
+              locked_by = null,
+              last_error = null,
+              updated_at = now()`,
+  );
 }
 
 export function createRepositories(database: unknown) {
@@ -474,6 +551,471 @@ export function createRepositories(database: unknown) {
     },
 
     personalAgents: tenantRepository(db, sql.raw("personal_agents")),
+    userAgents: {
+      listAvailable(userId: string) {
+        return rows<AvailableAgentRecord>(
+          db,
+          sql`select *
+                from (
+                  select pa.id, pa.ark_agent_id as "arkAgentId", pa.name,
+                         pa.description, pa.model_id as "modelId",
+                         pa.system_prompt as "systemPrompt",
+                         pa.ark_version as "arkVersion", pa.status,
+                         'platform'::text as kind, false as editable,
+                         pa.created_at as "createdAt"
+                    from platform_agents pa
+                    join user_default_agents uda
+                      on uda.platform_agent_id = pa.id
+                   where uda.user_id = ${userId}
+                     and pa.status = 'active'
+                  union all
+                  select ua.id, ua.ark_agent_id as "arkAgentId", ua.name,
+                         ua.description, ua.model_id as "modelId",
+                         ua.system_prompt as "systemPrompt",
+                         ua.ark_version as "arkVersion", ua.status,
+                         'personal'::text as kind, true as editable,
+                         ua.created_at as "createdAt"
+                    from personal_agents ua
+                   where ua.owner_user_id = ${userId}
+                ) available
+               order by case when kind = 'platform' then 0 else 1 end,
+                        "createdAt" asc, id asc`,
+        );
+      },
+      async findRecentAvailable(userId: string) {
+        const recent = await first<{ agentId: string }>(
+          db,
+          sql`select case
+                       when s.agent_kind = 'platform' then s.platform_agent_id
+                       else s.personal_agent_id
+                     end as "agentId"
+                from sessions s
+                left join platform_agents pa
+                  on pa.id = s.platform_agent_id
+                left join user_default_agents uda
+                  on uda.user_id = s.owner_user_id
+                 and uda.platform_agent_id = s.platform_agent_id
+                left join personal_agents ua
+                  on ua.id = s.personal_agent_id
+                 and ua.owner_user_id = s.owner_user_id
+               where s.owner_user_id = ${userId}
+                 and (
+                   (s.agent_kind = 'platform'
+                    and pa.status = 'active'
+                    and uda.user_id is not null)
+                   or
+                   (s.agent_kind = 'personal' and ua.status = 'active')
+                 )
+               order by s.created_at desc, s.id desc
+               limit 1`,
+        );
+        return recent?.agentId;
+      },
+      async findDefaultActive(userId: string) {
+        const assignment = await first<{ agentId: string }>(
+          db,
+          sql`select pa.id as "agentId"
+                from user_default_agents uda
+                join platform_agents pa on pa.id = uda.platform_agent_id
+               where uda.user_id = ${userId}
+                 and pa.status = 'active'
+               limit 1`,
+        );
+        return assignment?.agentId;
+      },
+      findAvailableById(userId: string, id: string) {
+        return first<AvailableAgentRecord>(
+          db,
+          sql`select *
+                from (
+                  select pa.id, pa.ark_agent_id as "arkAgentId", pa.name,
+                         pa.description, pa.model_id as "modelId",
+                         pa.system_prompt as "systemPrompt",
+                         pa.ark_version as "arkVersion", pa.status,
+                         'platform'::text as kind, false as editable
+                    from platform_agents pa
+                    join user_default_agents uda
+                      on uda.platform_agent_id = pa.id
+                   where uda.user_id = ${userId}
+                     and pa.id = ${id}
+                     and pa.status = 'active'
+                  union all
+                  select ua.id, ua.ark_agent_id as "arkAgentId", ua.name,
+                         ua.description, ua.model_id as "modelId",
+                         ua.system_prompt as "systemPrompt",
+                         ua.ark_version as "arkVersion", ua.status,
+                         'personal'::text as kind, true as editable
+                    from personal_agents ua
+                   where ua.owner_user_id = ${userId}
+                     and ua.id = ${id}
+                     and ua.status = 'active'
+                ) available
+               limit 1`,
+        );
+      },
+      createProvisioning(input: {
+        id: string;
+        ownerUserId: string;
+        name: string;
+        description: string;
+        modelId: string;
+        systemPrompt: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const user = await first(
+            transaction,
+            sql`select id from users
+                 where id = ${input.ownerUserId}
+                   and role = 'user'
+                   and status = 'active'
+                 for update`,
+          );
+          if (!user) return undefined;
+          const quota = await effectiveQuota(transaction, input.ownerUserId);
+          const usage = await first<{ count: number }>(
+            transaction,
+            sql`select count(*)::integer as count
+                  from personal_agents
+                 where owner_user_id = ${input.ownerUserId}
+                   and not (
+                     status = 'failed'
+                     and ark_version = '0'
+                     and ark_agent_id like 'pending:%'
+                   )`,
+          );
+          if ((usage?.count ?? 0) >= quota.personalAgentLimit) return undefined;
+          const created = await requiredFirst<PersonalAgentRecord>(
+            transaction,
+            sql`insert into personal_agents
+                  (id, owner_user_id, ark_agent_id, name, description, model_id,
+                   system_prompt, ark_version, status)
+                values
+                  (${input.id}, ${input.ownerUserId}, ${`pending:${input.id}`},
+                   ${input.name}, ${input.description}, ${input.modelId},
+                   ${input.systemPrompt}, '0', 'provisioning')
+                returning ${personalAgentSelection}`,
+          );
+          await enqueuePersonalAgentReconciliation(transaction, {
+            id: input.id,
+            ownerUserId: input.ownerUserId,
+            payload: {
+              operation: "create",
+              personalAgentId: input.id,
+            },
+          });
+          return created;
+        });
+      },
+      findOwned(userId: string, id: string) {
+        return first<PersonalAgentRecord>(
+          db,
+          sql`select ${personalAgentSelection}
+                from personal_agents
+               where id = ${id} and owner_user_id = ${userId}
+               limit 1`,
+        );
+      },
+      markProvisioned(
+        id: string,
+        userId: string,
+        upstream: { arkAgentId: string; arkVersion: string },
+      ) {
+        return db.transaction(async (transaction) => {
+          const job = await requiredFirst<{ status: string }>(
+            transaction,
+            sql`select status
+                  from background_jobs
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and type = 'reconcile_personal_agent'
+                 for update`,
+          );
+          if (job.status === "failed") {
+            throw new Error("Personal Agent create reconciliation is terminal");
+          }
+          const agent = await requiredFirst<PersonalAgentRecord>(
+            transaction,
+            sql`update personal_agents
+                  set ark_agent_id = ${upstream.arkAgentId},
+                      ark_version = ${upstream.arkVersion},
+                      status = 'active',
+                      last_error_code = null,
+                      updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                returning ${personalAgentSelection}`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'succeeded',
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = null,
+                      updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}`,
+          );
+          return agent;
+        });
+      },
+      markFailure(
+        id: string,
+        userId: string,
+        status: "provisioning" | "failed" | "deleting",
+        errorCode: string,
+      ) {
+        return requiredFirst<PersonalAgentRecord>(
+          db,
+          sql`update personal_agents
+                set status = ${status},
+                    last_error_code = ${errorCode},
+                    updated_at = now()
+              where id = ${id} and owner_user_id = ${userId}
+              returning ${personalAgentSelection}`,
+        );
+      },
+      markDefinitiveCreateFailure(
+        id: string,
+        userId: string,
+        errorCode: string,
+      ) {
+        return db.transaction(async (transaction) => {
+          const job = await requiredFirst<{ status: string }>(
+            transaction,
+            sql`select status
+                  from background_jobs
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and type = 'reconcile_personal_agent'
+                 for update`,
+          );
+          if (job.status === "succeeded") {
+            return requiredFirst<PersonalAgentRecord>(
+              transaction,
+              sql`select ${personalAgentSelection}
+                    from personal_agents
+                   where id = ${id} and owner_user_id = ${userId}`,
+            );
+          }
+          const agent = await requiredFirst<PersonalAgentRecord>(
+            transaction,
+            sql`update personal_agents
+                  set status = 'failed',
+                      last_error_code = ${errorCode},
+                      updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                returning ${personalAgentSelection}`,
+          );
+          await transaction.execute(
+            sql`update background_jobs
+                  set status = 'failed',
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = ${errorCode},
+                      updated_at = now()
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and type = 'reconcile_personal_agent'`,
+          );
+          return agent;
+        });
+      },
+      markCreatePersistenceFailure(
+        id: string,
+        userId: string,
+        upstream: { arkAgentId: string; arkVersion: string },
+      ) {
+        return requiredFirst<PersonalAgentRecord>(
+          db,
+          sql`update personal_agents
+                set ark_agent_id = ${upstream.arkAgentId},
+                    ark_version = ${upstream.arkVersion},
+                    status = 'failed',
+                    last_error_code = 'DB_PERSISTENCE_FAILED',
+                    updated_at = now()
+              where id = ${id} and owner_user_id = ${userId}
+              returning ${personalAgentSelection}`,
+        );
+      },
+      markUpdatePersistenceFailure(
+        id: string,
+        userId: string,
+        upstreamVersion: string,
+      ) {
+        return requiredFirst<PersonalAgentRecord>(
+          db,
+          sql`update personal_agents
+                set ark_version = ${upstreamVersion},
+                    status = 'failed',
+                    last_error_code = 'DB_PERSISTENCE_FAILED',
+                    updated_at = now()
+              where id = ${id} and owner_user_id = ${userId}
+              returning ${personalAgentSelection}`,
+        );
+      },
+      async saveUpdateIntent(
+        id: string,
+        userId: string,
+        configuration: {
+          name: string;
+          description: string;
+          modelId: string;
+          systemPrompt: string;
+        },
+        arkVersion: string,
+      ) {
+        await enqueuePersonalAgentReconciliation(db, {
+          id,
+          ownerUserId: userId,
+          payload: {
+            operation: "update",
+            personalAgentId: id,
+            configuration,
+            arkVersion,
+          },
+        });
+      },
+      update(
+        id: string,
+        userId: string,
+        input: {
+          name?: string;
+          description?: string;
+          modelId?: string;
+          systemPrompt?: string;
+          arkVersion?: string;
+          status?: string;
+          lastErrorCode?: string | null;
+        },
+      ) {
+        return requiredFirst<PersonalAgentRecord>(
+          db,
+          sql`update personal_agents
+                set name = coalesce(${input.name ?? null}, name),
+                    description = coalesce(${input.description ?? null}, description),
+                    model_id = coalesce(${input.modelId ?? null}, model_id),
+                    system_prompt = coalesce(${input.systemPrompt ?? null}, system_prompt),
+                    ark_version = coalesce(${input.arkVersion ?? null}, ark_version),
+                    status = coalesce(${input.status ?? null}, status::text)::agent_status,
+                    last_error_code = case
+                      when ${input.lastErrorCode === null} then null
+                      else coalesce(${input.lastErrorCode ?? null}, last_error_code)
+                    end,
+                    updated_at = now()
+              where id = ${id} and owner_user_id = ${userId}
+              returning ${personalAgentSelection}`,
+        );
+      },
+      beginDelete(id: string, userId: string, enqueueReconciliation = true) {
+        return db.transaction(async (transaction) => {
+          const current = await first<PersonalAgentRecord>(
+            transaction,
+            sql`select ${personalAgentSelection}
+                  from personal_agents
+                 where id = ${id} and owner_user_id = ${userId}
+                 for update`,
+          );
+          if (!current) return undefined;
+          const createJob = await first<{
+            status: string;
+            payload: Record<string, unknown>;
+          }>(
+            transaction,
+            sql`select status, payload
+                  from background_jobs
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and type = 'reconcile_personal_agent'
+                 limit 1`,
+          );
+          const createJobPending =
+            createJob?.payload.operation === "create" &&
+            (createJob.status === "pending" || createJob.status === "running");
+          const pendingIdentity =
+            current.arkAgentId.startsWith("pending:") &&
+            current.status !== "failed";
+          if (
+            current.status === "provisioning" ||
+            pendingIdentity ||
+            createJobPending
+          ) {
+            return {
+              agent: current,
+              conflict: "create_reconciliation_pending" as const,
+            };
+          }
+          const references = (await first<{ sessions: number }>(
+            transaction,
+            sql`select count(*)::integer as sessions
+                  from sessions
+                 where owner_user_id = ${userId}
+                   and personal_agent_id = ${id}`,
+          )) ?? { sessions: 0 };
+          if (references.sessions > 0) {
+            return {
+              agent: current,
+              previousStatus: current.status,
+              references,
+            };
+          }
+          const agent = await requiredFirst<PersonalAgentRecord>(
+            transaction,
+            sql`update personal_agents
+                  set status = 'deleting', updated_at = now()
+                where id = ${id} and owner_user_id = ${userId}
+                returning ${personalAgentSelection}`,
+          );
+          if (enqueueReconciliation) {
+            await enqueuePersonalAgentReconciliation(transaction, {
+              id,
+              ownerUserId: userId,
+              payload: {
+                operation: "delete",
+                personalAgentId: id,
+              },
+            });
+          }
+          return {
+            agent,
+            previousStatus: current.status,
+            references,
+          };
+        });
+      },
+      async remove(id: string, userId: string) {
+        await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`delete from background_jobs
+                 where id = ${id} and owner_user_id = ${userId}
+                   and type = 'reconcile_personal_agent'`,
+          );
+          await transaction.execute(
+            sql`delete from personal_agents
+                 where id = ${id} and owner_user_id = ${userId}`,
+          );
+        });
+      },
+      async audit(input: {
+        actorUserId: string;
+        ownerUserId: string;
+        action: string;
+        resourceType: "personal_agent";
+        resourceId: string;
+        result: "succeeded" | "failed";
+        requestId: string;
+        arkRequestId?: string;
+        errorCode?: string;
+      }) {
+        await db.execute(
+          sql`insert into audit_logs
+                (id, actor_user_id, owner_user_id, action, resource_type,
+                 resource_id, result, request_id, ark_request_id, error_code)
+              values
+                (${randomUUID()}, ${input.actorUserId}, ${input.ownerUserId},
+                 ${input.action}, ${input.resourceType}, ${input.resourceId},
+                 ${input.result}, ${input.requestId},
+                 ${input.arkRequestId ?? null}, ${input.errorCode ?? null})`,
+        );
+      },
+    },
     sessions: tenantRepository(db, sql.raw("sessions")),
     sessionInputs: tenantRepository(db, sql.raw("session_inputs")),
     artifacts: tenantRepository(db, sql.raw("artifacts")),
@@ -670,47 +1212,128 @@ export function createRepositories(database: unknown) {
     },
 
     jobs: {
-      async claim(input: { workerId: string; limit: number; now?: Date }) {
+      async claim(input: {
+        workerId: string;
+        limit: number;
+        now?: Date;
+        types?: JobRecord["type"][];
+      }) {
         const now = input.now ?? new Date();
-        const claimed = await rows<JobRecord>(
-          db,
-          sql`with claimable as (
-                select id
-                  from background_jobs
-                 where status = 'pending'
-                   and run_after <= ${now}
-                   and attempts < max_attempts
-                 order by priority asc, run_after asc, created_at asc, id asc
-                 for update skip locked
-                 limit ${input.limit}
-              )
-              update background_jobs job
-                 set status = 'running',
-                     locked_at = ${now},
-                     locked_by = ${input.workerId},
-                     attempts = job.attempts + 1,
-                     updated_at = ${now}
-                from claimable
-               where job.id = claimable.id
-              returning job.id,
-                        job.owner_user_id as "ownerUserId",
-                        job.type,
-                        job.status,
-                        job.priority,
-                        job.payload,
-                        job.attempts,
-                        job.max_attempts as "maxAttempts",
-                        job.run_after as "runAfter",
-                        job.locked_at as "lockedAt",
-                        job.locked_by as "lockedBy",
-                        job.created_at as "createdAt"`,
+        const leaseExpiredAt = new Date(now.getTime() - JOB_LEASE_DURATION_MS);
+        const types = input.types ?? [
+          "delete_session",
+          "delete_artifact",
+          "cleanup_upload",
+          "reconcile_session",
+          "reconcile_personal_agent",
+        ];
+        const jobTypes = sql.join(
+          types.map((type) => sql`${type}`),
+          sql`, `,
         );
+        const claimed = await db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`with exhausted as (
+                  select id
+                    from background_jobs
+                   where status = 'running'
+                     and locked_at <= ${leaseExpiredAt}
+                     and type in (${jobTypes})
+                     and attempts >= max_attempts
+                   for update skip locked
+                )
+                update background_jobs job
+                   set status = 'failed',
+                       locked_at = null,
+                       locked_by = null,
+                       last_error = coalesce(
+                         job.last_error,
+                         'Job lease expired after final attempt'
+                       ),
+                       updated_at = ${now}
+                  from exhausted
+                 where job.id = exhausted.id`,
+          );
+          return rows<JobRecord>(
+            transaction,
+            sql`with claimable as (
+                  select id
+                    from background_jobs
+                   where (
+                         (status = 'pending' and run_after <= ${now})
+                         or
+                         (status = 'running' and locked_at <= ${leaseExpiredAt})
+                       )
+                     and type in (${jobTypes})
+                     and attempts < max_attempts
+                   order by priority asc, run_after asc, created_at asc, id asc
+                   for update skip locked
+                   limit ${input.limit}
+                )
+                update background_jobs job
+                   set status = 'running',
+                       locked_at = ${now},
+                       locked_by = ${input.workerId},
+                       attempts = job.attempts + 1,
+                       updated_at = ${now}
+                  from claimable
+                 where job.id = claimable.id
+                returning job.id,
+                          job.owner_user_id as "ownerUserId",
+                          job.type,
+                          job.status,
+                          job.priority,
+                          job.payload,
+                          job.attempts,
+                          job.max_attempts as "maxAttempts",
+                          job.run_after as "runAfter",
+                          job.locked_at as "lockedAt",
+                          job.locked_by as "lockedBy",
+                          job.created_at as "createdAt"`,
+          );
+        });
         return claimed.sort(
           (left, right) =>
             left.priority - right.priority ||
             left.runAfter.getTime() - right.runAfter.getTime() ||
             left.createdAt.getTime() - right.createdAt.getTime() ||
             left.id.localeCompare(right.id),
+        );
+      },
+      async succeed(id: string, workerId: string) {
+        await db.execute(
+          sql`update background_jobs
+                set status = 'succeeded',
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = null,
+                    updated_at = now()
+              where id = ${id}
+                and status = 'running'
+                and locked_by = ${workerId}`,
+        );
+      },
+      async retry(
+        id: string,
+        workerId: string,
+        error: string,
+        final: boolean,
+        now = new Date(),
+      ) {
+        const runAfter = new Date(
+          now.getTime() + Math.min(60_000, 2 ** 10 * 100),
+        );
+        await db.execute(
+          sql`update background_jobs
+                set status = ${final ? "failed" : "pending"}::background_job_status,
+                    run_after = ${runAfter},
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = ${error},
+                    updated_at = ${now}
+              where id = ${id}
+                and status = 'running'
+                and locked_by = ${workerId}`,
         );
       },
     },

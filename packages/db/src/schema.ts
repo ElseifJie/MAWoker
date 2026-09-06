@@ -69,6 +69,7 @@ export const backgroundJobType = pgEnum("background_job_type", [
   "delete_artifact",
   "cleanup_upload",
   "reconcile_session",
+  "reconcile_personal_agent",
 ]);
 export const backgroundJobStatus = pgEnum("background_job_status", [
   "pending",

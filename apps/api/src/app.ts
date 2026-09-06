@@ -8,8 +8,11 @@ import {
   AgentConflictError,
   AgentReferencedError,
   InvalidModelError,
+  PersonalAgentQuotaExceededError,
   ResourceNotFoundError,
+  type AvailableAgentRecord,
   type DefaultAgentRecord,
+  type PersonalAgentRecord,
   type PlatformAgentRecord,
   type TenantAuthorizationService,
   type TenantResource,
@@ -95,9 +98,52 @@ export interface AdminService {
   }>;
 }
 
+export interface UserAgentApiService {
+  list(userId: string): PromiseLike<{
+    agents: Array<
+      AvailableAgentRecord & {
+        version?: string;
+        ownerUserId?: string;
+        lastErrorCode?: string | null;
+      }
+    >;
+    selection: { agentId: string; source: "recent" | "default" } | null;
+    blocker: {
+      code: "NO_DEFAULT_AGENT";
+      message: string;
+    } | null;
+  }>;
+  get(userId: string, id: string): PromiseLike<AvailableAgentRecord>;
+  create(
+    input: {
+      name: string;
+      description: string;
+      modelId: string;
+      systemPrompt: string;
+    },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<PersonalAgentRecord>;
+  update(
+    id: string,
+    input: {
+      name?: string;
+      description?: string;
+      modelId?: string;
+      systemPrompt?: string;
+      arkVersion: string;
+    },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<PersonalAgentRecord>;
+  delete(
+    id: string,
+    context: { userId: string; requestId: string },
+  ): PromiseLike<void>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
   admin?: AdminService;
+  userAgents?: UserAgentApiService;
   isProduction?: boolean;
 }
 
@@ -166,6 +212,29 @@ const updatePlatformAgentBodySchema = {
         { required: ["systemPrompt"] },
       ],
     },
+  ],
+} as const;
+
+const createPersonalAgentBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "modelId", "systemPrompt"],
+  properties: agentProperties,
+} as const;
+
+const updatePersonalAgentBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["arkVersion"],
+  properties: {
+    ...agentProperties,
+    arkVersion: { type: "string", pattern: "^[1-9][0-9]*$" },
+  },
+  anyOf: [
+    { required: ["name"] },
+    { required: ["description"] },
+    { required: ["modelId"] },
+    { required: ["systemPrompt"] },
   ],
 } as const;
 
@@ -260,6 +329,27 @@ function publicAgent(agent: PlatformAgentRecord) {
   };
 }
 
+function publicUserAgent(
+  agent: AvailableAgentRecord | PersonalAgentRecord,
+  includePrompt = false,
+) {
+  const personal = "ownerUserId" in agent;
+  return {
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    modelId: agent.modelId,
+    version: agent.arkVersion,
+    status: agent.status,
+    kind: personal ? ("personal" as const) : agent.kind,
+    editable: personal ? true : agent.editable,
+    ...(personal ? { lastErrorCode: agent.lastErrorCode } : {}),
+    ...(includePrompt && (personal || agent.editable)
+      ? { systemPrompt: agent.systemPrompt }
+      : {}),
+  };
+}
+
 function sendAdminError(
   error: unknown,
   request: FastifyRequest,
@@ -282,6 +372,21 @@ function sendAdminError(
           request.id,
           "VALIDATION_FAILED",
           "Model is not allowed",
+          false,
+        ),
+      );
+  }
+  if (
+    error instanceof PersonalAgentQuotaExceededError ||
+    hasErrorName(error, "PersonalAgentQuotaExceededError")
+  ) {
+    return reply
+      .code(429)
+      .send(
+        applicationError(
+          request.id,
+          "QUOTA_EXCEEDED",
+          "Personal Agent quota exceeded",
           false,
         ),
       );
@@ -317,6 +422,18 @@ function sendAdminError(
           "VALIDATION_FAILED",
           "Platform Agent is still referenced",
           false,
+        ),
+      );
+  }
+  if (hasErrorName(error, "PersonalAgentBusyError")) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "AGENT_BUSY",
+          "Personal Agent creation is still being reconciled",
+          true,
         ),
       );
   }
@@ -570,6 +687,111 @@ export function buildApp(options: BuildAppOptions = {}) {
     });
 
     app.get("/api/v1/me", async (request) => ({ user: request.auth }));
+
+    if (options.userAgents) {
+      const userAgents = options.userAgents;
+      const context = (request: FastifyRequest) => ({
+        userId: request.auth!.userId,
+        requestId: request.id,
+      });
+
+      app.get("/api/v1/agents", async (request, reply) => {
+        const result = await userAgents.list(request.auth!.userId);
+        return reply.send({
+          agents: result.agents.map((agent) => publicUserAgent(agent)),
+          selection: result.selection,
+          blocker: result.blocker,
+        });
+      });
+
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/agents/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const agent = await userAgents.get(
+              request.auth!.userId,
+              request.params.id,
+            );
+            return reply.send(publicUserAgent(agent, true));
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{
+        Body: {
+          name: string;
+          description?: string;
+          modelId: string;
+          systemPrompt: string;
+        };
+      }>(
+        "/api/v1/agents",
+        { schema: { body: createPersonalAgentBodySchema } },
+        async (request, reply) => {
+          try {
+            const created = await userAgents.create(
+              {
+                name: request.body.name.trim(),
+                description: request.body.description?.trim() ?? "",
+                modelId: request.body.modelId.trim(),
+                systemPrompt: request.body.systemPrompt,
+              },
+              context(request),
+            );
+            return reply.code(201).send(publicUserAgent(created, true));
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.patch<{
+        Params: { id: string };
+        Body: {
+          name?: string;
+          description?: string;
+          modelId?: string;
+          systemPrompt?: string;
+          arkVersion: string;
+        };
+      }>(
+        "/api/v1/agents/:id",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: updatePersonalAgentBodySchema,
+          },
+        },
+        async (request, reply) => {
+          try {
+            const updated = await userAgents.update(
+              request.params.id,
+              request.body,
+              context(request),
+            );
+            return reply.send(publicUserAgent(updated, true));
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/agents/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            await userAgents.delete(request.params.id, context(request));
+            return reply.code(204).send();
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+    }
 
     if (options.admin) {
       const admin = options.admin;

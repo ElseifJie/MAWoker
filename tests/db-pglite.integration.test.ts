@@ -629,11 +629,12 @@ describe("repository result contracts", () => {
         lockedBy: "worker-1",
       },
     ];
+    const execute = async () => ({ rows: jobs });
     const database = {
-      execute: async () => ({ rows: jobs }),
-      transaction: async () => {
-        throw new Error("Unexpected transaction");
-      },
+      execute,
+      transaction: async <T>(
+        callback: (transaction: { execute: typeof execute }) => Promise<T>,
+      ) => callback({ execute }),
     };
     const repositories = createRepositories(database);
 

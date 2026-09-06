@@ -11,7 +11,10 @@
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
-    "@pwa/config": "0.1.0"
+    "@pwa/ark-client": "0.1.0",
+    "@pwa/config": "0.1.0",
+    "@pwa/db": "0.1.0",
+    "@pwa/domain": "0.1.0"
   },
   "devDependencies": {
     "tsx": "^4.23.13"

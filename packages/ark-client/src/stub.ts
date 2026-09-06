@@ -64,6 +64,7 @@ export class InMemoryArkGateway implements ArkGateway {
 
   private readonly now: () => Date;
   private readonly agents = new Map<string, ArkAgent>();
+  private readonly agentsByCreateIdempotencyKey = new Map<string, string>();
   private readonly sessions = new Map<string, ArkSession>();
   private readonly events = new Map<string, ArkEvent[]>();
   private readonly files = new Map<string, ArkFile>();
@@ -95,12 +96,21 @@ export class InMemoryArkGateway implements ArkGateway {
     options?: ArkRequestOptions,
   ): Promise<ArkAgent> {
     this.record("createAgent", input, options);
+    const existingId = options?.idempotencyKey
+      ? this.agentsByCreateIdempotencyKey.get(options.idempotencyKey)
+      : undefined;
+    if (existingId) {
+      return structuredClone(this.requireAgent(existingId));
+    }
     const agent = {
       ...input,
       id: `agent-${++this.counters.agent}`,
       version: 1,
     };
     this.agents.set(agent.id, agent);
+    if (options?.idempotencyKey) {
+      this.agentsByCreateIdempotencyKey.set(options.idempotencyKey, agent.id);
+    }
     return structuredClone(agent);
   }
 
@@ -349,6 +359,9 @@ export class InMemoryArkGateway implements ArkGateway {
     };
     if (options?.correlationId !== undefined) {
       call.correlationId = options.correlationId;
+    }
+    if (options?.idempotencyKey !== undefined) {
+      call.idempotencyKey = options.idempotencyKey;
     }
     this.calls.push(call);
     const failure = this.failures.get(operation)?.shift();

@@ -5,5 +5,10 @@
     "outDir": "dist"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../../packages/config" }]
+  "references": [
+    { "path": "../../packages/ark-client" },
+    { "path": "../../packages/config" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/domain" }
+  ]
 }
