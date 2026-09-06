@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Readable } from "node:stream";
 import {
   ArkGatewayError,
   HttpArkGateway,
@@ -209,8 +210,18 @@ describe("InMemoryArkGateway", () => {
       },
     ]);
     await expect(gateway.listArtifacts(session.id)).resolves.toMatchObject([
-      { id: "artifact-1", name: "result.txt", size: 2 },
+      {
+        id: "artifact-1",
+        mountPath: "/mnt/session/outputs/result.txt",
+        name: "result.txt",
+        size: 2,
+      },
     ]);
+    const download = await gateway.downloadFile("artifact-1");
+    expect(download.contentLength).toBe(2);
+    const chunks: Buffer[] = [];
+    for await (const chunk of download.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from([4, 5]));
 
     await gateway.deleteFile(file.id);
     await expect(
@@ -426,6 +437,45 @@ describe("HttpArkGateway", () => {
     expect(
       new Headers(fetch.mock.calls[0]?.[1]?.headers).get("x-correlation-id"),
     ).toBe("cleanup-1");
+  });
+
+  it("returns the Files API body as a stream with its known content length", async () => {
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(new Uint8Array([pulls]));
+        if (pulls === 2) controller.close();
+      },
+    });
+    const fetch = vi.fn().mockResolvedValue(
+      new Response(body, {
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": "2",
+        },
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      maxAttempts: 1,
+    });
+
+    const download = await gateway.downloadFile("file/one", {
+      correlationId: "download-1",
+    });
+
+    expect(download.contentLength).toBe(2);
+    expect(download.stream).toBeInstanceOf(Readable);
+    const chunks: Buffer[] = [];
+    for await (const chunk of download.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks)).toEqual(Buffer.from([1, 2]));
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ark.example.com/api/v3/files/file%2Fone/content",
+      expect.objectContaining({ method: "GET", headers: expect.any(Headers) }),
+    );
   });
 
   it.each(unsafeJsonWrites)(

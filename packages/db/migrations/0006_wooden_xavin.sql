@@ -1,0 +1,2 @@
+DROP INDEX "artifacts_session_ark_file_id_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "artifacts_session_ark_file_id_unique" ON "artifacts" USING btree ("owner_user_id","session_id","ark_file_id");

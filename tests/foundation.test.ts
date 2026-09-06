@@ -1,11 +1,13 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
+const startupTimeoutMs = 15_000;
+const testTimeoutMs = 20_000;
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(resolve(root, path), "utf8")) as Record<
@@ -25,10 +27,13 @@ const serverEnvironment = {
   ARK_API_BASE_URL: "https://ark.example.com",
   ARK_API_KEY: "ark-secret",
   ARK_ENVIRONMENT_ID: "env-1",
-  TOS_ENDPOINT: "https://tos.example.com",
+  TOS_ENDPOINT: "https://tos-s3-cn-beijing.volces.com",
   TOS_BUCKET: "private",
+  TOS_REGION: "cn-beijing",
+  TOS_ACCESS_KEY_ID: "tos-access-key",
+  TOS_SECRET_ACCESS_KEY: "tos-secret-key",
   MODEL_ALLOWLIST: "model-a",
-  OUTBOUND_HOST_ALLOWLIST: "ark.example.com,tos.example.com",
+  OUTBOUND_HOST_ALLOWLIST: "ark.example.com,tos-s3-cn-beijing.volces.com",
   SESSION_DAILY_LIMIT: "25",
   MONTHLY_TOKEN_LIMIT: "1000000",
 };
@@ -47,11 +52,60 @@ async function availablePort(): Promise<number> {
   return address.port;
 }
 
-async function waitForApi(url: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
+async function waitForExit(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<number | null> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return child.exitCode;
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      child.kill("SIGKILL");
+      reject(new Error(`Subprocess did not exit within ${timeoutMs}ms`));
+    }, timeoutMs);
+    const exited = (code: number | null) => {
+      cleanup();
+      resolve(code);
+    };
+    const failed = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      child.off("exit", exited);
+      child.off("error", failed);
+    };
+    child.once("exit", exited);
+    child.once("error", failed);
+  });
+}
+
+async function stopSubprocess(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill("SIGTERM");
+  try {
+    await waitForExit(child, 5_000);
+  } catch {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await waitForExit(child, 5_000);
+  }
+}
+
+async function waitForApi(url: string, child: ChildProcess): Promise<void> {
+  const deadline = Date.now() + startupTimeoutMs;
   while (Date.now() < deadline) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `API subprocess exited with code ${child.exitCode} and signal ${child.signalCode}`,
+      );
+    }
     try {
-      const response = await fetch(`${url}/health`);
+      const response = await fetch(`${url}/health`, {
+        signal: AbortSignal.timeout(500),
+      });
       if (response.ok) return;
     } catch {
       // The subprocess has not started listening yet.
@@ -124,125 +178,132 @@ describe("modular monolith foundation", () => {
     await app.close();
   });
 
-  it("rejects invalid config before starting the API health endpoint", async () => {
-    const invalidEnvironment: NodeJS.ProcessEnv = { ...serverEnvironment };
-    delete invalidEnvironment.ARK_API_KEY;
+  it(
+    "rejects invalid config before starting the API health endpoint",
+    async () => {
+      const invalidEnvironment: NodeJS.ProcessEnv = { ...serverEnvironment };
+      delete invalidEnvironment.ARK_API_KEY;
 
-    const api = spawn(
-      process.execPath,
-      ["--import", "tsx", "apps/api/src/index.ts"],
-      {
-        cwd: root,
-        env: invalidEnvironment,
-        stdio: ["ignore", "ignore", "pipe"],
-      },
-    );
-
-    let stderr = "";
-    api.stderr.setEncoding("utf8");
-    api.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      api.kill("SIGTERM");
-    }, 5_000);
-    const [exitCode] = await once(api, "exit");
-    clearTimeout(timeout);
-
-    expect(timedOut).toBe(false);
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("ARK_API_KEY");
-  });
-
-  it("starts the production API entrypoint with secure cookies", async () => {
-    const port = await availablePort();
-    const api = spawn(
-      process.execPath,
-      ["--import", "tsx", "apps/api/src/index.ts"],
-      {
-        cwd: root,
-        env: {
-          ...serverEnvironment,
-          NODE_ENV: "production",
-          PORT: String(port),
+      const api = spawn(
+        process.execPath,
+        ["--import", "tsx", "apps/api/src/index.ts"],
+        {
+          cwd: root,
+          env: invalidEnvironment,
+          stdio: ["ignore", "ignore", "pipe"],
         },
-        stdio: "ignore",
-      },
-    );
+      );
 
-    try {
-      const origin = `http://127.0.0.1:${port}`;
-      await waitForApi(origin);
-      const response = await fetch(`${origin}/api/v1/auth/logout`, {
-        method: "POST",
+      let stderr = "";
+      api.stderr.setEncoding("utf8");
+      api.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
       });
 
-      expect(response.status).toBe(204);
-      expect(response.headers.get("set-cookie")).toContain("Secure");
-    } finally {
-      api.kill("SIGTERM");
-      if (api.exitCode === null) {
-        await once(api, "exit");
-      }
-    }
-  }, 10_000);
+      const exitCode = await waitForExit(api, 10_000);
 
-  it("wires user Agent and Session routes in the production API entrypoint", async () => {
-    const port = await availablePort();
-    const api = spawn(
-      process.execPath,
-      ["--import", "tsx", "apps/api/src/index.ts"],
-      {
-        cwd: root,
-        env: {
-          ...serverEnvironment,
-          PORT: String(port),
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("ARK_API_KEY");
+    },
+    testTimeoutMs,
+  );
+
+  it(
+    "starts the production API entrypoint with secure cookies",
+    async () => {
+      const port = await availablePort();
+      const api = spawn(
+        process.execPath,
+        ["--import", "tsx", "apps/api/src/index.ts"],
+        {
+          cwd: root,
+          env: {
+            ...serverEnvironment,
+            NODE_ENV: "production",
+            PORT: String(port),
+          },
+          stdio: "ignore",
         },
-        stdio: "ignore",
-      },
-    );
+      );
 
-    try {
-      const origin = `http://127.0.0.1:${port}`;
-      await waitForApi(origin);
-      const [agents, sessions, emailCode] = await Promise.all([
-        fetch(`${origin}/api/v1/agents`),
-        fetch(`${origin}/api/v1/sessions`),
-        fetch(`${origin}/api/v1/auth/email-code`, {
+      try {
+        const origin = `http://127.0.0.1:${port}`;
+        await waitForApi(origin, api);
+        const response = await fetch(`${origin}/api/v1/auth/logout`, {
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email: "user@example.com" }),
-        }),
-      ]);
+        });
 
-      expect(agents.status).toBe(401);
-      expect(sessions.status).toBe(401);
-      expect(emailCode.status).toBe(401);
-    } finally {
-      api.kill("SIGTERM");
-      if (api.exitCode === null) {
-        await once(api, "exit");
+        expect(response.status).toBe(204);
+        expect(response.headers.get("set-cookie")).toContain("Secure");
+      } finally {
+        await stopSubprocess(api);
       }
-    }
-  }, 10_000);
+    },
+    testTimeoutMs,
+  );
 
-  it("keeps the worker process alive until shutdown", async () => {
-    const worker = spawn(
-      process.execPath,
-      ["--import", "tsx", "apps/worker/src/index.ts"],
-      {
-        cwd: root,
-        env: serverEnvironment,
-        stdio: "ignore",
-      },
-    );
+  it(
+    "wires user Agent and Session routes in the production API entrypoint",
+    async () => {
+      const port = await availablePort();
+      const api = spawn(
+        process.execPath,
+        ["--import", "tsx", "apps/api/src/index.ts"],
+        {
+          cwd: root,
+          env: {
+            ...serverEnvironment,
+            PORT: String(port),
+          },
+          stdio: "ignore",
+        },
+      );
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
+      try {
+        const origin = `http://127.0.0.1:${port}`;
+        await waitForApi(origin, api);
+        const [agents, sessions, artifacts, emailCode] = await Promise.all([
+          fetch(`${origin}/api/v1/agents`),
+          fetch(`${origin}/api/v1/sessions`),
+          fetch(`${origin}/api/v1/artifacts`),
+          fetch(`${origin}/api/v1/auth/email-code`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: "user@example.com" }),
+          }),
+        ]);
 
-    expect(worker.exitCode).toBeNull();
-    worker.kill("SIGTERM");
-  });
+        expect(agents.status).toBe(401);
+        expect(sessions.status).toBe(401);
+        expect(artifacts.status).toBe(401);
+        expect(emailCode.status).toBe(401);
+      } finally {
+        await stopSubprocess(api);
+      }
+    },
+    testTimeoutMs,
+  );
+
+  it(
+    "keeps the worker process alive until shutdown",
+    async () => {
+      const worker = spawn(
+        process.execPath,
+        ["--import", "tsx", "apps/worker/src/index.ts"],
+        {
+          cwd: root,
+          env: serverEnvironment,
+          stdio: "ignore",
+        },
+      );
+
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        expect(worker.exitCode).toBeNull();
+      } finally {
+        await stopSubprocess(worker);
+      }
+    },
+    testTimeoutMs,
+  );
 });

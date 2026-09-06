@@ -1,4 +1,4 @@
-export interface UploadCleanupJob {
+export interface ArtifactDeletionJob {
   id: string;
   ownerUserId: string | null;
   type:
@@ -19,12 +19,12 @@ export interface UploadCleanupJob {
   createdAt: Date;
 }
 
-interface CleanupJobs {
+interface ArtifactDeletionJobs {
   claim(input: {
     workerId: string;
     limit: number;
-    types: ["cleanup_upload"];
-  }): PromiseLike<UploadCleanupJob[]>;
+    types: ["delete_artifact"];
+  }): PromiseLike<ArtifactDeletionJob[]>;
   succeed(id: string, workerId: string): PromiseLike<void>;
   retry(
     id: string,
@@ -34,25 +34,42 @@ interface CleanupJobs {
   ): PromiseLike<void>;
 }
 
-interface CleanupService {
-  cleanupExpired(
-    id: string,
-    context: { userId: string; requestId: string },
-  ): PromiseLike<void>;
+interface ArtifactDeletionService {
+  deleteStored(id: string, userId: string): PromiseLike<void>;
 }
+
+class InvalidArtifactDeletionJobError extends Error {}
 
 function parsePayload(payload: Record<string, unknown>): string {
-  if (typeof payload.uploadId !== "string" || payload.uploadId.length === 0) {
-    throw new Error("Invalid upload cleanup payload");
+  if (
+    typeof payload.artifactId !== "string" ||
+    payload.artifactId.length === 0
+  ) {
+    throw new InvalidArtifactDeletionJobError();
   }
-  return payload.uploadId;
+  return payload.artifactId;
 }
 
-export class UploadCleanupProcessor {
+function retryError(error: unknown): string {
+  if (error instanceof InvalidArtifactDeletionJobError) {
+    return "ARTIFACT_DELETE_INVALID_JOB";
+  }
+  if (
+    error instanceof Error &&
+    error.name === "StorageProviderError" &&
+    "code" in error &&
+    error.code === "STORAGE_UNAVAILABLE"
+  ) {
+    return "STORAGE_UNAVAILABLE";
+  }
+  return "ARTIFACT_DELETE_FAILED";
+}
+
+export class ArtifactDeletionProcessor {
   constructor(
     private readonly dependencies: {
-      jobs: CleanupJobs;
-      service: CleanupService;
+      jobs: ArtifactDeletionJobs;
+      service: ArtifactDeletionService;
       workerId: string;
       batchSize?: number;
     },
@@ -62,31 +79,30 @@ export class UploadCleanupProcessor {
     const jobs = await this.dependencies.jobs.claim({
       workerId: this.dependencies.workerId,
       limit: this.dependencies.batchSize ?? 10,
-      types: ["cleanup_upload"],
+      types: ["delete_artifact"],
     });
     for (const job of jobs) await this.process(job);
     return jobs.length;
   }
 
-  private async process(job: UploadCleanupJob): Promise<void> {
+  private async process(job: ArtifactDeletionJob): Promise<void> {
     try {
-      if (job.type !== "cleanup_upload") {
-        throw new Error(`Unsupported cleanup job type: ${job.type}`);
+      if (job.type !== "delete_artifact") {
+        throw new InvalidArtifactDeletionJobError();
       }
       if (!job.ownerUserId) {
-        throw new Error("Upload cleanup requires an owner");
+        throw new InvalidArtifactDeletionJobError();
       }
-      const uploadId = parsePayload(job.payload);
-      await this.dependencies.service.cleanupExpired(uploadId, {
-        userId: job.ownerUserId,
-        requestId: `worker:${job.id}:${job.attempts}`,
-      });
+      await this.dependencies.service.deleteStored(
+        parsePayload(job.payload),
+        job.ownerUserId,
+      );
       await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
     } catch (error) {
       await this.dependencies.jobs.retry(
         job.id,
         this.dependencies.workerId,
-        error instanceof Error ? error.message : String(error),
+        retryError(error),
         job.attempts >= job.maxAttempts,
       );
     }

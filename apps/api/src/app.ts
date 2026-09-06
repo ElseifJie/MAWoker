@@ -8,6 +8,7 @@ import {
 import {
   AgentConflictError,
   AgentReferencedError,
+  type ArtifactRecord,
   InvalidModelError,
   InvalidUploadNameError,
   PersonalAgentQuotaExceededError,
@@ -26,6 +27,7 @@ import {
 import type { UiEvent } from "@pwa/contracts";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import type { ServerResponse } from "node:http";
+import type { Readable } from "node:stream";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -186,13 +188,34 @@ export interface SessionInputApiService {
   ): PromiseLike<SessionInputRecord>;
 }
 
+export interface ArtifactApiService {
+  syncSession(
+    sessionId: string,
+    context: { userId: string; requestId: string; signal?: AbortSignal },
+  ): PromiseLike<ArtifactRecord[]>;
+  list(userId: string, sessionId?: string): PromiseLike<ArtifactRecord[]>;
+  download(
+    id: string,
+    userId: string,
+    signal?: AbortSignal,
+  ): PromiseLike<{
+    name: string;
+    mimeType: string;
+    sizeBytes: number;
+    stream: Readable;
+  }>;
+  requestDelete(id: string, userId: string): PromiseLike<ArtifactRecord>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
   admin?: AdminService;
   userAgents?: UserAgentApiService;
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
+  artifacts?: ArtifactApiService;
   isProduction?: boolean;
+  logStream?: { write(message: string): void };
 }
 
 const emailCodeBodySchema = {
@@ -333,6 +356,14 @@ const listSessionsQuerySchema = {
   additionalProperties: false,
   properties: {
     archived: { type: "boolean", default: false },
+  },
+} as const;
+
+const listArtifactsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    sessionId: { type: "string", format: "uuid" },
   },
 } as const;
 
@@ -489,6 +520,52 @@ function publicSession(
       ? { inputs: (session.inputs ?? []).map(publicInput) }
       : {}),
   };
+}
+
+function publicArtifact(artifact: ArtifactRecord) {
+  return {
+    id: artifact.id,
+    sessionId: artifact.sessionId,
+    name: artifact.name,
+    mimeType: artifact.mimeType,
+    sizeBytes: artifact.sizeBytes,
+    generatedAt: artifact.generatedAt,
+    deletionState: artifact.deletionState,
+    error:
+      artifact.lastErrorCode === null
+        ? null
+        : { code: artifact.lastErrorCode, retryable: true },
+  };
+}
+
+function attachmentFilename(name: string): string {
+  const safe = Array.from(name, (character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code < 32 ||
+      code > 126 ||
+      code === 127 ||
+      character === '"' ||
+      character === "\\"
+      ? "_"
+      : character;
+  })
+    .join("")
+    .trim();
+  return safe || "download";
+}
+
+function contentDisposition(name: string): string {
+  const fallback = `attachment; filename="${attachmentFilename(name)}"`;
+  if (
+    !Array.from(name).some((character) => (character.codePointAt(0) ?? 0) > 126)
+  ) {
+    return fallback;
+  }
+  const encoded = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `${fallback}; filename*=UTF-8''${encoded}`;
 }
 
 async function writeSseChunk(
@@ -740,6 +817,63 @@ function sendSessionError(
   throw error;
 }
 
+function sendArtifactError(
+  error: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  if (
+    error instanceof ResourceNotFoundError ||
+    hasErrorName(error, "ResourceNotFoundError")
+  ) {
+    return reply.code(404).send(resourceNotFoundError(request.id));
+  }
+  const storageFailure =
+    hasErrorName(error, "StorageProviderError") &&
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "STORAGE_UNAVAILABLE";
+  const category =
+    typeof error === "object" && error !== null && "category" in error
+      ? error.category
+      : undefined;
+  const sourceFailure =
+    hasErrorName(error, "ArkGatewayError") && typeof category === "string";
+  if (storageFailure || sourceFailure) {
+    const code = storageFailure
+      ? "ARTIFACT_STORAGE_UNAVAILABLE"
+      : "ARTIFACT_SOURCE_UNAVAILABLE";
+    const operation =
+      typeof error === "object" &&
+      error !== null &&
+      "operation" in error &&
+      (error.operation === "write" ||
+        error.operation === "read" ||
+        error.operation === "delete")
+        ? error.operation
+        : undefined;
+    request.log.error(
+      {
+        artifactErrorCode: code,
+        ...(operation ? { artifactOperation: operation } : {}),
+      },
+      "Artifact provider operation failed",
+    );
+    return reply
+      .code(503)
+      .send(
+        applicationError(
+          request.id,
+          code,
+          "Artifact service is unavailable",
+          true,
+        ),
+      );
+  }
+  return sendSessionError(error, request, reply);
+}
+
 function isAllowedAdminRoute(route: string): boolean {
   return (
     route === "/api/v1/admin/platform-agents" ||
@@ -868,7 +1002,7 @@ const unavailableAuth: ApiAuthService = {
 
 export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
-    logger: true,
+    logger: options.logStream ? { stream: options.logStream } : true,
     ajv: { customOptions: { removeAdditional: false } },
   });
   const isProduction = options.isProduction ?? false;
@@ -962,6 +1096,111 @@ export function buildApp(options: BuildAppOptions = {}) {
     });
 
     app.get("/api/v1/me", async (request) => ({ user: request.auth }));
+
+    if (options.artifacts) {
+      const artifacts = options.artifacts;
+
+      app.post<{
+        Params: { id: string };
+        Body: Record<string, never>;
+      }>(
+        "/api/v1/sessions/:id/artifacts/sync",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: emptyBodySchema,
+          },
+        },
+        async (request, reply) => {
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          request.raw.once("aborted", abort);
+          reply.raw.once("close", abort);
+          try {
+            const synced = await artifacts.syncSession(request.params.id, {
+              userId: request.auth!.userId,
+              requestId: request.id,
+              signal: controller.signal,
+            });
+            return reply.send({
+              artifacts: synced.map(publicArtifact),
+            });
+          } catch (error) {
+            return sendArtifactError(error, request, reply);
+          } finally {
+            request.raw.removeListener("aborted", abort);
+            reply.raw.removeListener("close", abort);
+          }
+        },
+      );
+
+      app.get<{ Querystring: { sessionId?: string } }>(
+        "/api/v1/artifacts",
+        { schema: { querystring: listArtifactsQuerySchema } },
+        async (request, reply) => {
+          const records =
+            request.query.sessionId === undefined
+              ? await artifacts.list(request.auth!.userId)
+              : await artifacts.list(
+                  request.auth!.userId,
+                  request.query.sessionId,
+                );
+          return reply.send({ artifacts: records.map(publicArtifact) });
+        },
+      );
+
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/artifacts/:id/download",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          request.raw.once("aborted", abort);
+          reply.raw.once("close", abort);
+          try {
+            const download = await artifacts.download(
+              request.params.id,
+              request.auth!.userId,
+              controller.signal,
+            );
+            const cleanup = () => {
+              request.raw.removeListener("aborted", abort);
+              reply.raw.removeListener("close", abort);
+            };
+            download.stream.once("close", cleanup);
+            return reply
+              .header("content-type", download.mimeType)
+              .header("content-length", download.sizeBytes)
+              .header("content-disposition", contentDisposition(download.name))
+              .send(download.stream);
+          } catch (error) {
+            controller.abort();
+            request.raw.removeListener("aborted", abort);
+            reply.raw.removeListener("close", abort);
+            return sendArtifactError(error, request, reply);
+          }
+        },
+      );
+
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/artifacts/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const artifact = await artifacts.requestDelete(
+              request.params.id,
+              request.auth!.userId,
+            );
+            return reply.code(202).send({
+              id: artifact.id,
+              deletionState: artifact.deletionState,
+            });
+          } catch (error) {
+            return sendArtifactError(error, request, reply);
+          }
+        },
+      );
+    }
 
     if (options.inputs) {
       const inputs = options.inputs;

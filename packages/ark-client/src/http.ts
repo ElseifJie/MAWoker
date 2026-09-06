@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { z } from "zod";
 import { ArkGatewayError } from "./errors.js";
 import type {
@@ -71,6 +73,7 @@ const artifactSchema = z
   .object({
     id: z.string().min(1),
     sessionId: z.string().min(1),
+    mountPath: z.string().min(1),
     name: z.string(),
     contentType: z.string(),
     size: z.number().int().nonnegative(),
@@ -401,6 +404,49 @@ export class HttpArkGateway implements ArkGateway {
       },
       async () => undefined,
     );
+  }
+
+  async downloadFile(
+    fileId: string,
+    options?: ArkRequestOptions,
+  ): Promise<{ stream: Readable; contentLength?: number }> {
+    const definition: RequestDefinition<unknown> = {
+      method: "GET",
+      path: `/api/v3/files/${encodeURIComponent(fileId)}/content`,
+      safe: true,
+      options,
+    };
+    const { response, context } = await this.retry(
+      definition,
+      (correlationId) => this.openResponse(definition, correlationId),
+    );
+    context.clearTimer();
+    if (!response.body) {
+      context.cleanup();
+      throw new ArkGatewayError("invalid_response");
+    }
+
+    const stream = Readable.fromWeb(
+      response.body as unknown as NodeReadableStream,
+    );
+    const abort = () => stream.destroy(new ArkGatewayError("cancelled"));
+    options?.signal?.addEventListener("abort", abort, { once: true });
+    stream.once("close", () => {
+      options?.signal?.removeEventListener("abort", abort);
+      context.cancel();
+      context.cleanup();
+    });
+
+    const header = response.headers.get("content-length");
+    const parsed = header === null ? undefined : Number(header);
+    const contentLength =
+      parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= 0
+        ? parsed
+        : undefined;
+    return {
+      stream,
+      ...(contentLength === undefined ? {} : { contentLength }),
+    };
   }
 
   listSessionResources(

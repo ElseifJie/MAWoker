@@ -68,6 +68,7 @@ export const quotaReservationStatus = pgEnum("quota_reservation_status", [
 export const backgroundJobType = pgEnum("background_job_type", [
   "delete_session",
   "delete_artifact",
+  "cleanup_artifact_object",
   "cleanup_upload",
   "reconcile_session",
   "reconcile_personal_agent",
@@ -325,6 +326,7 @@ export const artifacts = pgTable(
       foreignColumns: [sessions.ownerUserId, sessions.id],
     }).onDelete("cascade"),
     uniqueIndex("artifacts_session_ark_file_id_unique").on(
+      table.ownerUserId,
       table.sessionId,
       table.arkFileId,
     ),

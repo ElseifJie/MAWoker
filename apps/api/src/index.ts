@@ -4,10 +4,12 @@ import { ApplicationSessionService, AuthVerificationError } from "@pwa/auth";
 import { parseServerConfig } from "@pwa/config";
 import { createAuthStore, createDatabase, createRepositories } from "@pwa/db";
 import {
+  ArtifactService,
   SessionInputService,
   SessionService,
   UserAgentService,
 } from "@pwa/domain";
+import { createTosArtifactStorage } from "@pwa/storage";
 
 const config = parseServerConfig(process.env);
 const { buildApp } = await import("./app.js");
@@ -17,6 +19,7 @@ const ark = new HttpArkGateway({
   baseUrl: config.ark.baseUrl,
   apiKey: config.ark.apiKey,
 });
+const artifactStorage = createTosArtifactStorage(config.tos);
 const auth = new ApplicationSessionService({
   identity: {
     async requestEmailCode() {
@@ -50,11 +53,18 @@ const inputs = new SessionInputService({
   ark,
   createId: randomUUID,
 });
+const artifacts = new ArtifactService({
+  repository: repositories.artifacts,
+  ark,
+  storage: artifactStorage,
+  createId: randomUUID,
+});
 const app = buildApp({
   auth,
   userAgents,
   sessions,
   inputs,
+  artifacts,
   isProduction: config.nodeEnv === "production",
 });
 

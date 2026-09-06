@@ -13,6 +13,9 @@ const valid = {
   ARK_ENVIRONMENT_ID: "env-1",
   TOS_ENDPOINT: "https://tos.example.com",
   TOS_BUCKET: "private",
+  TOS_REGION: "cn-beijing",
+  TOS_ACCESS_KEY_ID: "tos-access-key",
+  TOS_SECRET_ACCESS_KEY: "tos-secret-key",
   MODEL_ALLOWLIST: "model-a,model-b",
   OUTBOUND_HOST_ALLOWLIST: "ark.example.com,tos.example.com",
   SESSION_DAILY_LIMIT: "25",
@@ -26,6 +29,26 @@ describe("server configuration", () => {
     expect(config.modelAllowlist).toEqual(["model-a", "model-b"]);
     expect(config.personalAgentLimit).toBe(10);
     expect(config.concurrentSessionLimit).toBe(2);
+  });
+
+  it("derives the TOS S3-compatible endpoint for the configured region", () => {
+    const config = parseServerConfig({
+      ...valid,
+      NODE_ENV: "production",
+      TOS_ENDPOINT: "https://tos-cn-beijing.volces.com",
+    });
+
+    expect(config.tos.endpoint).toBe("https://tos-s3-cn-beijing.volces.com");
+  });
+
+  it("preserves a matching TOS S3-compatible endpoint", () => {
+    const config = parseServerConfig({
+      ...valid,
+      NODE_ENV: "production",
+      TOS_ENDPOINT: "https://tos-s3-cn-beijing.volces.com",
+    });
+
+    expect(config.tos.endpoint).toBe("https://tos-s3-cn-beijing.volces.com");
   });
 
   it.each(["mysql://localhost/pwa", "https://localhost/pwa"])(
@@ -61,6 +84,57 @@ describe("server configuration", () => {
 
     expect(() => parseServerConfig(invalid)).toThrow(/ARK_API_KEY/);
   });
+
+  it.each([
+    "TOS_ENDPOINT",
+    "TOS_BUCKET",
+    "TOS_REGION",
+    "TOS_ACCESS_KEY_ID",
+    "TOS_SECRET_ACCESS_KEY",
+  ] as const)("fails readiness configuration without %s", (name) => {
+    const invalid: Record<string, string> = { ...valid };
+    delete invalid[name];
+
+    expect(() => parseServerConfig(invalid)).toThrow(new RegExp(name));
+  });
+
+  it.each(["ftp://tos.example.com", "https://tos.example.com/storage"])(
+    "rejects an unusable TOS endpoint %s",
+    (endpoint) => {
+      expect(() =>
+        parseServerConfig({ ...valid, TOS_ENDPOINT: endpoint }),
+      ).toThrow(/TOS_ENDPOINT/);
+    },
+  );
+
+  it.each([
+    ["production", "http://tos-s3-cn-beijing.volces.com"],
+    ["development", "http://tos-s3-cn-beijing.volces.com"],
+    ["production", "https://tos-s3-cn-guangzhou.volces.com"],
+    ["production", "https://tos-s3-cn-beijing.volces.com:8443"],
+    ["production", "https://storage.example.com"],
+  ])("rejects incompatible TOS endpoint in %s: %s", (nodeEnv, endpoint) => {
+    expect(() =>
+      parseServerConfig({
+        ...valid,
+        NODE_ENV: nodeEnv,
+        TOS_ENDPOINT: endpoint,
+      }),
+    ).toThrow(/TOS_ENDPOINT/);
+  });
+
+  it.each(["test", "development"])(
+    "permits an HTTP localhost S3-compatible test endpoint in %s",
+    (nodeEnv) => {
+      const config = parseServerConfig({
+        ...valid,
+        NODE_ENV: nodeEnv,
+        TOS_ENDPOINT: "http://127.0.0.1:9000",
+      });
+
+      expect(config.tos.endpoint).toBe("http://127.0.0.1:9000");
+    },
+  );
 
   it("does not expose secrets in its public projection", () => {
     const config = parseServerConfig(valid);

@@ -9,6 +9,7 @@
     { "path": "../../packages/ark-client" },
     { "path": "../../packages/config" },
     { "path": "../../packages/db" },
-    { "path": "../../packages/domain" }
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/storage" }
   ]
 }

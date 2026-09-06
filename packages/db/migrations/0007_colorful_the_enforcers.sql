@@ -1,0 +1,1 @@
+ALTER TYPE "public"."background_job_type" ADD VALUE 'cleanup_artifact_object' BEFORE 'cleanup_upload';

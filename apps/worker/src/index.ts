@@ -3,11 +3,16 @@ import { HttpArkGateway } from "@pwa/ark-client";
 import { parseServerConfig } from "@pwa/config";
 import { createDatabase, createRepositories } from "@pwa/db";
 import {
+  ArtifactService,
   SessionInputService,
   SessionService,
   UserAgentService,
 } from "@pwa/domain";
+import { createTosArtifactStorage } from "@pwa/storage";
+import { ArtifactDeletionProcessor } from "./artifact-deletion.js";
+import { ArtifactObjectCleanupProcessor } from "./artifact-object-cleanup.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
+import { runProductionWorkerPoll } from "./poll.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
 import { UploadCleanupProcessor } from "./upload-cleanup.js";
 
@@ -18,6 +23,7 @@ const ark = new HttpArkGateway({
   baseUrl: config.ark.baseUrl,
   apiKey: config.ark.apiKey,
 });
+const artifactStorage = createTosArtifactStorage(config.tos);
 const service = new UserAgentService({
   repository: repositories.userAgents,
   ark,
@@ -49,6 +55,26 @@ const uploadCleanupProcessor = new UploadCleanupProcessor({
   }),
   workerId: `upload-cleanup-worker:${process.pid}:${randomUUID()}`,
 });
+const artifactDeletionProcessor = new ArtifactDeletionProcessor({
+  jobs: repositories.jobs,
+  service: new ArtifactService({
+    repository: repositories.artifacts,
+    ark,
+    storage: artifactStorage,
+    createId: randomUUID,
+  }),
+  workerId: `artifact-deletion-worker:${process.pid}:${randomUUID()}`,
+});
+const artifactObjectCleanupProcessor = new ArtifactObjectCleanupProcessor({
+  jobs: repositories.jobs,
+  service: new ArtifactService({
+    repository: repositories.artifacts,
+    ark,
+    storage: artifactStorage,
+    createId: randomUUID,
+  }),
+  workerId: `artifact-object-cleanup-worker:${process.pid}:${randomUUID()}`,
+});
 
 console.info("Worker ready");
 
@@ -58,11 +84,13 @@ await new Promise<void>((resolve) => {
     if (running) return;
     running = true;
     try {
-      await personalAgentProcessor.runOnce();
-      await sessionProcessor.runOnce();
-      await uploadCleanupProcessor.runOnce();
-    } catch (error) {
-      console.error("Personal Agent reconciliation poll failed", error);
+      await runProductionWorkerPoll({
+        personalAgent: personalAgentProcessor,
+        session: sessionProcessor,
+        uploadCleanup: uploadCleanupProcessor,
+        artifactDeletion: artifactDeletionProcessor,
+        artifactCleanup: artifactObjectCleanupProcessor,
+      });
     } finally {
       running = false;
     }

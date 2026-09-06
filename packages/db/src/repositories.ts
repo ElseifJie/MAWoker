@@ -112,6 +112,22 @@ interface SessionInputRecord extends Row {
   updatedAt: Date;
 }
 
+interface ArtifactRecord {
+  id: string;
+  ownerUserId: string;
+  sessionId: string;
+  arkFileId: string;
+  tosObjectKey: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  generatedAt: Date;
+  deletionState: "none" | "pending" | "deletion_failed" | "deleted";
+  lastErrorCode: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const sessionSelection = sql`
   id, owner_user_id as "ownerUserId",
   ark_session_id as "arkSessionId", agent_kind as "agentKind",
@@ -129,6 +145,14 @@ const sessionInputSelection = sql`
   ark_file_id as "arkFileId", original_name as "originalName",
   mime_type as "mimeType", size_bytes as "sizeBytes",
   mount_path as "mountPath", status, expires_at as "expiresAt",
+  last_error_code as "lastErrorCode",
+  created_at as "createdAt", updated_at as "updatedAt"`;
+
+const artifactSelection = sql`
+  id, owner_user_id as "ownerUserId", session_id as "sessionId",
+  ark_file_id as "arkFileId", tos_object_key as "tosObjectKey",
+  name, mime_type as "mimeType", size_bytes as "sizeBytes",
+  generated_at as "generatedAt", deletion_state as "deletionState",
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
@@ -152,6 +176,7 @@ interface JobRecord extends Row {
   type:
     | "delete_session"
     | "delete_artifact"
+    | "cleanup_artifact_object"
     | "cleanup_upload"
     | "reconcile_session"
     | "reconcile_personal_agent";
@@ -167,6 +192,30 @@ interface JobRecord extends Row {
 }
 
 const JOB_LEASE_DURATION_MS = 5 * 60 * 1_000;
+const ARTIFACT_DELETION_ERROR_CODES = new Set([
+  "ARTIFACT_DELETE_FAILED",
+  "ARTIFACT_DELETE_INVALID_JOB",
+  "ARTIFACT_DELETE_LEASE_EXPIRED",
+  "STORAGE_UNAVAILABLE",
+]);
+const ARTIFACT_CLEANUP_ERROR_CODES = new Set([
+  "ARTIFACT_CLEANUP_FAILED",
+  "ARTIFACT_CLEANUP_INVALID_JOB",
+  "ARTIFACT_CLEANUP_LEASE_EXPIRED",
+  "STORAGE_UNAVAILABLE",
+]);
+
+function artifactDeletionErrorCode(error: string): string {
+  return ARTIFACT_DELETION_ERROR_CODES.has(error)
+    ? error
+    : "ARTIFACT_DELETE_FAILED";
+}
+
+function artifactCleanupErrorCode(error: string): string {
+  return ARTIFACT_CLEANUP_ERROR_CODES.has(error)
+    ? error
+    : "ARTIFACT_CLEANUP_FAILED";
+}
 
 export class QuotaExceededError extends Error {
   constructor(
@@ -1761,7 +1810,275 @@ export function createRepositories(database: unknown) {
         return removed.length === 1;
       },
     },
-    artifacts: tenantRepository(db, sql.raw("artifacts")),
+    artifacts: {
+      findSessionOwned(userId: string, sessionId: string) {
+        return first<{ id: string; arkSessionId: string }>(
+          db,
+          sql`select id, ark_session_id as "arkSessionId"
+                from sessions
+               where id = ${sessionId}
+                 and owner_user_id = ${userId}
+                 and ark_session_id not like 'pending:%'
+                 and deletion_state <> 'deleted'
+               limit 1`,
+        );
+      },
+      findBySource(userId: string, sessionId: string, arkFileId: string) {
+        return first<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where owner_user_id = ${userId}
+                 and session_id = ${sessionId}
+                 and ark_file_id = ${arkFileId}
+               limit 1`,
+        );
+      },
+      async stageCleanup(input: {
+        id: string;
+        ownerUserId: string;
+        objectKey: string;
+        runAfter: Date;
+      }) {
+        await db.execute(
+          sql`insert into background_jobs
+                (id, owner_user_id, type, status, priority, payload,
+                 attempts, run_after)
+              values
+                (${input.id}, ${input.ownerUserId}, 'cleanup_artifact_object',
+                 'pending', 90,
+                 ${JSON.stringify({ objectKey: input.objectKey })}::jsonb,
+                 0, ${input.runAfter})`,
+        );
+      },
+      commitCandidate(input: {
+        record: ArtifactRecord;
+        stagingCleanupJobId: string;
+        replacementCleanupJobId: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`select id
+                  from sessions
+                 where id = ${input.record.sessionId}
+                   and owner_user_id = ${input.record.ownerUserId}
+                   for update`,
+          );
+          const existing = await first<ArtifactRecord & Row>(
+            transaction,
+            sql`select ${artifactSelection}
+                  from artifacts
+                 where owner_user_id = ${input.record.ownerUserId}
+                   and session_id = ${input.record.sessionId}
+                   and ark_file_id = ${input.record.arkFileId}
+                 limit 1`,
+          );
+          if (
+            existing?.deletionState !== undefined &&
+            existing.deletionState !== "none"
+          ) {
+            await transaction.execute(
+              sql`update background_jobs
+                    set status = 'pending',
+                        attempts = 0,
+                        run_after = now(),
+                        locked_at = null,
+                        locked_by = null,
+                        last_error = null,
+                        updated_at = now()
+                  where id = ${input.stagingCleanupJobId}
+                    and owner_user_id = ${input.record.ownerUserId}
+                    and type = 'cleanup_artifact_object'
+                    and status = 'failed'`,
+            );
+            await transaction.execute(
+              sql`update background_jobs
+                    set status = 'pending',
+                        attempts = 0,
+                        run_after = now(),
+                        locked_at = null,
+                        locked_by = null,
+                        last_error = null,
+                        updated_at = now()
+                  where id = ${existing.id}
+                    and owner_user_id = ${existing.ownerUserId}
+                    and type = 'delete_artifact'
+                    and status = 'failed'`,
+            );
+            return { artifact: existing, activated: false };
+          }
+          const artifact = await requiredFirst<ArtifactRecord & Row>(
+            transaction,
+            sql`insert into artifacts
+                (id, owner_user_id, session_id, ark_file_id, tos_object_key,
+                 name, mime_type, size_bytes, generated_at, deletion_state,
+                 last_error_code, created_at, updated_at)
+              values
+                (${input.record.id}, ${input.record.ownerUserId},
+                 ${input.record.sessionId}, ${input.record.arkFileId},
+                 ${input.record.tosObjectKey}, ${input.record.name},
+                 ${input.record.mimeType}, ${input.record.sizeBytes},
+                 ${input.record.generatedAt}, ${input.record.deletionState},
+                 ${input.record.lastErrorCode}, ${input.record.createdAt},
+                 ${input.record.updatedAt})
+              on conflict (owner_user_id, session_id, ark_file_id) do update
+                set tos_object_key = excluded.tos_object_key,
+                    name = excluded.name,
+                    mime_type = excluded.mime_type,
+                    size_bytes = excluded.size_bytes,
+                    generated_at = excluded.generated_at,
+                    updated_at = excluded.updated_at
+              returning ${artifactSelection}`,
+          );
+          const retired = await rows(
+            transaction,
+            sql`update background_jobs
+                  set status = 'succeeded',
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = null,
+                      updated_at = now()
+                where id = ${input.stagingCleanupJobId}
+                  and owner_user_id = ${input.record.ownerUserId}
+                  and type = 'cleanup_artifact_object'
+                  and status = 'pending'
+                  and payload ->> 'objectKey' = ${input.record.tosObjectKey}
+                returning id`,
+          );
+          if (retired.length !== 1) {
+            throw new Error("Artifact staging cleanup intent was not active");
+          }
+          if (existing && existing.tosObjectKey !== input.record.tosObjectKey) {
+            await transaction.execute(
+              sql`insert into background_jobs
+                    (id, owner_user_id, type, status, priority, payload,
+                     attempts, run_after)
+                  values
+                    (${input.replacementCleanupJobId},
+                     ${input.record.ownerUserId}, 'cleanup_artifact_object',
+                     'pending', 90,
+                     ${JSON.stringify({
+                       objectKey: existing.tosObjectKey,
+                     })}::jsonb,
+                     0, now())`,
+            );
+          }
+          return { artifact, activated: true };
+        });
+      },
+      async releaseCleanup(id: string, userId: string) {
+        await db.execute(
+          sql`update background_jobs
+                set run_after = now(),
+                    updated_at = now()
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and type = 'cleanup_artifact_object'
+                and status = 'pending'`,
+        );
+      },
+      listOwned(userId: string, sessionId?: string) {
+        return rows<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where owner_user_id = ${userId}
+                 and (${sessionId ?? null}::uuid is null
+                      or session_id = ${sessionId ?? null})
+                 and deletion_state = 'none'
+               order by generated_at desc, id desc`,
+        );
+      },
+      findOwned(userId: string, id: string) {
+        return first<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and deletion_state <> 'deleted'
+               limit 1`,
+        );
+      },
+      beginDelete(id: string, userId: string) {
+        return db.transaction(async (transaction) => {
+          const candidate = await first<{ sessionId: string }>(
+            transaction,
+            sql`select session_id as "sessionId"
+                  from artifacts
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                 limit 1`,
+          );
+          if (!candidate) return undefined;
+          await transaction.execute(
+            sql`select id
+                  from sessions
+                 where id = ${candidate.sessionId}
+                   and owner_user_id = ${userId}
+                   for update`,
+          );
+          const artifact = await first<ArtifactRecord & Row>(
+            transaction,
+            sql`update artifacts
+                  set deletion_state = 'pending',
+                      last_error_code = null,
+                      updated_at = now()
+                where id = ${id}
+                  and owner_user_id = ${userId}
+                  and deletion_state <> 'deleted'
+                returning ${artifactSelection}`,
+          );
+          if (!artifact) return undefined;
+          await transaction.execute(
+            sql`insert into background_jobs
+                  (id, owner_user_id, type, status, priority, payload,
+                   attempts, run_after)
+                values
+                  (${id}, ${userId}, 'delete_artifact', 'pending', 100,
+                   ${JSON.stringify({ artifactId: id })}::jsonb, 0, now())
+                on conflict (id) do update
+                  set status = 'pending',
+                      attempts = 0,
+                      run_after = now(),
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = null,
+                      updated_at = now()
+                where background_jobs.status = 'failed'`,
+          );
+          return artifact;
+        });
+      },
+      findDeleting(userId: string, id: string) {
+        return first<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and deletion_state in ('pending', 'deletion_failed', 'deleted')
+               limit 1`,
+        );
+      },
+      async markDeleted(id: string, userId: string) {
+        const removed = await rows(
+          db,
+          sql`update artifacts
+                 set name = '',
+                     mime_type = 'application/octet-stream',
+                     size_bytes = 0,
+                     deletion_state = 'deleted',
+                     last_error_code = null,
+                     updated_at = now()
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and deletion_state in ('pending', 'deletion_failed', 'deleted')
+               returning id`,
+        );
+        return removed.length === 1;
+      },
+    },
 
     defaultAgents: {
       findForUser(userId: string) {
@@ -1966,6 +2283,7 @@ export function createRepositories(database: unknown) {
         const types = input.types ?? [
           "delete_session",
           "delete_artifact",
+          "cleanup_artifact_object",
           "cleanup_upload",
           "reconcile_session",
           "reconcile_personal_agent",
@@ -1990,10 +2308,16 @@ export function createRepositories(database: unknown) {
                    set status = 'failed',
                        locked_at = null,
                        locked_by = null,
-                       last_error = coalesce(
-                         job.last_error,
-                         'Job lease expired after final attempt'
-                       ),
+                       last_error = case
+                         when job.type = 'delete_artifact'
+                           then 'ARTIFACT_DELETE_LEASE_EXPIRED'
+                         when job.type = 'cleanup_artifact_object'
+                           then 'ARTIFACT_CLEANUP_LEASE_EXPIRED'
+                         else coalesce(
+                           job.last_error,
+                           'Job lease expired after final attempt'
+                         )
+                       end,
                        updated_at = ${now}
                   from exhausted
                  where job.id = exhausted.id
@@ -2010,6 +2334,17 @@ export function createRepositories(database: unknown) {
                      and input.owner_user_id = job.owner_user_id
                      and input.session_id is null
                   returning input.id
+                ),
+                failed_artifacts as (
+                  update artifacts artifact
+                     set deletion_state = 'deletion_failed',
+                         last_error_code = 'ARTIFACT_DELETE_LEASE_EXPIRED',
+                         updated_at = ${now}
+                    from failed_jobs job
+                   where job.type = 'delete_artifact'
+                     and artifact.id = job.id
+                     and artifact.owner_user_id = job.owner_user_id
+                  returning artifact.id
                 ),
                 failed_sessions as (
                   update sessions session
@@ -2098,6 +2433,8 @@ export function createRepositories(database: unknown) {
         const runAfter = new Date(
           now.getTime() + Math.min(60_000, 2 ** 10 * 100),
         );
+        const artifactError = artifactDeletionErrorCode(error);
+        const artifactCleanupError = artifactCleanupErrorCode(error);
         await db.transaction(async (transaction) => {
           const updated = await first<{
             id: string;
@@ -2110,7 +2447,12 @@ export function createRepositories(database: unknown) {
                       run_after = ${runAfter},
                       locked_at = null,
                       locked_by = null,
-                      last_error = ${error},
+                      last_error = case
+                        when type = 'delete_artifact' then ${artifactError}
+                        when type = 'cleanup_artifact_object'
+                          then ${artifactCleanupError}
+                        else ${error}
+                      end,
                       updated_at = ${now}
                 where id = ${id}
                   and status = 'running'
@@ -2126,6 +2468,17 @@ export function createRepositories(database: unknown) {
                   where id = ${updated.id}
                     and owner_user_id = ${updated.ownerUserId}
                     and session_id is null`,
+            );
+            return;
+          }
+          if (updated?.type === "delete_artifact" && updated.ownerUserId) {
+            await transaction.execute(
+              sql`update artifacts
+                    set deletion_state = 'deletion_failed',
+                        last_error_code = ${artifactError},
+                        updated_at = ${now}
+                  where id = ${updated.id}
+                    and owner_user_id = ${updated.ownerUserId}`,
             );
             return;
           }

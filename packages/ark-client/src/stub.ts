@@ -17,6 +17,7 @@ import type {
   ArkSessionInput,
   SessionStatus,
 } from "./types.js";
+import { Readable } from "node:stream";
 
 type InjectedFailure =
   | Extract<
@@ -55,6 +56,7 @@ const safeOperations = new Set<ArkOperation>([
   "getSession",
   "listEvents",
   "streamEvents",
+  "downloadFile",
   "listSessionResources",
   "listArtifacts",
 ]);
@@ -69,6 +71,7 @@ export class InMemoryArkGateway implements ArkGateway {
   private readonly sessionsByCreateIdempotencyKey = new Map<string, string>();
   private readonly events = new Map<string, ArkEvent[]>();
   private readonly files = new Map<string, ArkFile>();
+  private readonly fileBytes = new Map<string, Uint8Array>();
   private readonly resources = new Map<string, ArkResource[]>();
   private readonly artifacts = new Map<string, ArkArtifact[]>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
@@ -220,6 +223,9 @@ export class InMemoryArkGateway implements ArkGateway {
     }
     this.events.delete(sessionId);
     this.resources.delete(sessionId);
+    for (const artifact of this.artifacts.get(sessionId) ?? []) {
+      this.fileBytes.delete(artifact.id);
+    }
     this.artifacts.delete(sessionId);
     for (const subscriber of this.subscribers.get(sessionId) ?? []) {
       subscriber.closed = true;
@@ -315,13 +321,30 @@ export class InMemoryArkGateway implements ArkGateway {
       purpose: input.purpose,
     };
     this.files.set(file.id, file);
+    this.fileBytes.set(file.id, new Uint8Array(input.bytes));
     return structuredClone(file);
+  }
+
+  async downloadFile(
+    fileId: string,
+    options?: ArkRequestOptions,
+  ): Promise<{ stream: Readable; contentLength: number }> {
+    this.record("downloadFile", { fileId }, options);
+    const bytes = this.fileBytes.get(fileId);
+    if (!bytes) throw new ArkGatewayError("not_found");
+    return {
+      stream: Readable.from([new Uint8Array(bytes)]),
+      contentLength: bytes.byteLength,
+    };
   }
 
   async deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void> {
     this.record("deleteFile", { fileId }, options);
-    if (!this.files.has(fileId)) throw new ArkGatewayError("not_found");
+    if (!this.files.has(fileId) && !this.fileBytes.has(fileId)) {
+      throw new ArkGatewayError("not_found");
+    }
     this.files.delete(fileId);
+    this.fileBytes.delete(fileId);
   }
 
   async listSessionResources(
@@ -367,12 +390,14 @@ export class InMemoryArkGateway implements ArkGateway {
     const artifact: ArkArtifact = {
       id: `artifact-${++this.counters.artifact}`,
       sessionId,
+      mountPath: `/mnt/session/outputs/${input.name}`,
       name: input.name,
       contentType: input.contentType,
       size: input.bytes.byteLength,
       createdAt: this.now().toISOString(),
     };
     this.artifacts.get(sessionId)?.push(artifact);
+    this.fileBytes.set(artifact.id, new Uint8Array(input.bytes));
     return structuredClone(artifact);
   }
 

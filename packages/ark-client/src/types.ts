@@ -1,4 +1,5 @@
 import type { ArkEvent, SessionStatus } from "@pwa/contracts";
+import type { Readable } from "node:stream";
 
 export interface ArkRequestOptions {
   correlationId?: string;
@@ -71,10 +72,16 @@ export interface ArkFile {
 export interface ArkArtifact {
   id: string;
   sessionId: string;
+  mountPath: string;
   name: string;
   contentType: string;
   size: number;
   createdAt: string;
+}
+
+export interface ArkFileDownload {
+  stream: Readable;
+  contentLength?: number;
 }
 
 export interface ArkGateway {
@@ -118,6 +125,10 @@ export interface ArkGateway {
     input: ArkFileInput,
     options?: ArkRequestOptions,
   ): Promise<ArkFile>;
+  downloadFile(
+    fileId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkFileDownload>;
   deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void>;
   listSessionResources(
     sessionId: string,
@@ -141,6 +152,7 @@ export type ArkOperation =
   | "listEvents"
   | "streamEvents"
   | "uploadFile"
+  | "downloadFile"
   | "deleteFile"
   | "listSessionResources"
   | "listArtifacts";
