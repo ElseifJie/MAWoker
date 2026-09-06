@@ -4,11 +4,18 @@ import {
   AuthVerificationError,
   type AuthContext,
 } from "@pwa/auth";
+import {
+  ResourceNotFoundError,
+  type TenantAuthorizationService,
+  type TenantResource,
+  type TenantResourceKind,
+} from "@pwa/domain";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthContext;
+    tenantResource?: TenantResource;
   }
 }
 
@@ -165,6 +172,39 @@ export function requireUser(auth: ApiAuthService, isProduction = false) {
     }
     if (request.auth?.role !== "user") {
       return reply.code(403).send(forbiddenError(request.id));
+    }
+  };
+}
+
+export function requireTenantResource(
+  authorization: Pick<TenantAuthorizationService, "resolve">,
+  kind: TenantResourceKind,
+) {
+  return async function authorizeTenantResource(
+    request: FastifyRequest<{ Params: { id: string } }>,
+    reply: FastifyReply,
+  ) {
+    if (!request.auth) {
+      return reply.code(401).send(authError(request.id));
+    }
+    if (request.auth.role !== "user") {
+      return reply.code(403).send(forbiddenError(request.id));
+    }
+
+    try {
+      request.tenantResource = await authorization.resolve(
+        kind,
+        request.params.id,
+        request.auth.userId,
+      );
+    } catch (error) {
+      if (
+        !(error instanceof ResourceNotFoundError) &&
+        !hasErrorName(error, "ResourceNotFoundError")
+      ) {
+        throw error;
+      }
+      return reply.code(404).send(resourceNotFoundError(request.id));
     }
   };
 }

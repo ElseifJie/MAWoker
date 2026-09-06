@@ -366,6 +366,109 @@ describe("database schema in PGlite", () => {
 });
 
 describe("repositories in PGlite", () => {
+  it("scopes every tenant authorization lookup and active assignment", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const ownerId = id();
+    const otherUserId = id();
+    const adminId = id();
+    const platformAgentId = id();
+    const session = await (async () => {
+      await seedUser(database.client, { id: ownerId });
+      await seedUser(database.client, { id: otherUserId });
+      await seedUser(database.client, { id: adminId, role: "admin" });
+      return seedPersonalSession(database.client, { ownerUserId: ownerId });
+    })();
+    const inputId = id();
+    const artifactId = id();
+    const usageId = id();
+    await database.client.query(
+      `insert into platform_agents
+        (id, ark_agent_id, name, model_id, system_prompt, ark_version, status,
+         created_by, updated_by)
+       values ($1, 'ark-platform-authz', 'Platform', 'model-a', 'Prompt', '1',
+               'active', $2, $2)`,
+      [platformAgentId, adminId],
+    );
+    await database.client.query(
+      `insert into user_default_agents (user_id, platform_agent_id, assigned_by)
+       values ($1, $2, $3)`,
+      [ownerId, platformAgentId, adminId],
+    );
+    await database.client.query(
+      `insert into session_inputs
+        (id, owner_user_id, session_id, ark_file_id, original_name, mime_type,
+         size_bytes, mount_path, status, expires_at)
+       values ($1, $2, $3, 'ark-input-authz', 'input.txt', 'text/plain', 1,
+               '/mnt/session/input.txt', 'bound', now() + interval '1 hour')`,
+      [inputId, ownerId, session.sessionId],
+    );
+    await database.client.query(
+      `insert into artifacts
+        (id, owner_user_id, session_id, ark_file_id, tos_object_key, name,
+         mime_type, size_bytes, generated_at)
+       values ($1, $2, $3, 'ark-artifact-authz', $4, 'result.txt',
+               'text/plain', 1, now())`,
+      [artifactId, ownerId, session.sessionId, `tenant/${artifactId}`],
+    );
+    await database.client.query(
+      `insert into usage_ledger
+        (id, user_id, ark_session_id, ark_event_id, metric_type, quantity)
+       values ($1, $2, $3, 'ark-event-authz', 'input_tokens', 1)`,
+      [usageId, ownerId, session.arkSessionId],
+    );
+
+    const lookups = [
+      repositories.personalAgents.findOwned(ownerId, session.personalAgentId),
+      repositories.sessions.findOwned(ownerId, session.sessionId),
+      repositories.sessionInputs.findOwned(ownerId, inputId),
+      repositories.artifacts.findOwned(ownerId, artifactId),
+      repositories.usage.findOwned(ownerId, usageId),
+      repositories.platformAgents.findAssignedToUser(ownerId, platformAgentId),
+    ];
+    await expect(Promise.all(lookups)).resolves.toEqual([
+      expect.objectContaining({ id: session.personalAgentId }),
+      expect.objectContaining({ id: session.sessionId }),
+      expect.objectContaining({ id: inputId }),
+      expect.objectContaining({ id: artifactId }),
+      expect.objectContaining({ id: usageId }),
+      expect.objectContaining({ id: platformAgentId }),
+    ]);
+
+    await expect(
+      Promise.all([
+        repositories.personalAgents.findOwned(
+          otherUserId,
+          session.personalAgentId,
+        ),
+        repositories.sessions.findOwned(otherUserId, session.sessionId),
+        repositories.sessionInputs.findOwned(otherUserId, inputId),
+        repositories.artifacts.findOwned(otherUserId, artifactId),
+        repositories.usage.findOwned(otherUserId, usageId),
+        repositories.platformAgents.findAssignedToUser(
+          otherUserId,
+          platformAgentId,
+        ),
+      ]),
+    ).resolves.toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+
+    await database.client.query(
+      `update platform_agents set status = 'disabled' where id = $1`,
+      [platformAgentId],
+    );
+    await expect(
+      repositories.platformAgents.findAssignedToUser(ownerId, platformAgentId),
+    ).resolves.toBeUndefined();
+    await database.close();
+  });
+
   it("never returns another tenant's resources", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);

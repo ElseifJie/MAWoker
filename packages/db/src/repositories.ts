@@ -335,6 +335,15 @@ export function createRepositories(database: unknown) {
     },
 
     usage: {
+      findOwned(userId: string, id: string) {
+        return first<OwnedRecord>(
+          db,
+          sql`select id, user_id as "ownerUserId"
+                from usage_ledger
+               where id = ${id} and user_id = ${userId}
+               limit 1`,
+        );
+      },
       async record(input: {
         id: string;
         userId: string;
