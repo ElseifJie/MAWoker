@@ -659,15 +659,15 @@ function AdminUserRecord({
         className="admin-user-group admin-user-identity"
         aria-labelledby={identityHeadingId}
       >
-        <h3 className="admin-user-group__label" id={identityHeadingId}>
-          Identity
-        </h3>
         <div className="admin-user-identity__summary">
           <h2 id={userHeadingId}>{user.email}</h2>
           <Badge tone={user.status === "active" ? "success" : "neutral"}>
             {user.status}
           </Badge>
         </div>
+        <h3 className="admin-user-group__label" id={identityHeadingId}>
+          Identity
+        </h3>
         {feedback ? (
           <Alert
             className="admin-user-feedback"

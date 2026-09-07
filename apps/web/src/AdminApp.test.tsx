@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   cleanup,
   render,
@@ -12,6 +14,16 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { App } from "./App.js";
+
+const adminStyles = readFileSync(
+  resolve(
+    process.cwd(),
+    process.cwd().endsWith("apps/web")
+      ? "src/styles.css"
+      : "apps/web/src/styles.css",
+  ),
+  "utf8",
+);
 
 const agentId = "00000000-0000-4000-8000-000000000001";
 const disabledAgentId = "00000000-0000-4000-8000-000000000002";
@@ -302,6 +314,26 @@ describe("administrator role routing", () => {
     ).toBeInTheDocument();
   });
 
+  it("orders each user heading before its subordinate management groups", async () => {
+    vi.stubGlobal("fetch", vi.fn(adminHandler()));
+
+    renderApp("/admin/users");
+
+    const record = await screen.findByRole("region", {
+      name: "user@example.com",
+    });
+    expect(
+      Array.from(record.querySelectorAll("h2, h3")).map(
+        (heading) => `${heading.tagName}:${heading.textContent}`,
+      ),
+    ).toEqual([
+      "H2:user@example.com",
+      "H3:Identity",
+      "H3:Default Agent",
+      "H3:Quotas",
+    ]);
+  });
+
   it("keeps the mobile admin drawer out of the tab order while closed", async () => {
     setMobileViewport(true);
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
@@ -375,6 +407,17 @@ describe("platform Agent administration", () => {
         name: "Delete Research assistant",
       }),
     ).toBeInTheDocument();
+  });
+
+  it("switches Platform Agents to labeled records before the 1024px table overflows", () => {
+    const tableRule = adminStyles.indexOf(".admin-agent-table.ui-data-table");
+    const mediaRule = adminStyles.lastIndexOf("@media", tableRule);
+    const mediaHeader = adminStyles.slice(
+      mediaRule,
+      adminStyles.indexOf("{", mediaRule),
+    );
+
+    expect(mediaHeader).toContain("max-width: 1240px");
   });
 
   it("creates, version-updates, disables, enables, and confirms deletion", async () => {

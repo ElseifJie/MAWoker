@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -719,6 +725,63 @@ describe("AppShell", () => {
         hidden: true,
       }),
     ).not.toHaveFocus();
+  });
+
+  it("moves focus into the open drawer, makes page content inert, and traps Tab", async () => {
+    setMobileViewport(true);
+    const user = userEvent.setup();
+    renderShell();
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+
+    const firstLink = screen.getByRole("link", { name: "New task" });
+    const lastControl = screen.getByRole("button", { name: "Sign out" });
+    expect(firstLink).toHaveFocus();
+    expect(screen.getByRole("main")).toHaveAttribute("inert");
+
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(lastControl).toHaveFocus();
+    await user.tab();
+    expect(firstLink).toHaveFocus();
+  });
+
+  it("restores focus to the drawer toggle after Escape and backdrop closure", async () => {
+    setMobileViewport(true);
+    const user = userEvent.setup();
+    renderShell();
+
+    const toggle = screen.getByRole("button", { name: "Open navigation" });
+    await user.click(toggle);
+    await user.keyboard("{Escape}");
+    expect(toggle).toHaveFocus();
+
+    await user.click(toggle);
+    await user.click(
+      screen.getByRole("button", { name: "Close navigation drawer" }),
+    );
+    expect(toggle).toHaveFocus();
+  });
+
+  it("moves focus to the routed page heading after drawer navigation", async () => {
+    setMobileViewport(true);
+    const user = userEvent.setup();
+    renderShell({
+      children: (
+        <>
+          <h1 tabIndex={-1}>Destination</h1>
+          <button type="button">Page action</button>
+        </>
+      ),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    await user.click(screen.getByRole("link", { name: "New task" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Destination" }),
+      ).toHaveFocus(),
+    );
   });
 
   it("opens the mobile drawer and closes it from navigation or the backdrop", async () => {

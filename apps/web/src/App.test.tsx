@@ -26,6 +26,23 @@ const pageStyles = readFileSync(
   "utf8",
 );
 
+const migratedCss = [
+  "src/ui/tokens.css",
+  "src/ui/components.css",
+  "src/ui/layouts.css",
+  "src/styles.css",
+]
+  .map((path) =>
+    readFileSync(
+      resolve(
+        process.cwd(),
+        process.cwd().endsWith("apps/web") ? path : `apps/web/${path}`,
+      ),
+      "utf8",
+    ),
+  )
+  .join("\n");
+
 const agentId = "00000000-0000-4000-8000-000000000001";
 const uploadId = "00000000-0000-4000-8000-000000000002";
 const sessionId = "00000000-0000-4000-8000-000000000003";
@@ -1889,6 +1906,18 @@ describe("unavailable capabilities", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Not available yet")).toBeInTheDocument();
     expect(screen.queryByRole("form")).not.toBeInTheDocument();
+  });
+});
+
+describe("migrated CSS contracts", () => {
+  it("keeps radii at eight pixels or below and typography viewport-independent", () => {
+    const oversizedRadii = Array.from(
+      migratedCss.matchAll(/border-radius\s*:\s*(\d+(?:\.\d+)?)px/g),
+    ).filter((match) => Number(match[1]) > 8);
+
+    expect(oversizedRadii).toEqual([]);
+    expect(migratedCss).not.toMatch(/font-size\s*:[^;]*(?:vw|vh|vmin|vmax)/i);
+    expect(migratedCss).not.toMatch(/letter-spacing\s*:\s*-/i);
   });
 });
 

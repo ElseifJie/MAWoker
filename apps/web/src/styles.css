@@ -121,7 +121,7 @@ a {
   height: 40px;
   margin-bottom: 18px;
   place-items: center;
-  border-radius: 10px;
+  border-radius: var(--ui-radius-large);
   color: #ffffff;
   background: #147d78;
 }
@@ -137,8 +137,7 @@ a {
 
 .login-panel h1 {
   margin: 6px 0 8px;
-  font-size: clamp(1.55rem, 4vw, 2rem);
-  letter-spacing: -0.035em;
+  font-size: 2rem;
 }
 
 .muted {
@@ -498,8 +497,7 @@ select:not(.ui-select):hover {
 .page-heading h1 {
   margin: 0;
   color: #182326;
-  font-size: clamp(1.75rem, 4vw, 2.35rem);
-  letter-spacing: -0.045em;
+  font-size: 2rem;
 }
 
 .page-heading .muted {
@@ -646,8 +644,7 @@ select:not(.ui-select):hover {
   margin: 0;
   overflow: hidden;
   color: #182326;
-  font-size: clamp(1.25rem, 3vw, 1.65rem);
-  letter-spacing: -0.035em;
+  font-size: 1.5rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1267,7 +1264,7 @@ select:not(.ui-select):hover {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1240px) {
   .admin-agent-table.ui-data-table {
     min-width: 0;
   }
@@ -1314,7 +1311,9 @@ select:not(.ui-select):hover {
     letter-spacing: 0.04em;
     text-transform: uppercase;
   }
+}
 
+@media (max-width: 760px) {
   .page {
     min-height: calc(100vh - 58px);
     padding: 38px 18px;

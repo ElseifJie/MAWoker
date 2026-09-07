@@ -7,6 +7,7 @@
     "build": "tsc -b && vite build",
     "dev": "vite",
     "preview": "vite preview",
+    "test": "vitest run src",
     "typecheck": "tsc -b --pretty false"
   },
   "engines": {
@@ -15,13 +16,19 @@
   "dependencies": {
     "@pwa/contracts": "0.1.0",
     "@pwa/ui": "0.1.0",
+    "lucide-react": "^1.41.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.7",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^29.1.1",
     "vite": "^8.2.2"
   }
 }
