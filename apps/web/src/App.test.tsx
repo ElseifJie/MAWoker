@@ -961,6 +961,274 @@ describe("Agent management", () => {
 });
 
 describe("Session page", () => {
+  it("uses shared primitives for Session status, actions, composer, and deletion", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+
+    renderApp(`/sessions/${sessionId}`);
+    const user = userEvent.setup();
+    const heading = await screen.findByRole("heading", {
+      name: "Quarterly plan",
+    });
+    const sessionPage = heading.closest(".session-page")!;
+    const sessionMeta =
+      sessionPage.querySelector<HTMLElement>(".session-meta")!;
+
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(
+      within(sessionMeta).getByText("Running").closest(".ui-badge"),
+    ).toHaveClass("ui-badge", "ui-badge--success");
+    expect(
+      within(sessionMeta).getByText("Connecting…").closest(".ui-badge"),
+    ).toHaveClass("ui-badge", "ui-badge--neutral");
+
+    const interrupt = screen.getByRole("button", {
+      name: "Interrupt Session",
+    });
+    expect(interrupt).toHaveClass(
+      "ui-button",
+      "ui-button--secondary",
+      "ui-button--compact",
+    );
+    expect(screen.getByLabelText("Message")).toHaveClass("ui-textarea");
+    expect(screen.getByRole("button", { name: "Send message" })).toHaveClass(
+      "ui-icon-button",
+      "ui-icon-button--default",
+    );
+
+    const source = MockEventSource.instances[0]!;
+    act(() => source.emitOpen());
+    expect(
+      within(sessionMeta).getByText("Live").closest(".ui-badge"),
+    ).toHaveClass("ui-badge", "ui-badge--success");
+
+    const actions = screen.getByRole("button", { name: "Session actions" });
+    expect(actions).toHaveClass("ui-icon-button", "ui-icon-button--default");
+    await user.click(actions);
+    expect(screen.getByRole("button", { name: "Archive Session" })).toHaveClass(
+      "ui-button",
+      "ui-button--text",
+      "ui-button--compact",
+    );
+    const deleteAction = screen.getByRole("button", {
+      name: "Delete Session permanently",
+    });
+    expect(deleteAction).toHaveClass(
+      "ui-button",
+      "ui-button--text",
+      "ui-button--compact",
+    );
+
+    await user.click(deleteAction);
+    const dialog = screen.getByRole("dialog", {
+      name: "Delete Session permanently?",
+    });
+    expect(dialog).toHaveClass("ui-dialog");
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Close deletion confirmation",
+      }),
+    ).toHaveClass("ui-icon-button", "ui-icon-button--small");
+    expect(within(dialog).getByLabelText("Type DELETE to confirm")).toHaveClass(
+      "ui-input",
+    );
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveClass(
+      "ui-button",
+      "ui-button--secondary",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Delete permanently" }),
+    ).toHaveClass("ui-button", "ui-button--danger");
+
+    const [timelineRule] = findStyleRules(".timeline");
+    const [composerRule] = findStyleRules(".session-composer");
+    const [connectionRule] = findStyleRules(".session-connection-badge");
+    expect(timelineRule?.style.width).toBe("100%");
+    expect(timelineRule?.style.maxWidth).toBe("760px");
+    expect(timelineRule?.style.marginInline).toBe("auto");
+    expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
+    expect(connectionRule?.style.minWidth).toBe("7.5rem");
+  });
+
+  it("keeps pending Session action labels exposed while showing shared loading state", async () => {
+    const neverCompletes = new Promise<Response>(() => undefined);
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      if (
+        url.pathname === `/api/v1/sessions/${sessionId}/interrupt` &&
+        init?.method === "POST"
+      ) {
+        return neverCompletes;
+      }
+      return authenticatedHandler()(input, init);
+    });
+
+    renderApp(`/sessions/${sessionId}`);
+    const user = userEvent.setup();
+    const interrupt = await screen.findByRole("button", {
+      name: "Interrupt Session",
+    });
+    await user.click(interrupt);
+
+    const pendingInterrupt = screen.getByRole("button", {
+      name: "Interrupt Session",
+    });
+    expect(pendingInterrupt).toBeDisabled();
+    expect(pendingInterrupt).toHaveAttribute("aria-busy", "true");
+    expect(within(pendingInterrupt).getByText("Interrupt")).toBeVisible();
+    expect(
+      within(pendingInterrupt).getByRole("status", { hidden: true }),
+    ).toHaveClass("ui-spinner");
+  });
+
+  it.each([
+    [
+      "SESSION_BUSY",
+      409,
+      "The Session is busy. Your message was not accepted; try again.",
+    ],
+    [
+      "SESSION_TERMINATED",
+      409,
+      "This Session is terminated and cannot accept new messages.",
+    ],
+    ["ARK_UNAVAILABLE", 503, "The message could not be completed. Try again."],
+  ])(
+    "renders %s message failures as danger alerts",
+    async (code, status, expectedMessage) => {
+      vi.mocked(fetch).mockImplementation(async (input, init) => {
+        const url = new URL(String(input), "http://localhost");
+        if (
+          url.pathname === `/api/v1/sessions/${sessionId}/messages` &&
+          init?.method === "POST"
+        ) {
+          return apiError(code, status, true);
+        }
+        return authenticatedHandler()(input, init);
+      });
+
+      renderApp(`/sessions/${sessionId}`);
+      const user = userEvent.setup();
+      await screen.findByRole("heading", { name: "Quarterly plan" });
+      await user.type(screen.getByLabelText("Message"), "Add risks");
+      await user.click(screen.getByRole("button", { name: "Send message" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(expectedMessage);
+      expect(alert).toHaveClass("ui-alert--danger");
+      expect(alert.closest(".session-page")).toHaveClass(
+        "session-page--composer-error",
+      );
+    },
+  );
+
+  it("renders failed permanent deletion as a danger alert", async () => {
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      if (
+        url.pathname === `/api/v1/sessions/${sessionId}` &&
+        init?.method === "DELETE"
+      ) {
+        return apiError("DELETION_FAILED", 500);
+      }
+      return authenticatedHandler()(input, init);
+    });
+
+    renderApp(`/sessions/${sessionId}`);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Quarterly plan" });
+    await user.click(screen.getByRole("button", { name: "Session actions" }));
+    await user.click(
+      screen.getByRole("button", { name: "Delete Session permanently" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Delete Session permanently?",
+    });
+    await user.type(
+      within(dialog).getByLabelText("Type DELETE to confirm"),
+      "DELETE",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Delete permanently" }),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "Permanent deletion failed and will be retried in the background.",
+    );
+    expect(alert).toHaveClass("ui-alert--danger");
+  });
+
+  it("gives failed composer feedback a growing mobile layout contract", () => {
+    const [pageRule] = findStyleRules(
+      ".session-page.session-page--composer-error",
+    );
+    const [composerRule] = findStyleRules(
+      ".session-page--composer-error .session-composer",
+    );
+    const [footerRule] = findStyleRules(
+      ".session-page--composer-error .session-composer-footer",
+    );
+    const [feedbackRule] = findStyleRules(
+      ".session-page--composer-error .session-composer-feedback",
+    );
+
+    expect(pageRule?.style.gridTemplateRows).toBe(
+      "auto minmax(180px, 1fr) auto",
+    );
+    expect(composerRule?.style.gridTemplateRows).toBe("70px auto");
+    expect(composerRule?.style.overflow).toBe("visible");
+    expect(footerRule?.style.display).toBe("grid");
+    expect(feedbackRule?.style.gridColumn).toBe("1 / -1");
+    expect(feedbackRule?.style.overflow).toBe("visible");
+  });
+
+  it("keeps a fixed icon slot in the permanent-delete button while loading", async () => {
+    const neverCompletes = new Promise<Response>(() => undefined);
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      if (
+        url.pathname === `/api/v1/sessions/${sessionId}` &&
+        init?.method === "DELETE"
+      ) {
+        return neverCompletes;
+      }
+      return authenticatedHandler()(input, init);
+    });
+
+    renderApp(`/sessions/${sessionId}`);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Quarterly plan" });
+    await user.click(screen.getByRole("button", { name: "Session actions" }));
+    await user.click(
+      screen.getByRole("button", { name: "Delete Session permanently" }),
+    );
+    const dialog = screen.getByRole("dialog", {
+      name: "Delete Session permanently?",
+    });
+    await user.type(
+      within(dialog).getByLabelText("Type DELETE to confirm"),
+      "DELETE",
+    );
+    const deleteButton = within(dialog).getByRole("button", {
+      name: "Delete permanently",
+    });
+    const idleSlot = deleteButton.querySelector(".session-delete-button__icon");
+    expect(idleSlot).toBeInTheDocument();
+    expect(idleSlot?.querySelector(".ui-spinner")).not.toBeInTheDocument();
+
+    await user.click(deleteButton);
+
+    const pendingButton = within(dialog).getByRole("button", {
+      name: "Delete permanently",
+    });
+    expect(pendingButton).toHaveAttribute("aria-busy", "true");
+    expect(
+      pendingButton.querySelector(".session-delete-button__icon .ui-spinner"),
+    ).toBeInTheDocument();
+    const [iconSlotRule] = findStyleRules(".session-delete-button__icon");
+    expect(iconSlotRule?.style.width).toBe("15px");
+  });
+
   it("clears the previous Session state immediately when the route parameter changes", async () => {
     let resolveNextSession!: (response: Response) => void;
     const nextSessionResponse = new Promise<Response>((resolve) => {
@@ -1796,6 +2064,13 @@ describe("new task composer", () => {
         "The first message could not be sent. Retry from this Session.",
       ),
     ).toBeInTheDocument();
+    const firstMessageAlert = within(
+      document.querySelector<HTMLFormElement>(".session-composer")!,
+    ).getByRole("alert");
+    expect(firstMessageAlert).toHaveClass("ui-alert--danger");
+    expect(firstMessageAlert.closest(".session-page")).toHaveClass(
+      "session-page--composer-error",
+    );
     expect(document.querySelector(".session-delivery")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Current location")).toHaveTextContent(
       `/sessions/${createdSessionId}`,

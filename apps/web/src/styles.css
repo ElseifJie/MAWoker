@@ -752,7 +752,6 @@ select:not(.ui-select):hover {
   line-height: 1.5;
 }
 
-.connection-state,
 .state-label {
   border-radius: 999px;
   font-size: 0.7rem;
@@ -868,10 +867,13 @@ select:not(.ui-select):hover {
 .session-page {
   display: grid;
   width: min(100%, 1040px);
+  min-width: 0;
+  max-width: 100%;
   height: 100vh;
   min-height: 620px;
   margin: 0 auto;
   padding: 28px 36px 24px;
+  overflow-x: hidden;
   grid-template-rows: auto minmax(180px, 1fr) 124px;
   gap: 12px;
 }
@@ -916,33 +918,14 @@ select:not(.ui-select):hover {
   gap: 8px;
 }
 
-.connection-state,
-.state-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 7px;
-}
-
-.connection-state {
-  color: #68767c;
-  background: #e9eeee;
-}
-
-.connection-live {
-  color: #28734f;
-  background: #e5f2eb;
-}
-
-.connection-reconnecting,
 .state-label.pending {
   color: #8a651b;
   background: #f7eed9;
 }
 
-.connection-ended {
-  color: #6d5a58;
-  background: #eee9e8;
+.session-connection-badge {
+  min-width: 7.5rem;
+  justify-content: center;
 }
 
 .action-menu {
@@ -958,26 +941,22 @@ select:not(.ui-select):hover {
   width: 218px;
   padding: 5px;
   border: 1px solid #d6dede;
-  border-radius: 9px;
+  border-radius: var(--ui-radius-large);
   background: #ffffff;
   box-shadow: 0 12px 34px rgb(24 38 39 / 14%);
 }
 
-.action-menu-panel button {
-  display: flex;
+.action-menu-panel .ui-button {
+  width: 100%;
   min-height: 38px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
+  justify-content: flex-start;
+  border-color: transparent;
   font-size: 0.8rem;
   text-align: left;
 }
 
-.action-menu-panel button:hover {
-  background: #f1f5f4;
+.action-menu-panel .session-action-menu__danger {
+  color: var(--ui-color-danger);
 }
 
 .session-inputs {
@@ -993,7 +972,7 @@ select:not(.ui-select):hover {
 .session-inputs span {
   padding: 4px 8px;
   border: 1px solid #dce3e3;
-  border-radius: 999px;
+  border-radius: var(--ui-radius-medium);
   background: #ffffff;
   white-space: nowrap;
 }
@@ -1006,26 +985,11 @@ select:not(.ui-select):hover {
   overflow: hidden;
 }
 
-.session-deletion-state {
-  display: flex;
+.session-deletion-alert {
   flex: 0 0 auto;
-  align-items: flex-start;
-  gap: 9px;
-  padding: 10px 12px;
-  border: 1px solid #ead9aa;
-  border-radius: 9px;
-  color: #806020;
-  background: #fffaf0;
-  font-size: 0.78rem;
 }
 
-.session-deletion-state.failed {
-  border-color: #e6c8c4;
-  color: #8f382f;
-  background: #fff8f7;
-}
-
-.session-deletion-state div {
+.session-deletion-alert__copy {
   display: grid;
   gap: 2px;
 }
@@ -1056,9 +1020,12 @@ select:not(.ui-select):hover {
 
 .timeline {
   display: grid;
+  width: 100%;
+  max-width: 760px;
   margin: 0;
+  margin-inline: auto;
   padding: 0;
-  gap: 10px;
+  gap: var(--ui-space-2);
   list-style: none;
 }
 
@@ -1085,7 +1052,7 @@ select:not(.ui-select):hover {
   align-items: flex-start;
   gap: 9px;
   padding: 11px 13px;
-  border-radius: 10px;
+  border-radius: var(--ui-radius-large);
 }
 
 .user-event {
@@ -1104,6 +1071,12 @@ select:not(.ui-select):hover {
   max-width: 100%;
   color: #748187;
   font-size: 0.76rem;
+}
+
+.status-event {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
 }
 
 .error-event {
@@ -1162,14 +1135,17 @@ select:not(.ui-select):hover {
   display: grid;
   overflow: hidden;
   border: 1px solid #d5dddd;
-  border-radius: 11px;
+  border-radius: var(--ui-radius-large);
   background: #ffffff;
   box-shadow: 0 8px 26px rgb(35 57 57 / 6%);
   grid-template-rows: 70px 52px;
 }
 
-.session-composer textarea {
+.session-composer .ui-textarea {
   min-height: 70px;
+  padding: 10px 13px;
+  border: 0;
+  border-radius: 0;
   resize: none;
 }
 
@@ -1183,10 +1159,18 @@ select:not(.ui-select):hover {
   font-size: 0.77rem;
 }
 
-.session-composer-footer > span {
+.session-composer-feedback {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  flex: 1;
+  align-items: center;
+  overflow: hidden;
+}
+
+.session-composer-feedback > span {
   display: inline-flex;
   min-width: 0;
-  flex: 1;
   align-items: center;
   gap: 6px;
   overflow: hidden;
@@ -1194,9 +1178,15 @@ select:not(.ui-select):hover {
   white-space: nowrap;
 }
 
+.session-composer-feedback .ui-alert {
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+}
+
 .placeholder-composer {
   border: 1px solid #e1e6e6;
-  border-radius: 11px;
+  border-radius: var(--ui-radius-large);
   background: #ffffff;
 }
 
@@ -1204,6 +1194,26 @@ select:not(.ui-select):hover {
   justify-content: flex-start;
   color: #748187;
   font-size: 0.82rem;
+}
+
+.session-delete-dialog {
+  display: grid;
+  gap: var(--ui-space-4);
+}
+
+.session-delete-dialog > p {
+  margin: 0;
+  color: var(--ui-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.session-delete-button__icon {
+  display: inline-grid;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  place-items: center;
 }
 
 .artifact-filter {
@@ -1672,6 +1682,33 @@ select:not(.ui-select):hover {
 
   .timeline-event {
     max-width: 92%;
+  }
+
+  .session-page.session-page--composer-error {
+    grid-template-rows: auto minmax(180px, 1fr) auto;
+  }
+
+  .session-page--composer-error .session-composer {
+    min-height: 0;
+    overflow: visible;
+    grid-template-rows: 70px auto;
+  }
+
+  .session-page--composer-error .session-composer-footer {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .session-page--composer-error .session-composer-feedback {
+    overflow: visible;
+    grid-column: 1 / -1;
+  }
+
+  .session-page--composer-error .send-button {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: end;
   }
 
   .dialog-actions > button {
