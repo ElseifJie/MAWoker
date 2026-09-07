@@ -338,9 +338,13 @@ describe("Feedback", () => {
 
 describe("Dialog", () => {
   function DialogHarness({
+    closeLabel,
     closeDisabled = false,
+    hideCloseButton = false,
   }: {
+    closeLabel?: string;
     closeDisabled?: boolean;
+    hideCloseButton?: boolean;
   }) {
     const [open, setOpen] = useState(false);
     const triggerRef = createRef<HTMLButtonElement>();
@@ -356,13 +360,52 @@ describe("Dialog", () => {
           title="Edit Agent"
           eyebrow="Personal Agent"
           onClose={() => setOpen(false)}
+          closeLabel={closeLabel}
           closeDisabled={closeDisabled}
+          hideCloseButton={hideCloseButton}
           initialFocusRef={initialFocusRef}
           returnFocusRef={triggerRef}
           footer={<Button variant="primary">Save changes</Button>}
         >
           <Input ref={initialFocusRef} aria-label="Agent name" />
           <Button variant="secondary">Cancel editing</Button>
+        </Dialog>
+      </>
+    );
+  }
+
+  function FallbackFocusDialogHarness() {
+    const [open, setOpen] = useState(false);
+    const [triggerVisible, setTriggerVisible] = useState(true);
+    const headingRef = useRef<HTMLHeadingElement>(null);
+
+    const closeAfterDeletion = () => {
+      setTriggerVisible(false);
+      setOpen(false);
+    };
+
+    return (
+      <>
+        <h1 ref={headingRef} tabIndex={-1}>
+          Agents
+        </h1>
+        {triggerVisible ? (
+          <button type="button" onClick={() => setOpen(true)}>
+            Delete Agent
+          </button>
+        ) : null}
+        <Dialog
+          open={open}
+          title="Delete Agent?"
+          onClose={() => setOpen(false)}
+          fallbackFocusRef={headingRef}
+          footer={
+            <Button variant="danger" onClick={closeAfterDeletion}>
+              Confirm deletion
+            </Button>
+          }
+        >
+          <p>This cannot be undone.</p>
         </Dialog>
       </>
     );
@@ -380,6 +423,46 @@ describe("Dialog", () => {
     expect(screen.getByText("Personal Agent")).toBeVisible();
     expect(screen.getByRole("button", { name: "Save changes" })).toBeVisible();
     expect(screen.getByRole("textbox", { name: "Agent name" })).toHaveFocus();
+  });
+
+  it("uses a configurable close button label", async () => {
+    const user = userEvent.setup();
+    render(<DialogHarness closeLabel="Close Agent editor" />);
+
+    await user.click(screen.getByRole("button", { name: "Open editor" }));
+
+    const close = screen.getByRole("button", { name: "Close Agent editor" });
+    expect(close).toHaveAttribute("title", "Close Agent editor");
+    expect(
+      screen.queryByRole("button", { name: "Close dialog" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("can omit the close button", async () => {
+    const user = userEvent.setup();
+    render(<DialogHarness hideCloseButton />);
+
+    await user.click(screen.getByRole("button", { name: "Open editor" }));
+
+    expect(
+      screen.queryByRole("button", { name: "Close dialog" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Edit Agent" }),
+    ).toBeInTheDocument();
+  });
+
+  it("moves focus to the fallback when closing removes the trigger", async () => {
+    const user = userEvent.setup();
+    render(<FallbackFocusDialogHarness />);
+
+    await user.click(screen.getByRole("button", { name: "Delete Agent" }));
+    await user.click(screen.getByRole("button", { name: "Confirm deletion" }));
+
+    expect(
+      screen.queryByRole("button", { name: "Delete Agent" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Agents" })).toHaveFocus();
   });
 
   it("closes on Escape and restores focus to the trigger", async () => {

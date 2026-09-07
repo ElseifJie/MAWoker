@@ -1,5 +1,11 @@
 import { X } from "lucide-react";
-import { useId, type ReactNode, type RefObject } from "react";
+import {
+  useId,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useModalDialog } from "../useModalDialog.js";
 import { IconButton } from "./Button.js";
 
@@ -8,18 +14,24 @@ export interface DialogProps {
   title: string;
   eyebrow?: string;
   onClose: () => void;
+  closeLabel?: string;
   closeDisabled?: boolean;
+  hideCloseButton?: boolean;
   initialFocusRef?: RefObject<HTMLElement | null>;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  fallbackFocusRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
   footer?: ReactNode;
 }
 
 export function Dialog({
   children,
+  closeLabel = "Close dialog",
   closeDisabled = false,
   eyebrow,
+  fallbackFocusRef,
   footer,
+  hideCloseButton = false,
   initialFocusRef,
   onClose,
   open,
@@ -27,13 +39,22 @@ export function Dialog({
   title,
 }: DialogProps) {
   const titleId = useId();
+  const markedInitialFocusRef = useRef<HTMLElement>(null);
   const dialogRef = useModalDialog({
     open,
     onClose,
     closeDisabled,
-    ...(initialFocusRef ? { initialFocusRef } : {}),
+    initialFocusRef: initialFocusRef ?? markedInitialFocusRef,
     ...(returnFocusRef ? { returnFocusRef } : {}),
+    ...(fallbackFocusRef ? { fallbackFocusRef } : {}),
   });
+
+  useLayoutEffect(() => {
+    markedInitialFocusRef.current =
+      dialogRef.current?.querySelector<HTMLElement>(
+        "[data-dialog-initial-focus]",
+      ) ?? null;
+  }, [dialogRef, open]);
 
   if (!open) return null;
 
@@ -54,14 +75,16 @@ export function Dialog({
               {title}
             </h2>
           </div>
-          <IconButton
-            label="Close dialog"
-            size="small"
-            onClick={onClose}
-            disabled={closeDisabled}
-          >
-            <X size={17} aria-hidden="true" />
-          </IconButton>
+          {hideCloseButton ? null : (
+            <IconButton
+              label={closeLabel}
+              size="small"
+              onClick={onClose}
+              disabled={closeDisabled}
+            >
+              <X size={17} aria-hidden="true" />
+            </IconButton>
+          )}
         </header>
         <div className="ui-dialog__body">{children}</div>
         {footer ? (

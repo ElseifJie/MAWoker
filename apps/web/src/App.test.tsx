@@ -33,6 +33,8 @@ const createdSessionId = "00000000-0000-4000-8000-000000000004";
 const personalAgentId = "00000000-0000-4000-8000-000000000005";
 const artifactId = "00000000-0000-4000-8000-000000000006";
 const archivedSessionId = "00000000-0000-4000-8000-000000000009";
+const longDocumentMimeType =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const agentResponse = {
   agents: [
@@ -67,7 +69,7 @@ const artifactsResponse = {
       id: artifactId,
       sessionId,
       name: "quarterly-plan.pdf",
-      mimeType: "application/pdf",
+      mimeType: longDocumentMimeType,
       sizeBytes: 1536,
       generatedAt: "2026-09-07T08:05:00.000Z",
       deletionState: "none",
@@ -672,6 +674,72 @@ describe("workspace shell", () => {
 });
 
 describe("Agent management", () => {
+  it("uses shared page primitives and compact typed Agent records", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+
+    renderApp("/agents");
+    const user = userEvent.setup();
+
+    const heading = await screen.findByRole("heading", { name: "Agents" });
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(heading.closest("header")).toHaveClass("ui-page-header");
+
+    const platformSection = screen.getByRole("region", {
+      name: "Platform provided",
+    });
+    const personalSection = screen.getByRole("region", {
+      name: "My Agents",
+    });
+    expect(
+      within(platformSection)
+        .getByRole("heading", { name: "Platform provided" })
+        .closest("header"),
+    ).toHaveClass("ui-section-header");
+    expect(
+      within(personalSection)
+        .getByRole("heading", { name: "My Agents" })
+        .closest("header"),
+    ).toHaveClass("ui-section-header");
+    expect(
+      within(platformSection).getByRole("list", {
+        name: "Platform Agents",
+      }),
+    ).toHaveClass("agent-records");
+    expect(
+      within(personalSection).getByRole("list", {
+        name: "Personal Agents",
+      }),
+    ).toHaveClass("agent-records");
+    expect(
+      within(platformSection).getByText("Platform").closest(".ui-badge"),
+    ).toHaveClass("ui-badge");
+    expect(
+      within(personalSection).getByText("Personal").closest(".ui-badge"),
+    ).toHaveClass("ui-badge");
+
+    const newAgent = screen.getByRole("button", {
+      name: "New personal Agent",
+    });
+    expect(newAgent).toHaveClass("ui-button", "ui-button--primary");
+    expect(
+      within(personalSection).getByRole("button", {
+        name: "Edit Writing assistant",
+      }),
+    ).toHaveClass("ui-button", "ui-button--secondary");
+    expect(
+      within(personalSection).getByRole("button", {
+        name: "Delete Writing assistant",
+      }),
+    ).toHaveClass("ui-button", "ui-button--text");
+
+    await user.click(newAgent);
+    const dialog = screen.getByRole("dialog", { name: "Create Agent" });
+    expect(dialog).toHaveClass("ui-dialog");
+    expect(
+      within(dialog).getByRole("button", { name: "Close Agent editor" }),
+    ).toBeInTheDocument();
+  });
+
   it("uses only the server capability allowlist for personal Agent models", async () => {
     vi.mocked(fetch).mockImplementation(
       authenticatedHandler({
@@ -1368,6 +1436,79 @@ describe("Session page", () => {
 });
 
 describe("artifact management", () => {
+  it("uses shared file controls, statuses, and responsive artifact records", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+
+    renderApp("/files");
+    const user = userEvent.setup();
+
+    const heading = await screen.findByRole("heading", { name: "My files" });
+    expect(await screen.findByText("quarterly-plan.pdf")).toBeInTheDocument();
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(heading.closest("header")).toHaveClass("ui-page-header");
+    expect(screen.getByLabelText("Filter by Session")).toHaveClass("ui-select");
+    expect(
+      screen.getByText("Deletion failed").closest(".ui-badge"),
+    ).toHaveClass("ui-badge", "ui-badge--danger");
+    expect(
+      screen.getByRole("link", { name: "Download quarterly-plan.pdf" }),
+    ).toHaveClass("ui-icon-button", "ui-icon-button--small");
+    const deleteArtifact = screen.getByRole("button", {
+      name: "Delete quarterly-plan.pdf",
+    });
+    expect(deleteArtifact).toHaveClass(
+      "ui-icon-button",
+      "ui-icon-button--small",
+    );
+    const mimeType = screen.getByText(longDocumentMimeType);
+    expect(mimeType.parentElement).toHaveClass("artifact-record__metadata");
+    expect(pageStyles).toMatch(
+      /@media \(max-width: 760px\)[\s\S]*?\.artifact-record__metadata\s*\{[\s\S]*?display:\s*grid/,
+    );
+    const [metadataRule] = findStyleRules(".artifact-record__metadata");
+    const [metadataItemRule] = findStyleRules(
+      ".artifact-record__metadata > span",
+    );
+    expect(metadataRule?.style.minWidth).toBe("0px");
+    expect(metadataItemRule?.style.minWidth).toBe("0px");
+    expect(metadataItemRule?.style.overflowWrap).toBe("anywhere");
+
+    await user.click(deleteArtifact);
+    const dialog = screen.getByRole("dialog", { name: "Delete artifact?" });
+    expect(dialog).toHaveClass("ui-dialog");
+    expect(
+      within(dialog).getByRole("button", {
+        name: "Close artifact deletion",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the artifact retry workflow and shared error state", async () => {
+    let artifactRequests = 0;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/v1/artifacts") {
+        artifactRequests += 1;
+        if (artifactRequests === 1) {
+          return apiError("ARK_UNAVAILABLE", 503, true);
+        }
+      }
+      return authenticatedHandler()(input, init);
+    });
+
+    renderApp("/files");
+    const user = userEvent.setup();
+
+    const error = await screen.findByText("Artifacts could not be loaded.");
+    expect(error.closest(".ui-empty-state")).toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(retry).toHaveClass("ui-button", "ui-button--secondary");
+    await user.click(retry);
+
+    expect(await screen.findByText("quarterly-plan.pdf")).toBeInTheDocument();
+    expect(artifactRequests).toBe(2);
+  });
+
   it("lists only artifacts, filters by Session, downloads, and requests deletion", async () => {
     const calls: FetchCall[] = [];
     vi.mocked(fetch).mockImplementation(async (input, init) => {
