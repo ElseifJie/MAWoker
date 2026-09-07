@@ -1,0 +1,38 @@
+:root {
+  --ui-color-surface-canvas: #f5f7f8;
+  --ui-color-surface: #ffffff;
+  --ui-color-surface-subtle: #f1f4f5;
+  --ui-color-surface-hover: #e9eef0;
+  --ui-color-border: #d3dade;
+  --ui-color-border-strong: #aeb9bf;
+  --ui-color-text: #1d272d;
+  --ui-color-text-muted: #627078;
+  --ui-color-text-inverse: #ffffff;
+  --ui-color-accent: #176b68;
+  --ui-color-accent-hover: #125a57;
+  --ui-color-accent-subtle: #e5f1f0;
+  --ui-color-success: #28734f;
+  --ui-color-success-subtle: #e7f3ec;
+  --ui-color-warning: #946512;
+  --ui-color-warning-subtle: #faf0d9;
+  --ui-color-danger: #a23e35;
+  --ui-color-danger-hover: #87342d;
+  --ui-color-danger-subtle: #f8e9e7;
+  --ui-focus-ring: #147d78;
+
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 20px;
+  --ui-space-6: 24px;
+  --ui-space-8: 32px;
+
+  --ui-radius-small: 4px;
+  --ui-radius-medium: 6px;
+  --ui-radius-large: 8px;
+
+  --ui-control-height-small: 32px;
+  --ui-control-height-default: 36px;
+  --ui-control-height-large: 38px;
+}
