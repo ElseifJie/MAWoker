@@ -29,3 +29,15 @@ export {
   type SelectProps,
   type TextareaProps,
 } from "./FormControls.js";
+export {
+  PageHeader,
+  SectionHeader,
+  type PageHeaderProps,
+  type SectionHeaderProps,
+} from "./PageHeader.js";
+export { DataTable, type DataTableProps } from "./DataTable.js";
+export {
+  AppShell,
+  type AppShellProps,
+  type NavigationItem,
+} from "./AppShell.js";

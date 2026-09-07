@@ -3,23 +3,111 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { createRef, useState } from "react";
+import { createRef, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, NavLink, useNavigate } from "react-router-dom";
+import { useModalDialog } from "../useModalDialog.js";
 import {
   Alert,
+  AppShell,
   Badge,
   Button,
+  DataTable,
   Dialog,
   EmptyState,
   Field,
   IconButton,
   Input,
+  PageHeader,
   Select,
+  SectionHeader,
   Spinner,
   Textarea,
 } from "./index.js";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function setMobileViewport(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn().mockImplementation((query: string): MediaQueryList => ({
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  );
+}
+
+function TestIcon({
+  "aria-hidden": ariaHidden,
+}: {
+  size?: number;
+  "aria-hidden"?: boolean;
+}) {
+  return <span aria-hidden={ariaHidden}>icon</span>;
+}
+
+function ProgrammaticNavigationButton() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate("/settings")}>
+      Change location
+    </button>
+  );
+}
+
+function PageHeaderFallbackFocusHarness() {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [triggerVisible, setTriggerVisible] = useState(true);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeAfterDeletion = () => {
+    setTriggerVisible(false);
+    setDialogOpen(false);
+  };
+  const dialogRef = useModalDialog({
+    open: dialogOpen,
+    onClose: closeAfterDeletion,
+    returnFocusRef: triggerRef,
+    fallbackFocusRef: headingRef,
+  });
+
+  return (
+    <>
+      <PageHeader eyebrow="Workspace" title="Agents" headingRef={headingRef} />
+      {triggerVisible ? (
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setDialogOpen(true)}
+        >
+          Delete Agent
+        </button>
+      ) : null}
+      {dialogOpen ? (
+        <section
+          ref={dialogRef}
+          role="dialog"
+          aria-label="Delete Agent"
+          tabIndex={-1}
+        >
+          <button type="button" onClick={closeAfterDeletion}>
+            Confirm deletion
+          </button>
+        </section>
+      ) : null}
+    </>
+  );
+}
 
 describe("Button", () => {
   it("uses the primary default-size presentation and button type by default", () => {
@@ -352,5 +440,302 @@ describe("Dialog", () => {
 
     expect(tabContinued).toBe(false);
     expect(dialog).toHaveFocus();
+  });
+});
+
+describe("Page headings", () => {
+  it("places page copy and actions in the shared page header", () => {
+    const headingRef = createRef<HTMLHeadingElement>();
+    render(
+      <PageHeader
+        eyebrow="Workspace"
+        title="Agents"
+        description="Manage the Agents available to your account."
+        actions={<Button>Create Agent</Button>}
+        headingRef={headingRef}
+      />,
+    );
+
+    const heading = screen.getByRole("heading", { level: 1, name: "Agents" });
+    expect(headingRef.current).toBe(heading);
+    expect(screen.getByText("Workspace")).toHaveClass(
+      "ui-page-header__eyebrow",
+    );
+    expect(
+      screen.getByText("Manage the Agents available to your account."),
+    ).toHaveClass("ui-page-header__description");
+    expect(
+      screen.getByRole("button", { name: "Create Agent" }).parentElement,
+    ).toHaveClass("ui-page-header__actions");
+  });
+
+  it("receives fallback focus after the deletion trigger unmounts", async () => {
+    const user = userEvent.setup();
+    render(<PageHeaderFallbackFocusHarness />);
+    const heading = screen.getByRole("heading", { level: 1, name: "Agents" });
+
+    expect(heading).toHaveAttribute("tabindex", "-1");
+    await user.click(screen.getByRole("button", { name: "Delete Agent" }));
+    await user.click(screen.getByRole("button", { name: "Confirm deletion" }));
+
+    expect(
+      screen.queryByRole("button", { name: "Delete Agent" }),
+    ).not.toBeInTheDocument();
+    expect(heading).toHaveFocus();
+  });
+
+  it("renders section copy and actions with a level-two heading", () => {
+    render(
+      <SectionHeader
+        title="Personal Agents"
+        description="Agents available only to you."
+        actions={<Button variant="secondary">Refresh</Button>}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Personal Agents" }),
+    ).toHaveClass("ui-section-header__title");
+    expect(screen.getByText("Agents available only to you.")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Refresh" }).parentElement,
+    ).toHaveClass("ui-section-header__actions");
+  });
+});
+
+describe("DataTable", () => {
+  it("renders a semantic table with an accessible caption", () => {
+    render(
+      <DataTable caption="Platform Agents">
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Research Agent</td>
+          </tr>
+        </tbody>
+      </DataTable>,
+    );
+
+    const table = screen.getByRole("table", { name: "Platform Agents" });
+    expect(table).toHaveClass("ui-data-table", "ui-data-table--standard");
+    expect(table.querySelector("caption")).toHaveTextContent("Platform Agents");
+  });
+
+  it("supports the wide minimum width and native table props", () => {
+    render(
+      <DataTable
+        caption="User quotas"
+        minWidth="wide"
+        aria-describedby="quota-help"
+      >
+        <tbody>
+          <tr>
+            <td>User</td>
+          </tr>
+        </tbody>
+      </DataTable>,
+    );
+
+    expect(screen.getByRole("table", { name: "User quotas" })).toHaveClass(
+      "ui-data-table--wide",
+    );
+    expect(screen.getByRole("table")).toHaveAttribute(
+      "aria-describedby",
+      "quota-help",
+    );
+  });
+});
+
+describe("AppShell", () => {
+  const navigation = [
+    { to: "/", label: "New task", icon: TestIcon },
+    { to: "/agents", label: "Agents", icon: TestIcon },
+  ];
+
+  function renderShell({
+    backdropLabel,
+    children = <button type="button">Page action</button>,
+    closeNavigationLabel,
+    initialPath = "/agents",
+    navigationExtra,
+    openNavigationLabel,
+    onSignOut = vi.fn(),
+  }: {
+    backdropLabel?: string;
+    children?: React.ReactNode;
+    closeNavigationLabel?: string;
+    initialPath?: string;
+    navigationExtra?: React.ReactNode;
+    openNavigationLabel?: string;
+    onSignOut?: () => void;
+  } = {}) {
+    return {
+      onSignOut,
+      ...render(
+        <MemoryRouter initialEntries={[initialPath]}>
+          <AppShell
+            backdropLabel={backdropLabel}
+            brand="Work Agent"
+            closeNavigationLabel={closeNavigationLabel}
+            navigationLabel="Workspace"
+            navigation={navigation}
+            navigationExtra={navigationExtra}
+            openNavigationLabel={openNavigationLabel}
+            onSignOut={onSignOut}
+          >
+            {children}
+          </AppShell>
+        </MemoryRouter>,
+      ),
+    };
+  }
+
+  it("marks the current navigation item active and signs out", async () => {
+    setMobileViewport(false);
+    const user = userEvent.setup();
+    const { onSignOut } = renderShell();
+
+    expect(screen.getByRole("link", { name: "Agents" })).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "New task" })).not.toHaveClass(
+      "active",
+    );
+    expect(screen.getByRole("navigation", { name: "Workspace" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(onSignOut).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the closed mobile drawer out of the keyboard sequence", async () => {
+    setMobileViewport(true);
+    const user = userEvent.setup();
+    renderShell({
+      navigationExtra: <button type="button">Extra navigation action</button>,
+    });
+
+    const toggle = screen.getByRole("button", { name: "Open navigation" });
+    const sidebar = screen.getByRole("complementary", { hidden: true });
+    expect(sidebar).toHaveAttribute("hidden");
+    expect(sidebar).toHaveAttribute("inert");
+    expect(
+      screen.getByRole("link", { name: "Agents", hidden: true }),
+    ).toHaveAttribute("tabindex", "-1");
+    expect(
+      screen.getByRole("button", { name: "Sign out", hidden: true }),
+    ).toHaveAttribute("tabindex", "-1");
+
+    toggle.focus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Page action" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", {
+        name: "Extra navigation action",
+        hidden: true,
+      }),
+    ).not.toHaveFocus();
+  });
+
+  it("opens the mobile drawer and closes it from navigation or the backdrop", async () => {
+    setMobileViewport(true);
+    const user = userEvent.setup();
+    renderShell();
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    expect(
+      screen.getByRole("button", { name: "Close navigation" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("complementary")).not.toHaveAttribute("inert");
+
+    await user.click(screen.getByRole("link", { name: "New task" }));
+    expect(
+      screen.getByRole("button", { name: "Open navigation" }),
+    ).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    await user.click(
+      screen.getByRole("button", { name: "Close navigation drawer" }),
+    );
+    expect(
+      screen.getByRole("button", { name: "Open navigation" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("closes the mobile drawer on Escape and removes its listener", () => {
+    setMobileViewport(true);
+    const addEventListener = vi.spyOn(window, "addEventListener");
+    const removeEventListener = vi.spyOn(window, "removeEventListener");
+    renderShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    const keydownListener = addEventListener.mock.calls.find(
+      ([eventName]) => eventName === "keydown",
+    )?.[1];
+    expect(keydownListener).toBeDefined();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(
+      screen.getByRole("button", { name: "Open navigation" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(removeEventListener).toHaveBeenCalledWith(
+      "keydown",
+      keydownListener,
+    );
+  });
+
+  it("closes the mobile drawer whenever the location changes", () => {
+    setMobileViewport(true);
+    renderShell({
+      children: <ProgrammaticNavigationButton />,
+      navigationExtra: (
+        <NavLink to="/sessions/session-1">Quarterly plan</NavLink>
+      ),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    fireEvent.click(screen.getByRole("link", { name: "Quarterly plan" }));
+    expect(
+      screen.getByRole("button", { name: "Open navigation" }),
+    ).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change location" }));
+    expect(
+      screen.getByRole("button", { name: "Open navigation" }),
+    ).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it.each([
+    {
+      shell: "Workspace",
+      open: "Open navigation",
+      close: "Close navigation",
+      backdrop: "Close navigation",
+    },
+    {
+      shell: "Administration",
+      open: "Open administration navigation",
+      close: "Close administration navigation",
+      backdrop: "Close administration navigation",
+    },
+  ])("supports the existing $shell mobile navigation labels", (labels) => {
+    setMobileViewport(true);
+    renderShell({
+      openNavigationLabel: labels.open,
+      closeNavigationLabel: labels.close,
+      backdropLabel: labels.backdrop,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: labels.open }));
+
+    expect(
+      screen.getByRole("button", { name: labels.close, expanded: true }),
+    ).toHaveAttribute("title", labels.close);
+    const backdrop = document.querySelector(".ui-app-shell__backdrop");
+    expect(backdrop).toHaveAccessibleName(labels.backdrop);
+    expect(backdrop).toHaveAttribute("title", labels.backdrop);
   });
 });
