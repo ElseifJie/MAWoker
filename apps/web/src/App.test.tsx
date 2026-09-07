@@ -1271,6 +1271,9 @@ describe("Session page", () => {
     renderApp(`/sessions/${sessionId}`);
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Quarterly plan" });
+    await waitFor(() => {
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
     const source = MockEventSource.instances[0]!;
     act(() => {
       source.emit("agent.message", {

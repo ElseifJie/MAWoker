@@ -126,13 +126,6 @@ a {
   background: #147d78;
 }
 
-.brand-mark.small {
-  width: 30px;
-  height: 30px;
-  margin: 0;
-  border-radius: 8px;
-}
-
 .eyebrow,
 .section-label {
   color: #728087;
@@ -190,137 +183,31 @@ select:not(.ui-select):hover {
   border-color: #aebbbb;
 }
 
-.primary-button,
-.secondary-button,
-.text-button,
-.danger-button {
-  display: inline-flex;
-  min-height: 38px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border-radius: 8px;
-  font-weight: 650;
-}
-
-.primary-button {
-  border: 1px solid #116d69;
-  color: #ffffff;
-  background: #147d78;
-}
-
-.primary-button:hover:not(:disabled) {
-  background: #116d69;
-}
-
-.secondary-button {
-  padding: 0 14px;
-  border: 1px solid #cbd4d5;
-  background: #ffffff;
-}
-
-.text-button {
-  padding: 0 8px;
-  border: 0;
-  color: #1b6f6b;
-  background: transparent;
-}
-
-.text-button:hover:not(:disabled) {
-  background: #e8f2f1;
-}
-
-.danger-button {
-  padding: 0 14px;
-  border: 1px solid #a23e35;
-  color: #ffffff;
-  background: #a23e35;
-}
-
-.danger-button:hover:not(:disabled) {
-  background: #8f382f;
-}
-
-.danger {
-  color: #a23e35;
-}
-
-.action-button {
-  padding: 0 15px;
-}
-
-.compact-button {
-  min-height: 34px;
-  padding: 0 11px;
-  font-size: 0.8rem;
-}
-
-.text-button.compact {
-  min-height: 28px;
-  margin-left: auto;
-  font-size: 0.78rem;
-}
-
 .full-width {
   width: 100%;
   margin-top: 7px;
 }
 
-.form-note,
-.form-error {
+.form-note {
   min-height: 42px;
   margin: 15px 0 0;
+  color: #597077;
   font-size: 0.82rem;
   line-height: 1.45;
 }
 
-.form-note {
-  color: #597077;
-}
-
-.form-error,
-.upload-error,
-.blocker {
+.upload-error {
   color: #a23e35;
 }
 
-.sidebar-brand {
-  display: flex;
-  height: 64px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 17px;
-  font-size: 0.92rem;
-  font-weight: 750;
-}
-
-.navigation-link,
 .session-link {
   text-decoration: none;
 }
 
-.navigation-link {
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  border-radius: 7px;
-  color: #4a585d;
-  font-size: 0.87rem;
-  font-weight: 560;
-}
-
-.navigation-link:hover,
-.navigation-link.active,
 .session-link:hover,
 .session-link.active {
   color: #173f3e;
   background: #dfeae8;
-}
-
-.navigation-link.active {
-  font-weight: 700;
 }
 
 .session-navigation {
@@ -397,27 +284,6 @@ select:not(.ui-select):hover {
 
 .status-terminated::before {
   background: #a23e35;
-}
-
-.icon-button {
-  display: inline-grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 auto;
-  padding: 0;
-  place-items: center;
-  border: 1px solid #cbd4d5;
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.icon-button:hover:not(:disabled) {
-  border-color: #aebbbb;
-  background: #f4f7f7;
-}
-
-.sidebar-logout {
-  margin: 12px;
 }
 
 .admin-page {
@@ -640,22 +506,11 @@ select:not(.ui-select):hover {
   margin: 9px 0 0;
 }
 
-.page-heading-actions,
-.dialog-heading,
 .session-header,
 .session-meta,
 .session-header-actions {
   display: flex;
   align-items: center;
-}
-
-.page-heading-actions {
-  justify-content: space-between;
-  gap: 24px;
-}
-
-.page-heading-actions > div {
-  min-width: 0;
 }
 
 .agent-section + .agent-section {
@@ -757,118 +612,6 @@ select:not(.ui-select):hover {
   line-height: 1.5;
 }
 
-.state-label {
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 700;
-}
-
-.inline-alert {
-  display: flex;
-  max-width: 680px;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1px solid #e6c8c4;
-  border-radius: 8px;
-  color: #8f382f;
-  background: #fff8f7;
-  font-size: 0.82rem;
-}
-
-.empty-state {
-  display: flex;
-  min-height: 100px;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  padding: 22px;
-  border: 1px dashed #cbd4d5;
-  border-radius: 10px;
-  color: #748187;
-  font-size: 0.82rem;
-  text-align: center;
-}
-
-.empty-state p {
-  margin: 0;
-}
-
-.dialog-backdrop {
-  position: fixed;
-  z-index: 60;
-  inset: 0;
-  display: grid;
-  padding: 20px;
-  place-items: center;
-  background: rgb(18 29 31 / 42%);
-}
-
-.dialog-panel {
-  width: min(100%, 430px);
-  max-height: calc(100vh - 40px);
-  overflow-y: auto;
-  padding: 22px;
-  border: 1px solid #d5dddd;
-  border-radius: 12px;
-  background: #ffffff;
-  box-shadow: 0 20px 70px rgb(22 38 39 / 20%);
-}
-
-.editor-dialog {
-  width: min(100%, 600px);
-}
-
-.dialog-heading {
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 18px;
-}
-
-.dialog-heading .eyebrow {
-  margin: 0 0 5px;
-}
-
-.dialog-heading h2,
-.dialog-panel > h2 {
-  margin: 0;
-  font-size: 1.15rem;
-}
-
-.dialog-panel > p {
-  color: #617077;
-  font-size: 0.85rem;
-  line-height: 1.5;
-}
-
-.stacked-form {
-  display: grid;
-  gap: 14px;
-}
-
-.stacked-form label,
-.confirmation-field {
-  display: grid;
-  gap: 6px;
-  color: #435157;
-  font-size: 0.8rem;
-  font-weight: 650;
-}
-
-.stacked-form textarea {
-  min-height: 0;
-  border: 1px solid #cbd4d5;
-  border-radius: 8px;
-  resize: vertical;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 9px;
-  margin-top: 8px;
-}
-
 .session-page {
   display: grid;
   width: min(100%, 1040px);
@@ -921,11 +664,6 @@ select:not(.ui-select):hover {
   position: relative;
   flex: 0 0 auto;
   gap: 8px;
-}
-
-.state-label.pending {
-  color: #8a651b;
-  background: #f7eed9;
 }
 
 .session-connection-badge {
@@ -1125,10 +863,6 @@ select:not(.ui-select):hover {
 .tool-event p {
   padding: 0 11px 10px 33px;
   color: #69767c;
-}
-
-.session-delivery {
-  max-width: none;
 }
 
 .session-composer,
@@ -1515,16 +1249,6 @@ select:not(.ui-select):hover {
   font-size: 0.84rem;
 }
 
-.spinner {
-  animation: spin 0.85s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @media (max-width: 1100px) {
   .admin-quota-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1667,13 +1391,11 @@ select:not(.ui-select):hover {
     padding: 10px 0;
   }
 
-  .page-heading-actions,
   .session-header {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .page-heading-actions .action-button,
   .artifact-filter {
     width: 100%;
   }
@@ -1725,10 +1447,6 @@ select:not(.ui-select):hover {
     grid-column: 2;
     grid-row: 2;
     justify-self: end;
-  }
-
-  .dialog-actions > button {
-    flex: 1;
   }
 }
 
