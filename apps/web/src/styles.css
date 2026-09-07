@@ -108,9 +108,9 @@ a {
 .login-panel {
   width: min(100%, 390px);
   padding: 32px;
-  border: 1px solid #d8dfdf;
-  border-radius: 14px;
-  background: #ffffff;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-large);
+  background: var(--ui-color-surface);
   box-shadow: 0 16px 48px rgb(33 52 52 / 8%);
   text-align: left;
 }
@@ -152,39 +152,31 @@ a {
   color: #69767c;
 }
 
-.login-panel > .muted {
-  margin: 0 0 26px;
-  line-height: 1.55;
-}
-
 .login-panel form {
   display: grid;
-  gap: 9px;
+  gap: var(--ui-space-3);
 }
 
-.login-panel label,
-.agent-picker > span {
-  color: #445157;
-  font-size: 0.82rem;
-  font-weight: 650;
+.login-feedback {
+  margin-top: var(--ui-space-4);
 }
 
-input,
-select,
-textarea {
+input:not(.ui-input),
+select:not(.ui-select),
+textarea:not(.ui-textarea) {
   width: 100%;
   border: 1px solid #cbd4d5;
   border-radius: 8px;
   background: #ffffff;
 }
 
-input,
-select {
+input:not(.ui-input),
+select:not(.ui-select) {
   height: 42px;
   padding: 0 12px;
 }
 
-textarea {
+textarea:not(.ui-textarea) {
   min-height: 150px;
   padding: 15px;
   border: 0;
@@ -193,8 +185,8 @@ textarea {
   resize: vertical;
 }
 
-input:hover,
-select:hover {
+input:not(.ui-input):hover,
+select:not(.ui-select):hover {
   border-color: #aebbbb;
 }
 
@@ -292,23 +284,6 @@ select:hover {
   color: #a23e35;
 }
 
-.workspace {
-  display: grid;
-  min-height: 100vh;
-  grid-template-columns: 248px minmax(0, 1fr);
-}
-
-.sidebar {
-  position: fixed;
-  z-index: 30;
-  inset: 0 auto 0 0;
-  display: flex;
-  width: 248px;
-  flex-direction: column;
-  border-right: 1px solid #dfe5e5;
-  background: #eef2f1;
-}
-
 .sidebar-brand {
   display: flex;
   height: 64px;
@@ -317,19 +292,6 @@ select:hover {
   padding: 0 17px;
   font-size: 0.92rem;
   font-weight: 750;
-}
-
-.workspace-navigation {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  padding: 5px 10px 10px;
-}
-
-.navigation-group {
-  display: grid;
-  gap: 3px;
 }
 
 .navigation-link,
@@ -359,15 +321,6 @@ select:hover {
 
 .navigation-link.active {
   font-weight: 700;
-}
-
-.coming-soon {
-  margin-left: auto;
-  color: #7c6a38;
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .session-navigation {
@@ -465,11 +418,6 @@ select:hover {
 
 .sidebar-logout {
   margin: 12px;
-}
-
-.workspace-content {
-  min-width: 0;
-  grid-column: 2;
 }
 
 .admin-workspace {
@@ -655,6 +603,17 @@ select:hover {
   min-height: 100vh;
   margin: 0 auto;
   padding: 72px 44px;
+}
+
+.ui-app-shell__main > .page {
+  min-height: 0;
+  padding: 0;
+}
+
+.ui-app-shell__main:has(> .session-page) {
+  width: 100%;
+  max-width: none;
+  padding: 0;
 }
 
 .page-heading {
@@ -1337,7 +1296,7 @@ select:hover {
 .composer {
   overflow: hidden;
   border: 1px solid #d5dddd;
-  border-radius: 12px;
+  border-radius: var(--ui-radius-large);
   background: #ffffff;
   box-shadow: 0 10px 32px rgb(35 57 57 / 6%);
 }
@@ -1351,13 +1310,12 @@ select:hover {
   border-bottom: 1px solid #edf0f0;
 }
 
-.agent-picker {
-  display: grid;
+.composer-toolbar > .ui-field {
   width: min(100%, 320px);
-  gap: 4px;
 }
 
-.agent-picker select {
+.agent-picker {
+  width: 100%;
   height: 32px;
   padding: 0 30px 0 9px;
   border: 0;
@@ -1366,9 +1324,30 @@ select:hover {
   font-weight: 650;
 }
 
+.composer > .ui-field {
+  gap: 0;
+}
+
+.composer > .ui-field > .ui-field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.composer .ui-textarea {
+  min-height: 150px;
+  padding: 15px;
+  border: 0;
+  border-radius: 0;
+}
+
 .attachment-button {
-  width: 34px;
-  height: 34px;
   margin-left: auto;
 }
 
@@ -1424,9 +1403,11 @@ select:hover {
   white-space: nowrap;
 }
 
+.upload-list .ui-button {
+  margin-left: auto;
+}
+
 .small-control {
-  width: 28px;
-  height: 28px;
   margin-left: auto;
   border: 0;
   background: transparent;
@@ -1457,6 +1438,12 @@ select:hover {
   gap: 7px;
 }
 
+.composer-feedback .ui-alert {
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+}
+
 .send-button {
   border-color: #116d69;
   color: #ffffff;
@@ -1469,12 +1456,7 @@ select:hover {
 }
 
 .availability-note {
-  display: flex;
   max-width: 560px;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 15px 0;
-  border-block: 1px solid #dfe5e5;
 }
 
 .availability-note strong {
@@ -1528,12 +1510,10 @@ select:hover {
 }
 
 @media (max-width: 760px) {
-  .workspace,
   .admin-workspace {
     display: block;
   }
 
-  .sidebar,
   .admin-sidebar {
     width: min(84vw, 280px);
     box-shadow: 12px 0 32px rgb(20 35 35 / 15%);
@@ -1543,7 +1523,6 @@ select:hover {
     visibility: hidden;
   }
 
-  .sidebar.is-open,
   .admin-sidebar.is-open {
     pointer-events: auto;
     transform: translateX(0);
@@ -1562,7 +1541,6 @@ select:hover {
     background: rgb(18 29 31 / 32%);
   }
 
-  .workspace-content,
   .admin-content {
     width: 100%;
   }
@@ -1625,7 +1603,7 @@ select:hover {
   }
 
   .agent-picker {
-    min-width: 0;
+    width: 100%;
   }
 
   .composer-feedback {
