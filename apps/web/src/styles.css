@@ -5,14 +5,7 @@
 :root {
   color: var(--ui-color-text);
   background: var(--ui-color-surface-canvas);
-  font-family:
-    Inter,
-    ui-sans-serif,
-    system-ui,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--ui-font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -206,90 +199,208 @@ select:not(.ui-select):hover {
   color: var(--ui-color-danger);
 }
 
-.session-link {
+/* Sidebar Sessions: pinned first, then time buckets, each row with its menu. */
+.session-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: var(--ui-space-2);
+}
+
+.session-list__search {
+  padding-inline: 2px;
+}
+
+.session-list__error {
+  margin: 0 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--ui-color-danger);
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-danger);
+  background: var(--ui-color-danger-subtle);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.session-list__empty {
+  margin: 2px 9px;
+  color: var(--ui-color-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.session-group {
+  display: grid;
+  gap: 2px;
+}
+
+.session-group__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0 9px;
+  color: var(--ui-color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.session-group__label > span {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-group__toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.session-group__list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-row {
+  display: flex;
+  align-items: center;
+  border-radius: var(--ui-radius-small);
+}
+
+.session-row:hover {
+  background: var(--ui-color-surface-hover);
+}
+
+.session-row__link {
+  display: flex;
+  min-width: 0;
+  min-height: var(--ui-control-height-default);
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 0 9px;
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text-muted);
+  font-size: 0.8125rem;
   text-decoration: none;
 }
 
-.session-link:hover,
-.session-link.active {
-  color: var(--ui-color-accent);
-  background: var(--ui-color-accent-subtle);
+.session-row__link:hover,
+.session-row__link.active {
+  color: var(--ui-color-text);
 }
 
-.session-navigation {
-  min-height: 0;
-  margin-top: 22px;
-  overflow-y: auto;
+.session-row__link.active {
+  font-weight: 600;
 }
 
-.session-navigation:first-of-type {
-  flex: 1 1 auto;
+.session-row__dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border: 1px solid var(--ui-color-border-strong);
+  border-radius: 50%;
 }
 
-.archived-navigation {
-  max-height: 34%;
-  flex: 0 1 auto;
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--ui-color-border);
+.session-row__dot--running {
+  border-color: var(--ui-color-success);
+  background: var(--ui-color-success);
 }
 
-.section-label {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 10px 8px;
+.session-row__dot--rescheduled {
+  border-color: var(--ui-color-warning);
+  background: var(--ui-color-warning);
 }
 
-.empty-navigation {
-  margin: 8px 10px;
-  color: var(--ui-color-text-muted);
-  font-size: 0.78rem;
+.session-row__dot--terminated {
+  border-color: var(--ui-color-danger);
+  background: var(--ui-color-danger);
 }
 
-.session-link {
-  display: grid;
-  min-height: 48px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: 7px;
-}
-
-.session-title {
+.session-row__title {
   overflow: hidden;
-  font-size: 0.82rem;
+  flex: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.session-row__menu {
+  position: relative;
+  flex: 0 0 auto;
+  padding-right: 3px;
+}
+
+.session-row__busy {
+  display: inline-grid;
+  padding-right: 10px;
+  place-items: center;
   color: var(--ui-color-text-muted);
-  font-size: 0.68rem;
-  white-space: nowrap;
 }
 
-.status::before {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ui-color-text-muted);
-  content: "";
+/* Hover-revealed only where hover exists; touch keeps the trigger visible. */
+@media (hover: hover) {
+  .session-row__menu-trigger {
+    opacity: 0;
+  }
+
+  .session-row:hover .session-row__menu-trigger,
+  .session-row__menu-trigger:focus-visible,
+  .session-row__menu-trigger[aria-expanded="true"] {
+    opacity: 1;
+  }
 }
 
-.status-running::before {
-  background: var(--ui-color-accent);
+/* Viewport-anchored so the panel escapes the sidebar's scroll container. */
+.session-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 180px;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-medium);
+  background: var(--ui-color-surface);
+  box-shadow: var(--ui-shadow-overlay);
 }
 
-.status-rescheduled::before {
-  background: var(--ui-color-warning);
+.session-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text);
+  background: transparent;
+  font-size: 0.8125rem;
+  text-align: left;
 }
 
-.status-terminated::before {
-  background: var(--ui-color-danger);
+.session-menu__item:hover {
+  background: var(--ui-color-surface-hover);
+}
+
+.session-menu__item--danger {
+  color: var(--ui-color-danger);
+}
+
+.session-menu__item--danger:hover {
+  background: var(--ui-color-danger-subtle);
 }
 
 .admin-page {
@@ -305,8 +416,12 @@ select:not(.ui-select):hover {
   table-layout: fixed;
 }
 
+.admin-agent-table thead th {
+  white-space: nowrap;
+}
+
 .admin-agent-table thead th:nth-child(1) {
-  width: 22%;
+  width: 24%;
 }
 
 .admin-agent-table thead th:nth-child(2) {
@@ -314,11 +429,11 @@ select:not(.ui-select):hover {
 }
 
 .admin-agent-table thead th:nth-child(3) {
-  width: 14%;
+  width: 16%;
 }
 
 .admin-agent-table thead th:nth-child(4) {
-  width: 16%;
+  width: 12%;
 }
 
 .admin-agent-table thead th:nth-child(5) {
@@ -351,8 +466,13 @@ select:not(.ui-select):hover {
 
 .admin-row-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: var(--ui-space-1);
+}
+
+.admin-row-actions .ui-button {
+  white-space: nowrap;
 }
 
 .admin-delete-action {
@@ -404,14 +524,34 @@ select:not(.ui-select):hover {
 .admin-user-record {
   display: grid;
   min-width: 0;
-  grid-template-columns:
-    minmax(0, 0.8fr) minmax(0, 1fr)
-    minmax(0, 2fr);
-  gap: var(--ui-space-5);
+  gap: var(--ui-space-4);
   padding: var(--ui-space-4);
   border: 1px solid var(--ui-color-border);
-  border-radius: var(--ui-radius-large);
+  border-radius: var(--ui-radius-medium);
   background: var(--ui-color-surface);
+}
+
+/* The identity row reads as a header: who the account is, and what you can do. */
+.admin-user-record > .admin-user-identity {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-space-3);
+  padding-bottom: var(--ui-space-4);
+  border-bottom: 1px solid var(--ui-color-border);
+}
+
+/* Kept for the section's accessible name, not for reading. */
+.admin-user-record > .admin-user-identity .admin-user-group__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
 }
 
 .admin-user-group {
@@ -429,8 +569,9 @@ select:not(.ui-select):hover {
 
 .admin-user-identity__summary {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1 1 240px;
+  flex-direction: column;
   gap: var(--ui-space-2);
 }
 
@@ -440,6 +581,7 @@ select:not(.ui-select):hover {
   overflow-wrap: anywhere;
   color: var(--ui-color-text);
   font-size: 0.875rem;
+  font-weight: 600;
   line-height: 1.4;
 }
 
@@ -463,7 +605,7 @@ select:not(.ui-select):hover {
 .admin-quota-fields {
   display: grid;
   min-width: 0;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--ui-space-2);
 }
 
@@ -481,11 +623,26 @@ select:not(.ui-select):hover {
   margin-top: var(--ui-space-3);
 }
 
+/* Wide screens put the default Agent and the quotas side by side per account. */
+@media (min-width: 1024px) {
+  .admin-user-record {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  }
+
+  .admin-user-record > .admin-user-identity {
+    grid-column: 1 / -1;
+  }
+
+  .admin-quota-fields {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 .page {
-  width: min(100%, 980px);
+  width: min(100%, 1060px);
   min-height: 100vh;
   margin: 0 auto;
-  padding: 72px 44px;
+  padding: 64px 40px;
 }
 
 .ui-app-shell__main > .page {
@@ -550,6 +707,22 @@ select:not(.ui-select):hover {
   color: var(--ui-color-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
+}
+
+.workspace-rail__stale {
+  margin: 0;
+  color: var(--ui-color-warning);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.workspace-rail__stale-retry {
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  text-decoration: underline;
 }
 
 .workspace-rail__todos {
@@ -1227,12 +1400,22 @@ select:not(.ui-select):hover {
 
 .transcript__bubble > strong {
   display: block;
-  font-size: 0.73rem;
+  margin-bottom: 2px;
+  color: var(--ui-color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
+/*
+ * A filled chip for what you wrote, plain text for what the Agent answered:
+ * the asymmetry is what makes the two voices readable at a glance.
+ */
 .transcript__row--user .transcript__bubble {
-  color: var(--ui-color-text-inverse);
-  background: var(--ui-color-accent);
+  border: 1px solid var(--ui-color-border);
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface-subtle);
 }
 
 .transcript__answer {
@@ -1248,8 +1431,10 @@ select:not(.ui-select):hover {
 }
 
 .transcript__answer .transcript__bubble {
-  border: 1px solid var(--ui-color-border);
-  background: var(--ui-color-surface);
+  max-width: 100%;
+  padding-inline: 0;
+  border: 0;
+  background: transparent;
 }
 
 .transcript__row--notice {

@@ -17,7 +17,9 @@ import type {
   ArkSessionInput,
   SessionStatus,
 } from "./types.js";
-import { Readable } from "node:stream";
+
+/** The bucket the stub pretends Ark exported into; mirrors the real `tos.bucket`. */
+export const stubExportBucket = "ark-exports";
 
 type InjectedFailure =
   | Extract<
@@ -59,7 +61,6 @@ const safeOperations = new Set<ArkOperation>([
   "getSession",
   "listEvents",
   "streamEvents",
-  "downloadFile",
   "listSessionResources",
   "listArtifacts",
 ]);
@@ -328,19 +329,6 @@ export class InMemoryArkGateway implements ArkGateway {
     return structuredClone(file);
   }
 
-  async downloadFile(
-    fileId: string,
-    options?: ArkRequestOptions,
-  ): Promise<{ stream: Readable; contentLength: number }> {
-    this.record("downloadFile", { fileId }, options);
-    const bytes = this.fileBytes.get(fileId);
-    if (!bytes) throw new ArkGatewayError("not_found");
-    return {
-      stream: Readable.from([new Uint8Array(bytes)]),
-      contentLength: bytes.byteLength,
-    };
-  }
-
   async deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void> {
     this.record("deleteFile", { fileId }, options);
     if (!this.files.has(fileId) && !this.fileBytes.has(fileId)) {
@@ -393,15 +381,42 @@ export class InMemoryArkGateway implements ArkGateway {
     const artifact: ArkArtifact = {
       id: `artifact-${++this.counters.artifact}`,
       sessionId,
-      mountPath: `/mnt/session/outputs/${input.name}`,
       name: input.name,
       contentType: input.contentType,
       size: input.bytes.byteLength,
       createdAt: this.now().toISOString(),
+      tos: {
+        bucket: stubExportBucket,
+        objectKey: `ark_ma/outputs/${sessionId}/${input.name}`,
+      },
     };
     this.artifacts.get(sessionId)?.push(artifact);
     this.fileBytes.set(artifact.id, new Uint8Array(input.bytes));
     return structuredClone(artifact);
+  }
+
+  /**
+   * Test hook: the bytes and TOS location the stub pretends Ark exported, so a
+   * harness can prime whichever storage it wires up.
+   */
+  artifactExport(
+    artifactId: string,
+  ): { bucket: string; objectKey: string; bytes: Uint8Array } | undefined {
+    const bytes = this.fileBytes.get(artifactId);
+    if (!bytes) return undefined;
+    for (const artifacts of this.artifacts.values()) {
+      const artifact = artifacts.find(
+        (candidate) => candidate.id === artifactId,
+      );
+      if (artifact?.tos) {
+        return {
+          bucket: artifact.tos.bucket,
+          objectKey: artifact.tos.objectKey,
+          bytes,
+        };
+      }
+    }
+    return undefined;
   }
 
   private record(

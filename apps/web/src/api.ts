@@ -1,4 +1,4 @@
-import type { FeatureCapabilities } from "@pwa/contracts";
+import type { FeatureCapabilities, UiEvent } from "@pwa/contracts";
 
 export type UserRole = "user" | "admin";
 export type SessionStatus = "idle" | "running" | "rescheduled" | "terminated";
@@ -48,6 +48,7 @@ export interface SessionSummary {
   error: { code: string; recoverable: boolean } | null;
   deletionState: "none" | "pending" | "deletion_failed" | "deleted";
   archivedAt: string | null;
+  pinnedAt: string | null;
   lastEventAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -332,6 +333,22 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  renameSession: (id: string, title: string) =>
+    request<SessionSummary>(`/sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+  pinSession: (id: string) =>
+    request<SessionSummary>(`/sessions/${id}/pin`, {
+      method: "PUT",
+      body: JSON.stringify({}),
+    }),
+  unpinSession: (id: string) =>
+    request<SessionSummary>(`/sessions/${id}/pin`, { method: "DELETE" }),
+  getSessionTranscript: (id: string) =>
+    request<{ events: UiEvent[] }>(
+      `/sessions/${encodeURIComponent(id)}/transcript`,
+    ),
   getUsage: () => request<UsageSummary>("/usage"),
   upload: (file: File) => {
     const body = new FormData();

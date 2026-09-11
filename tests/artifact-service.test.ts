@@ -20,6 +20,33 @@ async function collect(stream: NodeJS.ReadableStream): Promise<Uint8Array> {
   return new Uint8Array(Buffer.concat(chunks));
 }
 
+const exportBucket = "ark-exports";
+
+/** The TOS location Ark reports for an export; mirrors `ArkArtifact.tos`. */
+function exportLocation(arkFileId: string): {
+  bucket: string;
+  objectKey: string;
+} {
+  return { bucket: exportBucket, objectKey: `ark/outputs/env-1/${arkFileId}` };
+}
+
+function exportEntry(
+  arkFileId: string,
+  name: string,
+  size: number,
+  overrides: { sessionId?: string; contentType?: string } = {},
+) {
+  return {
+    id: arkFileId,
+    sessionId: overrides.sessionId ?? "ark-session-1",
+    name,
+    contentType: overrides.contentType ?? "text/plain",
+    size,
+    createdAt: now.toISOString(),
+    tos: exportLocation(arkFileId),
+  };
+}
+
 function setup() {
   let nextId = 0;
   const records = new Map<string, ArtifactRecord>();
@@ -91,6 +118,11 @@ function setup() {
         ? { id, arkSessionId: "ark-session-1" }
         : undefined;
     },
+    async listInputFileIds(ownerUserId, sourceSessionId) {
+      return ownerUserId === userId && sourceSessionId === sessionId
+        ? ["ark-input-1"]
+        : [];
+    },
     async findBySource(ownerUserId, sourceSessionId, arkFileId) {
       return [...records.values()].find(
         (record) =>
@@ -145,45 +177,36 @@ function setup() {
   };
   const ark = {
     listArtifacts: vi.fn(async () => [
+      exportEntry("ark-output-1", "report.txt", 5),
+      // A Session input: same purpose, but recorded as an input for the Session.
+      exportEntry("ark-input-1", "private.txt", 6),
+      // Ark reported an export with no storage location, so it is unreachable.
       {
-        id: "ark-output-1",
+        id: "ark-unlocated-1",
         sessionId: "ark-session-1",
-        mountPath: "/mnt/session/outputs/report.txt",
-        name: "report.txt",
+        name: "lost.txt",
         contentType: "text/plain",
-        size: 5,
+        size: 0,
         createdAt: now.toISOString(),
+        tos: null,
       },
-      {
-        id: "ark-input-1",
-        sessionId: "ark-session-1",
-        mountPath: "/mnt/session/inputs/private.txt",
-        name: "private.txt",
-        contentType: "text/plain",
-        size: 6,
-        createdAt: now.toISOString(),
-      },
-      {
-        id: "ark-traversal-1",
-        sessionId: "ark-session-1",
-        mountPath: "/mnt/session/outputs/../inputs/private.txt",
-        name: "private.txt",
-        contentType: "text/plain",
-        size: 6,
-        createdAt: now.toISOString(),
-      },
+      // Belongs to another Session and must never sync into this one.
+      exportEntry("ark-other-session-1", "elsewhere.txt", 1, {
+        sessionId: "ark-session-2",
+      }),
     ]),
-    downloadFile: vi.fn(async (fileId: string) => {
-      const bytes = new TextEncoder().encode(
-        fileId === "ark-output-1" ? "hello" : "secret",
-      );
-      return {
-        stream: Readable.from([bytes]),
-        contentLength: bytes.byteLength,
-      };
-    }),
   };
   const storage = new InMemoryArtifactStorage();
+  storage.putExternal(
+    exportLocation("ark-output-1"),
+    new TextEncoder().encode("hello"),
+    "text/plain",
+  );
+  storage.putExternal(
+    exportLocation("ark-input-1"),
+    new TextEncoder().encode("secret"),
+    "text/plain",
+  );
   const service = new ArtifactService({
     repository,
     ark,
@@ -202,6 +225,7 @@ function setup() {
     repository,
     ark,
     storage,
+    readExternal: vi.spyOn(storage, "readExternal"),
     records,
     stageCleanup,
     commitCandidate,
@@ -221,20 +245,15 @@ describe("ArtifactService", () => {
       }),
     ).resolves.toEqual([expect.objectContaining({ id: artifactId })]);
     state.ark.listArtifacts.mockResolvedValueOnce([
-      {
-        id: "ark-output-1",
-        sessionId: "ark-session-1",
-        mountPath: "/mnt/session/outputs/report-renamed.txt",
-        name: "report-renamed.txt",
+      exportEntry("ark-output-1", "report-renamed.txt", 7, {
         contentType: "text/markdown",
-        size: 7,
-        createdAt: "2026-09-06T01:00:00.000Z",
-      },
+      }),
     ]);
-    state.ark.downloadFile.mockResolvedValueOnce({
-      stream: Readable.from([new TextEncoder().encode("updated")]),
-      contentLength: 7,
-    });
+    state.storage.putExternal(
+      exportLocation("ark-output-1"),
+      new TextEncoder().encode("updated"),
+      "text/markdown",
+    );
 
     const synced = await state.service.syncSession(sessionId, {
       userId,
@@ -250,7 +269,7 @@ describe("ArtifactService", () => {
       }),
     ]);
     expect(state.records).toHaveLength(1);
-    expect(state.ark.downloadFile).toHaveBeenCalledTimes(2);
+    expect(state.readExternal).toHaveBeenCalledTimes(2);
     expect(
       await collect(
         await state.storage.openRead(
@@ -287,11 +306,13 @@ describe("ArtifactService", () => {
         }
       })(),
     );
-    state.ark.downloadFile.mockResolvedValueOnce({
-      stream: source,
-      contentLength: chunk.length * chunkCount,
-    });
+    const readExternal = vi.fn(async () => source);
     const controller = new AbortController();
+    state.ark.listArtifacts.mockResolvedValueOnce([
+      exportEntry("ark-output-1", "huge.bin", chunk.length * chunkCount, {
+        contentType: "application/octet-stream",
+      }),
+    ]);
     const write = vi.fn(
       async (
         _key: string,
@@ -299,6 +320,7 @@ describe("ArtifactService", () => {
         metadata: { contentType: string; contentLength?: number },
         signal?: AbortSignal,
       ) => {
+        // The length comes from Ark's own metadata, not from the stream.
         expect(metadata.contentLength).toBe(chunk.length * chunkCount);
         expect(signal).toBe(controller.signal);
         let consumed = 0;
@@ -314,6 +336,7 @@ describe("ArtifactService", () => {
       storage: {
         write,
         openRead: state.storage.openRead.bind(state.storage),
+        readExternal,
         delete: state.storage.delete.bind(state.storage),
       },
       createId: () => artifactId,
@@ -327,19 +350,15 @@ describe("ArtifactService", () => {
 
     expect(write).toHaveBeenCalledOnce();
     expect(produced).toBe(chunkCount);
-    expect(state.ark.downloadFile).toHaveBeenCalledWith(
-      "ark-output-1",
-      expect.objectContaining({ signal: controller.signal }),
+    expect(readExternal).toHaveBeenCalledWith(
+      exportLocation("ark-output-1"),
+      controller.signal,
     );
   });
 
   it("cancels an in-flight Ark-to-storage transfer", async () => {
     const state = setup();
     const source = new Readable({ read() {} });
-    state.ark.downloadFile.mockResolvedValueOnce({
-      stream: source,
-      contentLength: 1024,
-    });
     const controller = new AbortController();
     const write = vi.fn(
       async (
@@ -362,6 +381,7 @@ describe("ArtifactService", () => {
     const storage = {
       write,
       openRead: state.storage.openRead.bind(state.storage),
+      readExternal: vi.fn(async () => source),
       delete: state.storage.delete.bind(state.storage),
     };
     const service = new ArtifactService({
@@ -447,14 +467,14 @@ describe("ArtifactService", () => {
     });
     await expect(state.service.list(userId)).resolves.toEqual([]);
 
-    state.ark.downloadFile.mockClear();
+    state.readExternal.mockClear();
     await expect(
       state.service.syncSession(sessionId, {
         userId,
         requestId: "request-after-delete",
       }),
     ).resolves.toEqual([]);
-    expect(state.ark.downloadFile).not.toHaveBeenCalled();
+    expect(state.readExternal).not.toHaveBeenCalled();
     expect(state.storage.keys()).toEqual([]);
     await expect(
       state.service.deleteStored(artifactId, userId),
@@ -538,20 +558,13 @@ describe("ArtifactService", () => {
     const oldKey = indexed.tosObjectKey;
 
     state.ark.listArtifacts.mockResolvedValueOnce([
-      {
-        id: "ark-output-1",
-        sessionId: "ark-session-1",
-        mountPath: "/mnt/session/outputs/report.txt",
-        name: "report.txt",
-        contentType: "text/plain",
-        size: 7,
-        createdAt: "2026-09-06T01:00:00.000Z",
-      },
+      exportEntry("ark-output-1", "report.txt", 7),
     ]);
-    state.ark.downloadFile.mockResolvedValueOnce({
-      stream: Readable.from([new TextEncoder().encode("updated")]),
-      contentLength: 7,
-    });
+    state.storage.putExternal(
+      exportLocation("ark-output-1"),
+      new TextEncoder().encode("updated"),
+      "text/plain",
+    );
     state.repository.commitCandidate = vi.fn(async () => {
       throw new Error("database unavailable");
     });

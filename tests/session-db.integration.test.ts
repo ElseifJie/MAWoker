@@ -1856,4 +1856,123 @@ describe("Session database integration", () => {
     ).resolves.toMatchObject({ status: "running" });
     await database.close();
   });
+
+  it("renames and pins a Session, listing pinned first", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const older = createIntent(userId, agentId);
+    const newer = createIntent(userId, agentId);
+    for (const intent of [older, newer]) {
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+        arkSessionId: `ark-${intent.id}`,
+        arkAgentId: intent.arkAgentId,
+        agentVersion: intent.agentVersion,
+        status: "idle",
+      });
+    }
+
+    await expect(
+      repositories.sessionLifecycle.rename(userId, older.id, "Renamed plan"),
+    ).resolves.toMatchObject({ id: older.id, title: "Renamed plan" });
+    // Another tenant cannot touch it, and learns nothing about it.
+    await expect(
+      repositories.sessionLifecycle.rename(id(), older.id, "Hijacked"),
+    ).resolves.toBeUndefined();
+    await expect(
+      repositories.sessionLifecycle.setPinned(id(), older.id, new Date()),
+    ).resolves.toBeUndefined();
+
+    const pinnedAt = new Date("2026-09-06T02:00:00.000Z");
+    await expect(
+      repositories.sessionLifecycle.setPinned(userId, older.id, pinnedAt),
+    ).resolves.toMatchObject({ pinnedAt });
+
+    const listed = await repositories.sessionLifecycle.listOwned(userId, false);
+    expect(listed.map((record) => record.id)).toEqual([older.id, newer.id]);
+    await expect(
+      repositories.sessionLifecycle.setPinned(userId, older.id, null),
+    ).resolves.toMatchObject({ pinnedAt: null });
+    await database.close();
+  });
+
+  it("stores a Session's projected events once, in order, per tenant", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: `ark-${intent.id}`,
+      arkAgentId: intent.arkAgentId,
+      agentVersion: intent.agentVersion,
+      status: "idle",
+    });
+
+    await expect(
+      repositories.sessionLifecycle.historyBackfilled(userId, intent.id),
+    ).resolves.toBe(false);
+
+    const first = {
+      eventId: "event-1",
+      sourceType: "user.message",
+      type: "message",
+      occurredAt: new Date("2026-09-06T00:00:00.000Z"),
+      payload: { content: "Start" },
+    };
+    const second = {
+      eventId: "event-2",
+      sourceType: "agent.message",
+      type: "message",
+      occurredAt: new Date("2026-09-06T00:01:00.000Z"),
+      payload: { content: "Done" },
+    };
+    await repositories.sessionLifecycle.appendEvents(userId, intent.id, [
+      second,
+      first,
+      // A replay of an event already stored must not duplicate it.
+      first,
+    ]);
+
+    await expect(
+      repositories.sessionLifecycle.listEvents(userId, intent.id),
+    ).resolves.toEqual([first, second]);
+    await expect(
+      repositories.sessionLifecycle.listEvents(id(), intent.id),
+    ).resolves.toEqual([]);
+
+    await repositories.sessionLifecycle.markHistoryBackfilled(
+      userId,
+      intent.id,
+    );
+    await expect(
+      repositories.sessionLifecycle.historyBackfilled(userId, intent.id),
+    ).resolves.toBe(true);
+
+    // A foreign tenant cannot write into another tenant's log.
+    await repositories.sessionLifecycle.appendEvents(id(), intent.id, [
+      {
+        eventId: "event-3",
+        sourceType: "agent.message",
+        type: "message",
+        occurredAt: new Date("2026-09-06T00:02:00.000Z"),
+        payload: {},
+      },
+    ]);
+    await expect(
+      repositories.sessionLifecycle.listEvents(userId, intent.id),
+    ).resolves.toHaveLength(2);
+
+    // Deleting the Session takes its log with it.
+    await database.client.query(`delete from sessions where id = $1`, [
+      intent.id,
+    ]);
+    const remaining = await database.client.query<{ count: number }>(
+      `select count(*)::integer as count from session_events where session_id = $1`,
+      [intent.id],
+    );
+    expect(remaining.rows[0]!.count).toBe(0);
+    await database.close();
+  });
 });

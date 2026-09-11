@@ -105,6 +105,7 @@ interface SessionRecord extends Row {
   lastErrorCode: string | null;
   errorRecoverable: boolean | null;
   archivedAt: Date | null;
+  pinnedAt: Date | null;
   deletionState: "none" | "pending" | "deletion_failed" | "deleted";
   lastEventAt: Date | null;
   createdAt: Date;
@@ -143,6 +144,22 @@ interface ArtifactRecord {
   updatedAt: Date;
 }
 
+interface StoredSessionEventRow extends Row {
+  eventId: string;
+  sourceType: string;
+  type: string;
+  occurredAt: Date;
+  payload: Record<string, unknown>;
+}
+
+interface StoredSessionEventInput {
+  eventId: string;
+  sourceType: string;
+  type: string;
+  occurredAt: Date;
+  payload: Record<string, unknown>;
+}
+
 const sessionSelection = sql`
   id, owner_user_id as "ownerUserId",
   ark_session_id as "arkSessionId", agent_kind as "agentKind",
@@ -152,6 +169,7 @@ const sessionSelection = sql`
   agent_version as "agentVersion", environment_id as "environmentId",
   title, status, last_error_code as "lastErrorCode",
   error_recoverable as "errorRecoverable", archived_at as "archivedAt",
+  pinned_at as "pinnedAt",
   deletion_state as "deletionState", last_event_at as "lastEventAt",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
@@ -277,10 +295,13 @@ const timestampFields = new Set([
   "createdAt",
   "expiresAt",
   "generatedAt",
+  "historyBackfilledAt",
   "lastEventAt",
   "lastObservedAt",
   "lockedAt",
   "monthStart",
+  "occurredAt",
+  "pinnedAt",
   "runAfter",
   "runningSince",
   "updatedAt",
@@ -1713,7 +1734,106 @@ export function createRepositories(database: unknown) {
                      ? sql`archived_at is not null`
                      : sql`archived_at is null`
                  }
-               order by created_at desc, id desc`,
+               order by pinned_at desc nulls last, updated_at desc, id desc`,
+        );
+      },
+      rename(userId: string, id: string, title: string) {
+        return first<SessionRecord>(
+          db,
+          sql`update sessions
+                 set title = ${title}, updated_at = now()
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and ark_session_id not like 'pending:%'
+                 and deletion_state = 'none'
+              returning ${sessionSelection}`,
+        );
+      },
+      setPinned(userId: string, id: string, pinnedAt: Date | null) {
+        return first<SessionRecord>(
+          db,
+          sql`update sessions
+                 set pinned_at = ${pinnedAt}
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and ark_session_id not like 'pending:%'
+                 and deletion_state = 'none'
+              returning ${sessionSelection}`,
+        );
+      },
+      listEvents(userId: string, id: string) {
+        return rows<StoredSessionEventRow>(
+          db,
+          sql`select event.event_id as "eventId",
+                     event.source_type as "sourceType",
+                     event.type,
+                     event.occurred_at as "occurredAt",
+                     event.payload
+                from session_events event
+                join sessions session on session.id = event.session_id
+               where event.session_id = ${id}
+                 and session.owner_user_id = ${userId}
+               order by event.occurred_at asc, event.event_id asc`,
+        );
+      },
+      async appendEvents(
+        userId: string,
+        id: string,
+        events: StoredSessionEventInput[],
+      ) {
+        if (events.length === 0) return;
+        const values = sql.join(
+          events.map(
+            (event) =>
+              sql`(${event.eventId}::text, ${event.sourceType}::text, ${event.type}::text, ${event.occurredAt}::timestamptz, ${JSON.stringify(event.payload)}::jsonb)`,
+          ),
+          sql`, `,
+        );
+        // A single statement keeps ownership enforcement and de-duplication in
+        // the database: a replay of an already-stored event writes nothing.
+        // The casts are required because a bare VALUES list is untyped.
+        await db.execute(
+          sql`insert into session_events
+                    (session_id, event_id, source_type, type, occurred_at, payload)
+              select ${id}::uuid, batch.event_id, batch.source_type, batch.type,
+                     batch.occurred_at, batch.payload
+                from (values ${values})
+                  as batch(event_id, source_type, type, occurred_at, payload)
+               where exists (
+                       select 1 from sessions
+                        where id = ${id}::uuid
+                          and owner_user_id = ${userId}::uuid
+                     )
+              on conflict (session_id, event_id) do nothing`,
+        );
+      },
+      async historyBackfilled(userId: string, id: string) {
+        const cursor = await first<{ backfilledAt: Date | null }>(
+          db,
+          sql`select cursor.history_backfilled_at as "backfilledAt"
+                from session_event_cursors cursor
+                join sessions session on session.id = cursor.session_id
+               where cursor.session_id = ${id}
+                 and session.owner_user_id = ${userId}
+               limit 1`,
+        );
+        return cursor !== undefined && cursor.backfilledAt !== null;
+      },
+      async markHistoryBackfilled(userId: string, id: string) {
+        await db.execute(
+          sql`insert into session_event_cursors (session_id, history_backfilled_at)
+              select id, now()
+                from sessions
+               where id = ${id} and owner_user_id = ${userId}
+              on conflict (session_id) do nothing`,
+        );
+        await db.execute(
+          sql`update session_event_cursors cursor
+                 set history_backfilled_at = now(), updated_at = now()
+                from sessions session
+               where session.id = cursor.session_id
+                 and session.id = ${id}
+                 and session.owner_user_id = ${userId}`,
         );
       },
       findOwned(userId: string, id: string) {
@@ -2389,6 +2509,17 @@ export function createRepositories(database: unknown) {
                  and deletion_state = 'none'
                limit 1`,
         );
+      },
+      async listInputFileIds(userId: string, sessionId: string) {
+        const records = await rows<{ arkFileId: string }>(
+          db,
+          sql`select ark_file_id as "arkFileId"
+                from session_inputs
+               where session_id = ${sessionId}
+                 and owner_user_id = ${userId}
+                 and ark_file_id is not null`,
+        );
+        return records.map((record) => record.arkFileId);
       },
       findBySource(userId: string, sessionId: string, arkFileId: string) {
         return first<ArtifactRecord & Row>(

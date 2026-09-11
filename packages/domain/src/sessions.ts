@@ -6,6 +6,7 @@ import type {
 } from "@pwa/ark-client";
 import {
   normalizeArkEvent,
+  uiEventType,
   type SessionStatus,
   type UiEvent,
 } from "@pwa/contracts";
@@ -35,10 +36,25 @@ export interface SessionRecord {
   lastErrorCode: string | null;
   errorRecoverable: boolean | null;
   archivedAt: Date | null;
+  pinnedAt: Date | null;
   deletionState: "none" | "pending" | "deletion_failed" | "deleted";
   lastEventAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * A projected UI event as stored locally. Ark remains the source of truth; this
+ * is a cache of events already observed, so a Session reopens from the database
+ * instead of replaying its whole history upstream.
+ */
+export interface StoredSessionEvent {
+  eventId: string;
+  sourceType: string;
+  /** The projected type as written; `uiEventType` re-derives it on read. */
+  type: string;
+  occurredAt: Date;
+  payload: Record<string, unknown>;
 }
 
 interface SessionAuditEntry {
@@ -90,6 +106,25 @@ export interface SessionRepository {
     id: string,
     archivedAt: Date | null,
   ): PromiseLike<SessionRecord | undefined>;
+  rename?(
+    userId: string,
+    id: string,
+    title: string,
+  ): PromiseLike<SessionRecord | undefined>;
+  setPinned?(
+    userId: string,
+    id: string,
+    pinnedAt: Date | null,
+  ): PromiseLike<SessionRecord | undefined>;
+  /** Local event cache: absent in repositories that predate it. */
+  listEvents?(userId: string, id: string): PromiseLike<StoredSessionEvent[]>;
+  appendEvents?(
+    userId: string,
+    id: string,
+    events: StoredSessionEvent[],
+  ): PromiseLike<void>;
+  historyBackfilled?(userId: string, id: string): PromiseLike<boolean>;
+  markHistoryBackfilled?(userId: string, id: string): PromiseLike<void>;
   beginDelete(
     userId: string,
     id: string,
@@ -164,6 +199,8 @@ function createOperationId(id: string): string {
 }
 
 const liveEventBufferCapacity = 100;
+/** Events written per insert while copying the upstream history into the log. */
+const storedEventBatchSize = 50;
 
 class BoundedAsyncQueue<T> {
   private readonly values: T[] = [];
@@ -274,6 +311,7 @@ export class SessionService {
       lastErrorCode: null,
       errorRecoverable: null,
       archivedAt: null,
+      pinnedAt: null,
       deletionState: "none",
       lastEventAt: null,
       createdAt: timestamp,
@@ -363,6 +401,51 @@ export class SessionService {
   async requestDelete(id: string, userId: string): Promise<SessionRecord> {
     const session = await this.dependencies.repository.beginDelete(userId, id);
     if (!session) throw new ResourceNotFoundError();
+    return session;
+  }
+
+  /**
+   * Renaming only touches our own label for the Session — the title Ark sees is
+   * derived from the first message and is deliberately left alone.
+   */
+  async rename(
+    id: string,
+    title: string,
+    context: SessionContext,
+  ): Promise<SessionRecord> {
+    const rename = this.dependencies.repository.rename;
+    if (!rename) throw new Error("Session renaming is not supported");
+    const session = await rename.call(
+      this.dependencies.repository,
+      context.userId,
+      id,
+      title.trim(),
+    );
+    if (!session) throw new ResourceNotFoundError();
+    await this.audit(context, "session.rename", id, "succeeded");
+    return session;
+  }
+
+  async setPinned(
+    id: string,
+    pinned: boolean,
+    context: SessionContext,
+  ): Promise<SessionRecord> {
+    const setPinned = this.dependencies.repository.setPinned;
+    if (!setPinned) throw new Error("Session pinning is not supported");
+    const session = await setPinned.call(
+      this.dependencies.repository,
+      context.userId,
+      id,
+      pinned ? (this.dependencies.now ?? (() => new Date()))() : null,
+    );
+    if (!session) throw new ResourceNotFoundError();
+    await this.audit(
+      context,
+      pinned ? "session.pin" : "session.unpin",
+      id,
+      "succeeded",
+    );
     return session;
   }
 
@@ -459,6 +542,17 @@ export class SessionService {
     downstreamSignal?: AbortSignal,
   ): Promise<{ session: SessionRecord; events: AsyncIterable<UiEvent> }> {
     const session = await this.requireOwned(context.userId, id);
+    const repository = this.dependencies.repository;
+    const stored = repository.listEvents
+      ? await repository.listEvents(context.userId, id)
+      : [];
+    // The local log may only stand in for the upstream history once the whole
+    // history has been copied in. Otherwise this open would silently show a
+    // truncated Session.
+    const backfilled = repository.historyBackfilled
+      ? await repository.historyBackfilled(context.userId, id)
+      : false;
+
     const upstreamController = new AbortController();
     const abortUpstream = () => upstreamController.abort();
     if (downstreamSignal?.aborted) {
@@ -508,28 +602,65 @@ export class SessionService {
         buffered.close(streamError);
       }
     })();
-    const history = this.dependencies.ark.listEvents(session.arkSessionId, {
-      correlationId: context.requestId,
-      signal: upstreamController.signal,
-    });
+    // Started before the first byte reaches the browser so live events cannot
+    // be lost while the stored history is being written out.
+    const history = backfilled
+      ? null
+      : this.dependencies.ark.listEvents(session.arkSessionId, {
+          correlationId: context.requestId,
+          signal: upstreamController.signal,
+        });
     const projectEvent = (source: ArkEvent) =>
       this.projectEvent(session, source, context.userId);
+    const toStoredEvent = (item: StoredSessionEvent) =>
+      this.storedToUiEvent(item);
+    const writeBatch = async (events: UiEvent[]) => {
+      await this.appendStoredEvents(context.userId, id, events);
+    };
+    const markBackfilled = async () => {
+      await this.markHistoryComplete(context.userId, id);
+    };
 
     return {
       session,
       events: {
         async *[Symbol.asyncIterator]() {
           const seen = new Set<string>();
+          const pending: UiEvent[] = [];
+          // Persisting before yielding keeps the promise that anything the
+          // browser has seen is already in the log, so it survives a reload.
+          const drain = async (): Promise<UiEvent[]> => {
+            if (pending.length === 0) return [];
+            const batch = pending.splice(0, pending.length);
+            await writeBatch(batch);
+            return batch;
+          };
           try {
-            for (const source of await history) {
+            for (const item of stored) {
               if (upstreamController.signal.aborted) return;
-              if (seen.has(source.id)) continue;
-              seen.add(source.id);
-              const projected = await projectEvent(source);
-              if (isPublicSessionEvent(source.type)) {
-                yield normalizeArkEvent(source);
+              seen.add(item.eventId);
+              yield toStoredEvent(item);
+            }
+
+            if (history) {
+              for (const source of await history) {
+                if (upstreamController.signal.aborted) return;
+                if (seen.has(source.id)) continue;
+                seen.add(source.id);
+                const projected = await projectEvent(source);
+                if (isPublicSessionEvent(source.type)) {
+                  pending.push(normalizeArkEvent(source));
+                  if (pending.length >= storedEventBatchSize) {
+                    for (const event of await drain()) yield event;
+                  }
+                }
+                if (projected.status === "terminated") {
+                  for (const event of await drain()) yield event;
+                  return;
+                }
               }
-              if (projected.status === "terminated") return;
+              for (const event of await drain()) yield event;
+              await markBackfilled();
             }
 
             while (true) {
@@ -540,7 +671,8 @@ export class SessionService {
               seen.add(source.id);
               const projected = await projectEvent(source);
               if (isPublicSessionEvent(source.type)) {
-                yield normalizeArkEvent(source);
+                pending.push(normalizeArkEvent(source));
+                for (const event of await drain()) yield event;
               }
               if (projected.status === "terminated") return;
             }
@@ -594,6 +726,101 @@ export class SessionService {
     const session = await this.dependencies.repository.findOwned(userId, id);
     if (!session) throw new ResourceNotFoundError();
     return session;
+  }
+
+  /**
+   * The log is a cache: failing to extend it must not interrupt a live Session,
+   * and a missed bookkeeping write only costs a redundant replay next time.
+   */
+  private async appendStoredEvents(
+    userId: string,
+    id: string,
+    events: UiEvent[],
+  ): Promise<void> {
+    const append = this.dependencies.repository.appendEvents;
+    if (events.length === 0 || !append) return;
+    try {
+      await append.call(
+        this.dependencies.repository,
+        userId,
+        id,
+        events.map((event) => ({
+          eventId: event.id,
+          sourceType: event.sourceType,
+          type: event.type,
+          occurredAt: new Date(event.createdAt),
+          payload: event.payload,
+        })),
+      );
+    } catch {
+      // Ignored on purpose: see the doc comment.
+    }
+  }
+
+  private async markHistoryComplete(userId: string, id: string): Promise<void> {
+    const mark = this.dependencies.repository.markHistoryBackfilled;
+    if (!mark) return;
+    try {
+      await mark.call(this.dependencies.repository, userId, id);
+    } catch {
+      // Ignored on purpose: see the doc comment on `appendStoredEvents`.
+    }
+  }
+
+  private storedToUiEvent(item: StoredSessionEvent): UiEvent {
+    return {
+      id: item.eventId,
+      sourceType: item.sourceType,
+      type: uiEventType(item.sourceType),
+      createdAt: item.occurredAt.toISOString(),
+      payload: item.payload,
+    };
+  }
+
+  /**
+   * Every projected event for a Session, newest last. Copies the upstream
+   * history into the log first when that has never happened, so an export of an
+   * old Session is complete rather than just what happened to be cached.
+   */
+  async transcriptEvents(
+    id: string,
+    context: SessionContext,
+    signal?: AbortSignal,
+  ): Promise<UiEvent[]> {
+    const session = await this.requireOwned(context.userId, id);
+    const repository = this.dependencies.repository;
+    const list = repository.listEvents;
+    if (!list) throw new Error("Session transcripts are not supported");
+
+    const complete = repository.historyBackfilled
+      ? await repository.historyBackfilled(context.userId, id)
+      : true;
+    if (!complete) {
+      const sources = await this.dependencies.ark.listEvents(
+        session.arkSessionId,
+        {
+          correlationId: context.requestId,
+          ...(signal ? { signal } : {}),
+        },
+      );
+      sources.sort(
+        (left, right) =>
+          Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
+          left.id.localeCompare(right.id),
+      );
+      const projected: UiEvent[] = [];
+      for (const source of sources) {
+        await this.projectEvent(session, source, context.userId);
+        if (isPublicSessionEvent(source.type)) {
+          projected.push(normalizeArkEvent(source));
+        }
+      }
+      await this.appendStoredEvents(context.userId, id, projected);
+      await this.markHistoryComplete(context.userId, id);
+    }
+
+    const stored = await list.call(repository, context.userId, id);
+    return stored.map((item) => this.storedToUiEvent(item));
   }
 
   private assertNotTerminated(session: SessionRecord): void {

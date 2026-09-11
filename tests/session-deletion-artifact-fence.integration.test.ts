@@ -119,6 +119,7 @@ describe("Session deletion artifact fence", () => {
         objects.add(key);
       }),
       openRead: vi.fn(async () => Readable.from([])),
+      readExternal: vi.fn(async () => Readable.from(["data"])),
       delete: vi.fn(async (key: string) => {
         (objects.has(key) ? existingDeletes : missingDeletes).push(key);
         objects.delete(key);
@@ -129,17 +130,16 @@ describe("Session deletion artifact fence", () => {
         {
           id: "ark-output-1",
           sessionId: "ark-session-1",
-          mountPath: "/mnt/session/outputs/report.txt",
           name: "report.txt",
           contentType: "text/plain",
           size: 4,
           createdAt: "2026-09-06T00:00:00.000Z",
+          tos: {
+            bucket: "ark-exports",
+            objectKey: "ark/outputs/ark-session-1/report.txt",
+          },
         },
       ]),
-      downloadFile: vi.fn(async () => ({
-        stream: Readable.from(["data"]),
-        contentLength: 4,
-      })),
     };
     const ids = [artifactId, cleanupJobId, replacementCleanupJobId];
     const artifacts = new ArtifactService({
@@ -275,6 +275,7 @@ describe("Session deletion artifact fence", () => {
         objects.add(key);
       }),
       openRead: vi.fn(async () => Readable.from([])),
+      readExternal: vi.fn(async () => Readable.from(["data"])),
       delete: vi.fn(async (key: string) => {
         const existed = objects.delete(key);
         deletes.push({ key, existed });
@@ -291,17 +292,16 @@ describe("Session deletion artifact fence", () => {
           {
             id: "ark-output-1",
             sessionId: "ark-session-1",
-            mountPath: "/mnt/session/outputs/report.txt",
             name: "report.txt",
             contentType: "text/plain",
             size: 4,
             createdAt: "2026-09-06T00:00:00.000Z",
+            tos: {
+              bucket: "ark-exports",
+              objectKey: "ark/outputs/ark-session-1/report.txt",
+            },
           },
         ]),
-        downloadFile: vi.fn(async () => ({
-          stream: Readable.from(["data"]),
-          contentLength: 4,
-        })),
       },
       storage,
       createId: () => ids.shift()!,
@@ -474,6 +474,7 @@ describe("Session deletion artifact fence", () => {
     const uploadInProgressUntil = new Date("2099-09-06T00:05:00.000Z");
     const storage = {
       delete: vi.fn(async () => undefined),
+      readExternal: vi.fn(async () => Readable.from([])),
     };
     await repositories.artifacts.stageCleanup({
       id: cleanupJobId,
@@ -490,7 +491,6 @@ describe("Session deletion artifact fence", () => {
         repository: repositories.artifacts,
         ark: {
           listArtifacts: vi.fn(async () => []),
-          downloadFile: vi.fn(),
         },
         storage: {
           ...storage,
@@ -580,6 +580,7 @@ describe("Session deletion artifact fence", () => {
         objects.add(key);
       }),
       openRead: vi.fn(async () => Readable.from([])),
+      readExternal: vi.fn(async () => Readable.from(["data"])),
       delete: vi.fn(async (key: string) => {
         objects.delete(key);
       }),
@@ -594,18 +595,17 @@ describe("Session deletion artifact fence", () => {
             {
               id: "ark-output-1",
               sessionId: "ark-session-1",
-              mountPath: "/mnt/session/outputs/report.txt",
               name: "report.txt",
               contentType: "text/plain",
               size: 4,
               createdAt: "2026-09-06T00:00:00.000Z",
+              tos: {
+                bucket: "ark-exports",
+                objectKey: "ark/outputs/ark-session-1/report.txt",
+              },
             },
           ];
         }),
-        downloadFile: vi.fn(async () => ({
-          stream: Readable.from(["data"]),
-          contentLength: 4,
-        })),
       },
       storage,
       createId: id,

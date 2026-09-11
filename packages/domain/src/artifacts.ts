@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { posix } from "node:path";
 import type { Readable } from "node:stream";
-import type { ArkGateway } from "@pwa/ark-client";
+import type { ArkArtifact, ArkGateway, ArkTosLocation } from "@pwa/ark-client";
 import { ResourceNotFoundError } from "./errors.js";
 
 export type ArtifactDeletionState =
@@ -28,6 +28,12 @@ export interface ArtifactRepository {
     userId: string,
     sessionId: string,
   ): PromiseLike<{ id: string; arkSessionId: string } | undefined>;
+  /**
+   * Uploaded inputs are Ark files too. Ark scopes them the same way as exports
+   * in some cases, so the Session's own inputs are excluded by id rather than
+   * trusted to the export filter.
+   */
+  listInputFileIds?(userId: string, sessionId: string): PromiseLike<string[]>;
   findBySource(
     userId: string,
     sessionId: string,
@@ -71,6 +77,10 @@ export interface ArtifactStorage {
     signal?: AbortSignal,
   ): PromiseLike<void>;
   openRead(objectKey: string, signal?: AbortSignal): PromiseLike<Readable>;
+  readExternal(
+    input: { bucket: string; objectKey: string },
+    signal?: AbortSignal,
+  ): PromiseLike<Readable>;
   delete(objectKey: string): PromiseLike<void>;
 }
 
@@ -94,7 +104,7 @@ export class ArtifactService {
   constructor(
     private readonly dependencies: {
       repository: ArtifactRepository;
-      ark: Pick<ArkGateway, "listArtifacts" | "downloadFile">;
+      ark: Pick<ArkGateway, "listArtifacts">;
       storage: ArtifactStorage;
       createId: () => string;
       objectKey?: (input: {
@@ -125,10 +135,19 @@ export class ArtifactService {
         ...(context.signal ? { signal: context.signal } : {}),
       },
     );
+    const inputFileIds = new Set(
+      (await this.dependencies.repository.listInputFileIds?.(
+        context.userId,
+        sessionId,
+      )) ?? [],
+    );
+    // An export with no TOS location has no reachable bytes; Ark's Files API
+    // has no content endpoint, so there is nothing to copy.
     const outputs = upstream.filter(
-      (artifact) =>
+      (artifact): artifact is ArkArtifact & { tos: ArkTosLocation } =>
         artifact.sessionId === session.arkSessionId &&
-        posix.normalize(artifact.mountPath).startsWith("/mnt/session/outputs/"),
+        artifact.tos !== null &&
+        !inputFileIds.has(artifact.id),
     );
     const synced: ArtifactRecord[] = [];
     for (const artifact of outputs) {
@@ -161,16 +180,16 @@ export class ArtifactService {
       });
       if (!staged) throw new ResourceNotFoundError();
       try {
-        const download = await this.dependencies.ark.downloadFile(artifact.id, {
-          correlationId: context.requestId,
-          ...(context.signal ? { signal: context.signal } : {}),
-        });
+        const stream = await this.dependencies.storage.readExternal(
+          { bucket: artifact.tos.bucket, objectKey: artifact.tos.objectKey },
+          context.signal,
+        );
         await this.dependencies.storage.write(
           tosObjectKey,
-          download.stream,
+          stream,
           {
             contentType: artifact.contentType,
-            contentLength: download.contentLength ?? artifact.size,
+            contentLength: artifact.size,
           },
           context.signal,
         );

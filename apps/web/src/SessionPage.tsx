@@ -204,6 +204,7 @@ function SessionPageContent({
 
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
   const [artifactsError, setArtifactsError] = useState(false);
+  const [artifactsSyncError, setArtifactsSyncError] = useState(false);
 
   const loadArtifacts = useCallback(() => {
     let active = true;
@@ -262,13 +263,16 @@ function SessionPageContent({
           const result = await apiClient.listArtifacts(sessionId);
           setArtifacts(result.artifacts);
           setArtifactsError(false);
+          setArtifactsSyncError(false);
           return result.artifacts;
         } catch (error) {
           if (error instanceof ApiClientError && error.isAuthRequired) {
             onAuthRequired();
+          } else {
+            // Silence here used to hide a broken sync entirely; the rail now
+            // says so and offers a retry.
+            setArtifactsSyncError(true);
           }
-          // Other failures stay quiet: the next turn end retries, and the rail
-          // already surfaces load errors on its own.
           return null;
         } finally {
           syncInFlightRef.current = null;
@@ -712,7 +716,12 @@ function SessionPageContent({
           todos={timeline.todos}
           artifacts={artifacts}
           artifactsError={artifactsError}
-          onRetryArtifacts={loadArtifacts}
+          artifactsSyncError={artifactsSyncError}
+          onRetryArtifacts={() => {
+            setArtifactsSyncError(false);
+            void syncArtifactsNow();
+            loadArtifacts();
+          }}
           selectedArtifactId={selectedArtifactId}
           onSelectArtifact={selectArtifact}
           onClose={() => setRailOpen(false)}

@@ -188,6 +188,16 @@ export interface SessionApiService {
   ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
   archive(id: string, userId: string): PromiseLike<SessionRecord>;
   restore(id: string, userId: string): PromiseLike<SessionRecord>;
+  rename(
+    id: string,
+    title: string,
+    context: { userId: string; requestId: string },
+  ): PromiseLike<SessionRecord>;
+  setPinned(
+    id: string,
+    pinned: boolean,
+    context: { userId: string; requestId: string },
+  ): PromiseLike<SessionRecord>;
   requestDelete(id: string, userId: string): PromiseLike<SessionRecord>;
   sendMessage(
     id: string,
@@ -209,6 +219,11 @@ export interface SessionApiService {
     context: { userId: string; requestId: string },
     signal?: AbortSignal,
   ): PromiseLike<{ session: SessionRecord; events: AsyncIterable<UiEvent> }>;
+  transcriptEvents(
+    id: string,
+    context: { userId: string; requestId: string },
+    signal?: AbortSignal,
+  ): PromiseLike<UiEvent[]>;
 }
 
 export interface SessionInputApiService {
@@ -463,6 +478,15 @@ const emptyBodySchema = {
   additionalProperties: false,
 } as const;
 
+const renameSessionBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title"],
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
+  },
+} as const;
+
 const deleteSessionBodySchema = {
   type: "object",
   additionalProperties: false,
@@ -657,6 +681,55 @@ function applicationError(
   return { error: { code, message, requestId, retryable } };
 }
 
+/**
+ * Fastify rejects a malformed request itself, before any handler runs — an empty
+ * or unparseable JSON body, an unsupported content type, an oversized payload.
+ * Those carry a 4xx `statusCode` and an `FST_ERR_*` code, but no `validation`
+ * array, so the generic error handler used to report them as 500s. The client's
+ * own message is never echoed; the response carries ours instead.
+ */
+function fastifyClientError(
+  error: unknown,
+): { status: number; code: ErrorCode; message: string } | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = error as { code?: unknown; statusCode?: unknown };
+  if (
+    typeof candidate.code !== "string" ||
+    !candidate.code.startsWith("FST_ERR_") ||
+    typeof candidate.statusCode !== "number" ||
+    candidate.statusCode < 400 ||
+    candidate.statusCode >= 500
+  ) {
+    return undefined;
+  }
+  switch (candidate.statusCode) {
+    case 413:
+      return {
+        status: 413,
+        code: "VALIDATION_FAILED",
+        message: "Request body is too large",
+      };
+    case 415:
+      return {
+        status: 415,
+        code: "VALIDATION_FAILED",
+        message: "Unsupported content type",
+      };
+    case 404:
+      return {
+        status: 404,
+        code: "RESOURCE_NOT_FOUND",
+        message: "Resource not found",
+      };
+    default:
+      return {
+        status: candidate.statusCode,
+        code: "VALIDATION_FAILED",
+        message: "Request body could not be read",
+      };
+  }
+}
+
 function sendArkAvailabilityError(
   category: unknown,
   request: FastifyRequest,
@@ -761,6 +834,7 @@ function publicSession(
           },
     deletionState: session.deletionState,
     archivedAt: session.archivedAt,
+    pinnedAt: session.pinnedAt,
     lastEventAt: session.lastEventAt,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -1348,6 +1422,11 @@ export function buildApp(options: BuildAppOptions = {}) {
       error !== null &&
       "validation" in error &&
       error.validation !== undefined;
+    const clientError = validation ? undefined : fastifyClientError(error);
+    const status = validation ? 400 : (clientError?.status ?? 500);
+    const code: ErrorCode = validation
+      ? "VALIDATION_FAILED"
+      : (clientError?.code ?? "INTERNAL_ERROR");
     request.log.error(
       {
         event: "request.failed",
@@ -1355,18 +1434,20 @@ export function buildApp(options: BuildAppOptions = {}) {
         ...(request.auth ? { user_id: request.auth.userId } : {}),
         ...resourceContext(request),
         result: "error",
-        status_code: validation ? 400 : 500,
-        error_code: validation ? "VALIDATION_FAILED" : "INTERNAL_ERROR",
+        status_code: status,
+        error_code: code,
       },
       "Request failed",
     );
     return reply
-      .code(validation ? 400 : 500)
+      .code(status)
       .send(
         applicationError(
           request.id,
-          validation ? "VALIDATION_FAILED" : "INTERNAL_ERROR",
-          validation ? "Request validation failed" : "Internal server error",
+          code,
+          validation
+            ? "Request validation failed"
+            : (clientError?.message ?? "Internal server error"),
           false,
         ),
       );
@@ -1811,6 +1892,62 @@ export function buildApp(options: BuildAppOptions = {}) {
         },
       );
 
+      app.patch<{ Params: { id: string }; Body: { title: string } }>(
+        "/api/v1/sessions/:id",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: renameSessionBodySchema,
+          },
+        },
+        async (request, reply) => {
+          try {
+            const session = await sessions.rename(
+              request.params.id,
+              request.body.title,
+              context(request),
+            );
+            return reply.send(publicSession(session));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.put<{ Params: { id: string }; Body: Record<string, never> }>(
+        "/api/v1/sessions/:id/pin",
+        { schema: { params: uuidParamsSchema, body: emptyBodySchema } },
+        async (request, reply) => {
+          try {
+            const session = await sessions.setPinned(
+              request.params.id,
+              true,
+              context(request),
+            );
+            return reply.send(publicSession(session));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/sessions/:id/pin",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const session = await sessions.setPinned(
+              request.params.id,
+              false,
+              context(request),
+            );
+            return reply.send(publicSession(session));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
       app.post<{
         Params: { id: string };
         Body: Record<string, never>;
@@ -1874,6 +2011,32 @@ export function buildApp(options: BuildAppOptions = {}) {
             });
           } catch (error) {
             return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/sessions/:id/transcript",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          request.raw.once("aborted", abort);
+          reply.raw.once("close", abort);
+          try {
+            return reply.send({
+              events: await sessions.transcriptEvents(
+                request.params.id,
+                context(request),
+                controller.signal,
+              ),
+            });
+          } catch (error) {
+            controller.abort();
+            return sendSessionError(error, request, reply);
+          } finally {
+            request.raw.removeListener("aborted", abort);
+            reply.raw.removeListener("close", abort);
           }
         },
       );

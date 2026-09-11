@@ -53,6 +53,7 @@ const record: SessionRecord = {
   lastErrorCode: null,
   errorRecoverable: null,
   archivedAt: null,
+  pinnedAt: null,
   deletionState: "none",
   lastEventAt: null,
   createdAt: timestamp,
@@ -83,6 +84,14 @@ function sessionService() {
     get: vi.fn(async () => ({ ...record, inputs: [input] })),
     archive: vi.fn(async () => ({ ...record, archivedAt: timestamp })),
     restore: vi.fn(async () => ({ ...record, archivedAt: null })),
+    rename: vi.fn(async (_id: string, title: string) => ({
+      ...record,
+      title,
+    })),
+    setPinned: vi.fn(async (_id: string, pinned: boolean) => ({
+      ...record,
+      pinnedAt: pinned ? timestamp : null,
+    })),
     requestDelete: vi.fn(async () => ({
       ...record,
       deletionState: "pending" as const,
@@ -109,6 +118,15 @@ function sessionService() {
         },
       },
     })),
+    transcriptEvents: vi.fn(async () => [
+      {
+        id: "event-3",
+        sourceType: "agent.message",
+        type: "message" as const,
+        createdAt: timestamp.toISOString(),
+        payload: { content: "Hello" },
+      },
+    ]),
   } satisfies SessionApiService;
 }
 
@@ -156,6 +174,87 @@ describe("Session API", () => {
     expect(sessions.restore).toHaveBeenCalledWith(sessionId, userId);
     expect(sessions.requestDelete).toHaveBeenCalledOnce();
     expect(sessions.requestDelete).toHaveBeenCalledWith(sessionId, userId);
+    await app.close();
+  });
+
+  it("renames and pins a Session, and rejects an empty rename", async () => {
+    const sessions = sessionService();
+    const app = buildApp({ auth: auth(), sessions });
+    const cookies = { [AUTH_COOKIE_NAME]: "user-token" };
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/sessions/${sessionId}`,
+      cookies,
+      payload: { title: "Quarterly plan" },
+    });
+    const pinned = await app.inject({
+      method: "PUT",
+      url: `/api/v1/sessions/${sessionId}/pin`,
+      cookies,
+      payload: {},
+    });
+    const unpinned = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/sessions/${sessionId}/pin`,
+      cookies,
+    });
+    const blank = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/sessions/${sessionId}`,
+      cookies,
+      payload: { title: "   " },
+    });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().title).toBe("Quarterly plan");
+    expect(pinned.statusCode).toBe(200);
+    expect(pinned.json().pinnedAt).toBe(timestamp.toISOString());
+    expect(unpinned.statusCode).toBe(200);
+    expect(unpinned.json().pinnedAt).toBeNull();
+    expect(blank.statusCode).toBe(400);
+    expect(sessions.rename).toHaveBeenCalledWith(sessionId, "Quarterly plan", {
+      userId,
+      requestId: expect.any(String),
+    });
+    expect(sessions.setPinned).toHaveBeenCalledWith(sessionId, true, {
+      userId,
+      requestId: expect.any(String),
+    });
+    expect(sessions.setPinned).toHaveBeenCalledWith(sessionId, false, {
+      userId,
+      requestId: expect.any(String),
+    });
+    await app.close();
+  });
+
+  it("serves the projected transcript for export", async () => {
+    const sessions = sessionService();
+    const app = buildApp({ auth: auth(), sessions });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${sessionId}/transcript`,
+      cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      events: [
+        {
+          id: "event-3",
+          sourceType: "agent.message",
+          type: "message",
+          createdAt: timestamp.toISOString(),
+          payload: { content: "Hello" },
+        },
+      ],
+    });
+    expect(sessions.transcriptEvents).toHaveBeenCalledWith(
+      sessionId,
+      { userId, requestId: expect.any(String) },
+      expect.any(AbortSignal),
+    );
     await app.close();
   });
 

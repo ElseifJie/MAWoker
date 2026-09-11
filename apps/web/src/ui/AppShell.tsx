@@ -17,6 +17,11 @@ export interface NavigationItem {
   /** Present in the navigation but not usable; `hint` explains why. */
   disabled?: boolean;
   hint?: string;
+  /**
+   * Turns the entry into a shell action instead of a route. `to` still supplies
+   * the key, and no navigation happens when this is set.
+   */
+  onSelect?: () => void;
 }
 
 export interface AppShellProps {
@@ -165,35 +170,47 @@ export function AppShell({
         </div>
         <nav aria-label={navigationLabel} className="ui-app-shell__navigation">
           <div className="ui-app-shell__navigation-primary">
-            {navigation.map(({ disabled, hint, icon: Icon, label, to }) =>
-              disabled ? (
-                <span
-                  key={to}
-                  className="ui-app-shell__navigation-link is-disabled"
-                  aria-disabled="true"
-                  {...(hint ? { title: hint } : {})}
-                >
-                  <Icon size={17} aria-hidden={true} />
-                  <span>{label}</span>
-                  {hint ? <span className="sr-only">{hint}</span> : null}
-                </span>
-              ) : (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={to === "/"}
-                  className={({ isActive }) =>
-                    `ui-app-shell__navigation-link${isActive ? " active" : ""}`
-                  }
-                  onClick={() => {
-                    if (location.pathname === to) closeDrawer("route");
-                  }}
-                  tabIndex={navigationHidden ? -1 : undefined}
-                >
-                  <Icon size={17} aria-hidden={true} />
-                  <span>{label}</span>
-                </NavLink>
-              ),
+            {navigation.map(
+              ({ disabled, hint, icon: Icon, label, to, onSelect }) =>
+                disabled ? (
+                  <span
+                    key={to}
+                    className="ui-app-shell__navigation-link is-disabled"
+                    aria-disabled="true"
+                    {...(hint ? { title: hint } : {})}
+                  >
+                    <Icon size={17} aria-hidden={true} />
+                    <span>{label}</span>
+                    {hint ? <span className="sr-only">{hint}</span> : null}
+                  </span>
+                ) : onSelect ? (
+                  <button
+                    key={to}
+                    type="button"
+                    className="ui-app-shell__navigation-link"
+                    onClick={onSelect}
+                    tabIndex={navigationHidden ? -1 : undefined}
+                  >
+                    <Icon size={17} aria-hidden={true} />
+                    <span>{label}</span>
+                  </button>
+                ) : (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === "/"}
+                    className={({ isActive }) =>
+                      `ui-app-shell__navigation-link${isActive ? " active" : ""}`
+                    }
+                    onClick={() => {
+                      if (location.pathname === to) closeDrawer("route");
+                    }}
+                    tabIndex={navigationHidden ? -1 : undefined}
+                  >
+                    <Icon size={17} aria-hidden={true} />
+                    <span>{label}</span>
+                  </NavLink>
+                ),
             )}
           </div>
           {navigationExtra ? (

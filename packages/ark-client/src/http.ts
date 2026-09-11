@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { Readable } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { z } from "zod";
 import { ArkGatewayError } from "./errors.js";
 import type {
@@ -150,17 +148,70 @@ const resourceSchema = z
   })
   .strict();
 
-const artifactSchema = z
+/**
+ * The Files API reports snake_case, seconds-since-epoch timestamps and an
+ * optional `tos` location. Unknown keys are deliberately tolerated: Ark adds
+ * fields over time, and a strict schema turns an additive change into an
+ * outage.
+ */
+const fileEntrySchema = z.object({
+  id: z.string().min(1),
+  purpose: z.string(),
+  filename: z.string(),
+  bytes: z.number().int().nonnegative(),
+  mime_type: z.string(),
+  created_at: z.number(),
+  tos: z
+    .object({ bucket: z.string().min(1), object_key: z.string().min(1) })
+    .nullish(),
+  scope: z.object({ type: z.string(), id: z.string() }).nullish(),
+});
+
+/** `data` is literally null, not an empty array, for a scope with no files. */
+const filePageSchema = z
   .object({
-    id: z.string().min(1),
-    sessionId: z.string().min(1),
-    mountPath: z.string().min(1),
-    name: z.string(),
-    contentType: z.string(),
-    size: z.number().int().nonnegative(),
-    createdAt: z.string().datetime(),
+    data: z.array(fileEntrySchema).nullable(),
+    has_more: z.boolean().nullish(),
+    last_id: z.string().nullish(),
   })
-  .strict();
+  .transform(({ data, has_more, last_id }) => ({
+    files: data ?? [],
+    hasMore: has_more === true,
+    lastId: last_id ?? null,
+  }));
+
+type FileEntry = z.infer<typeof fileEntrySchema>;
+
+/** Guards against a pagination loop if Ark ever echoes a cursor we already used. */
+const maxFilePages = 20;
+const filePageLimit = 100;
+
+function toArkArtifact(entry: FileEntry, sessionId: string): ArkArtifact {
+  return {
+    id: entry.id,
+    sessionId,
+    name: entry.filename,
+    contentType: entry.mime_type,
+    size: entry.bytes,
+    createdAt: new Date(entry.created_at * 1000).toISOString(),
+    tos: entry.tos
+      ? { bucket: entry.tos.bucket, objectKey: entry.tos.object_key }
+      : null,
+  };
+}
+
+/**
+ * Exports are the files Ark scoped to this Session. Uploaded inputs carry the
+ * same `purpose` but no Session scope, and files belonging to another Session
+ * are excluded rather than trusted to the query filter.
+ */
+function isSessionExport(entry: FileEntry, sessionId: string): boolean {
+  return (
+    entry.purpose === "agent" &&
+    entry.scope?.type === "session" &&
+    entry.scope.id === sessionId
+  );
+}
 
 const errorBodySchema = z
   .object({
@@ -547,49 +598,6 @@ export class HttpArkGateway implements ArkGateway {
     );
   }
 
-  async downloadFile(
-    fileId: string,
-    options?: ArkRequestOptions,
-  ): Promise<{ stream: Readable; contentLength?: number }> {
-    const definition: RequestDefinition<unknown> = {
-      method: "GET",
-      path: `/api/v3/files/${encodeURIComponent(fileId)}/content`,
-      safe: true,
-      options,
-    };
-    const { response, context } = await this.retry(
-      definition,
-      (correlationId) => this.openResponse(definition, correlationId),
-    );
-    context.clearTimer();
-    if (!response.body) {
-      context.cleanup();
-      throw new ArkGatewayError("invalid_response");
-    }
-
-    const stream = Readable.fromWeb(
-      response.body as unknown as NodeReadableStream,
-    );
-    const abort = () => stream.destroy(new ArkGatewayError("cancelled"));
-    options?.signal?.addEventListener("abort", abort, { once: true });
-    stream.once("close", () => {
-      options?.signal?.removeEventListener("abort", abort);
-      context.cancel();
-      context.cleanup();
-    });
-
-    const header = response.headers.get("content-length");
-    const parsed = header === null ? undefined : Number(header);
-    const contentLength =
-      parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= 0
-        ? parsed
-        : undefined;
-    return {
-      stream,
-      ...(contentLength === undefined ? {} : { contentLength }),
-    };
-  }
-
   listSessionResources(
     sessionId: string,
     options?: ArkRequestOptions,
@@ -607,17 +615,37 @@ export class HttpArkGateway implements ArkGateway {
     sessionId: string,
     options?: ArkRequestOptions,
   ): Promise<ArkArtifact[]> {
-    const query = new URLSearchParams({
-      scope_id: sessionId,
-      kind: "artifact",
-    });
-    return this.jsonRequest({
-      method: "GET",
-      path: `/api/v3/files?${query.toString()}`,
-      safe: true,
-      schema: z.array(artifactSchema),
-      options,
-    });
+    return this.collectArtifacts(sessionId, options);
+  }
+
+  private async collectArtifacts(
+    sessionId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkArtifact[]> {
+    const artifacts: ArkArtifact[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < maxFilePages; page += 1) {
+      const query = new URLSearchParams({
+        scope_id: sessionId,
+        limit: String(filePageLimit),
+      });
+      if (after) query.set("after", after);
+      const result = await this.jsonRequest({
+        method: "GET",
+        path: `/api/v3/files?${query.toString()}`,
+        safe: true,
+        schema: filePageSchema,
+        options,
+      });
+      for (const entry of result.files) {
+        if (isSessionExport(entry, sessionId)) {
+          artifacts.push(toArkArtifact(entry, sessionId));
+        }
+      }
+      if (!result.hasMore || !result.lastId) return artifacts;
+      after = result.lastId;
+    }
+    return artifacts;
   }
 
   private async jsonRequest<T>(

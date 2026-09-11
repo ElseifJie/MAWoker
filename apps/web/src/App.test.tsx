@@ -1347,32 +1347,37 @@ describe("Session page", () => {
 
     renderApp();
     const user = userEvent.setup();
-    const archivedRegion = await screen.findByRole("region", {
-      name: "Archived Sessions",
+    const sidebar = await screen.findByRole("navigation", {
+      name: "Workspace",
     });
-    expect(
-      within(archivedRegion).getByRole("link", { name: /Archived research/ }),
-    ).toBeInTheDocument();
     expect(calls).toContain("GET /api/v1/sessions?archived=true");
 
+    // Archived Sessions stay collapsed until they are asked for.
+    const archivedRegion = within(sidebar).getByRole("region", {
+      name: "Archived sessions",
+    });
+    expect(
+      within(archivedRegion).queryByRole("link", { name: /Archived research/ }),
+    ).not.toBeInTheDocument();
     await user.click(
-      within(archivedRegion).getByRole("link", { name: /Archived research/ }),
+      within(archivedRegion).getByRole("button", { name: /Archived/ }),
     );
+    const archivedLink = within(archivedRegion).getByRole("link", {
+      name: /Archived research/,
+    });
+    expect(archivedLink).toBeInTheDocument();
+
+    await user.click(archivedLink);
     await user.click(
       await screen.findByRole("button", { name: "Restore Session" }),
     );
 
     expect(
-      within(screen.getByRole("region", { name: "Active Sessions" })).getByRole(
-        "link",
-        { name: /Archived research/ },
-      ),
+      within(sidebar).getByRole("link", { name: /Archived research/ }),
     ).toBeInTheDocument();
     expect(
-      within(
-        screen.getByRole("region", { name: "Archived Sessions" }),
-      ).queryByRole("link", { name: /Archived research/ }),
-    ).not.toBeInTheDocument();
+      screen.queryByRole("region", { name: "Archived sessions" }),
+    ).toBeNull();
   });
 
   it("renders ordered deduplicated events without exposing reasoning text and closes SSE", async () => {
@@ -1562,18 +1567,24 @@ describe("Session page", () => {
     expect(
       await screen.findByRole("button", { name: "Restore Session" }),
     ).toBeInTheDocument();
+    const sidebar = screen.getByRole("navigation", { name: "Workspace" });
+    const archivedRegion = within(sidebar).getByRole("region", {
+      name: "Archived sessions",
+    });
+    await user.click(
+      within(archivedRegion).getByRole("button", { name: /Archived/ }),
+    );
     expect(
-      within(
-        screen.getByRole("region", { name: "Archived Sessions" }),
-      ).getByRole("link", { name: /Quarterly plan/ }),
+      within(archivedRegion).getByRole("link", { name: /Quarterly plan/ }),
     ).toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Restore Session" }));
     expect(
-      within(screen.getByRole("region", { name: "Active Sessions" })).getByRole(
-        "link",
-        { name: /Quarterly plan/ },
-      ),
+      within(sidebar).getByRole("link", { name: /Quarterly plan/ }),
     ).toBeInTheDocument();
+    expect(
+      within(archivedRegion).queryByRole("link", { name: /Quarterly plan/ }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Session actions" }));
     await user.click(

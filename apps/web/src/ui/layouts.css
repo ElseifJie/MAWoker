@@ -127,30 +127,32 @@
   width: var(--ui-sidebar-width);
   flex-direction: column;
   border-right: 1px solid var(--ui-color-border);
-  background: var(--ui-color-surface-subtle);
+  background: var(--ui-color-surface-canvas);
 }
 
 .ui-app-shell__brand {
   display: flex;
-  height: 58px;
+  height: 54px;
   flex: 0 0 auto;
   align-items: center;
   gap: 10px;
-  padding-inline: var(--ui-space-4);
+  padding-inline: var(--ui-space-3);
   color: var(--ui-color-text);
-  font-size: 0.875rem;
-  font-weight: 700;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .ui-app-shell__brand-mark {
   display: inline-grid;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   place-items: center;
-  border-radius: var(--ui-radius-medium);
-  color: var(--ui-color-text-inverse);
-  background: var(--ui-color-accent);
-  font-size: 0.75rem;
+  border: 1px solid var(--ui-color-border-strong);
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface);
+  font-size: 0.6875rem;
+  font-weight: 700;
 }
 
 .ui-app-shell__navigation {
@@ -163,7 +165,7 @@
 
 .ui-app-shell__navigation-primary {
   display: grid;
-  gap: 2px;
+  gap: 1px;
 }
 
 .ui-app-shell__navigation-link {
@@ -171,28 +173,31 @@
   min-height: var(--ui-control-height-default);
   align-items: center;
   gap: 10px;
-  padding-inline: 10px;
-  border-radius: var(--ui-radius-medium);
+  padding-inline: 9px;
+  border: 0;
+  border-radius: var(--ui-radius-small);
   color: var(--ui-color-text-muted);
+  background: transparent;
   font-size: 0.8125rem;
-  font-weight: 550;
+  font-weight: 500;
+  text-align: left;
   text-decoration: none;
 }
 
 .ui-app-shell__navigation-link:hover,
 .ui-app-shell__navigation-link.active {
-  color: var(--ui-color-accent);
-  background: var(--ui-color-accent-subtle);
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface-hover);
 }
 
 .ui-app-shell__navigation-link.active {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .ui-app-shell__navigation-link.is-disabled {
   color: var(--ui-color-text-muted);
   cursor: not-allowed;
-  opacity: 0.62;
+  opacity: 0.5;
 }
 
 .ui-app-shell__navigation-link.is-disabled:hover {
@@ -205,7 +210,7 @@
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  margin-top: var(--ui-space-5);
+  margin-top: var(--ui-space-3);
   overflow-y: auto;
 }
 
@@ -223,10 +228,10 @@
 }
 
 .ui-app-shell__main {
-  width: min(100%, 1120px);
+  width: min(100%, 1200px);
   min-height: 100vh;
   margin-inline: auto;
-  padding: 48px 40px;
+  padding: 40px 36px;
 }
 
 .ui-app-shell__backdrop {

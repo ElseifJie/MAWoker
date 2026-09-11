@@ -5,6 +5,7 @@ import {
   SessionService,
   type SessionRecord,
   type SessionRepository,
+  type StoredSessionEvent,
 } from "../packages/domain/src/index.js";
 
 const userId = "00000000-0000-4000-8000-000000000001";
@@ -36,12 +37,36 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     lastErrorCode: null,
     errorRecoverable: null,
     archivedAt: null,
+    pinnedAt: null,
     deletionState: "none",
     lastEventAt: null,
     createdAt: now,
     updatedAt: now,
     ...overrides,
   };
+}
+
+/**
+ * A repository with the local event log attached, so the fast path and the
+ * backfill path can both be exercised.
+ */
+function loggedRepository(state: {
+  backfilled: boolean;
+  stored: StoredSessionEvent[];
+}) {
+  const repository = baseRepository();
+  return Object.assign(repository, {
+    listEvents: vi.fn(async () => state.stored),
+    appendEvents: vi.fn(
+      async (_userId: string, _id: string, events: StoredSessionEvent[]) => {
+        state.stored.push(...events);
+      },
+    ),
+    historyBackfilled: vi.fn(async () => state.backfilled),
+    markHistoryBackfilled: vi.fn(async () => {
+      state.backfilled = true;
+    }),
+  });
 }
 
 function baseRepository(record = session()) {
@@ -265,6 +290,123 @@ describe("Session event recovery", () => {
       { id: "event-1" },
       { id: "event-2" },
       { id: "event-3" },
+    ]);
+  });
+
+  it("serves a backfilled Session from the local log without replaying Ark", async () => {
+    const stored = [
+      {
+        eventId: "event-1",
+        sourceType: "user.message",
+        type: "message",
+        occurredAt: now,
+        payload: { content: "from the log" },
+      },
+      {
+        eventId: "event-2",
+        sourceType: "agent.message",
+        type: "message",
+        occurredAt: new Date(now.getTime() + 1_000),
+        payload: { content: "also stored" },
+      },
+    ];
+    const repository = loggedRepository({ backfilled: true, stored });
+    const ark = {
+      async streamEvents() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            // The live stream ends immediately; the stored log is all there is.
+          },
+        };
+      },
+      async listEvents(): Promise<ArkEvent[]> {
+        throw new Error("a backfilled Session must not replay Ark history");
+      },
+    };
+    const service = createService(repository, ark);
+
+    const opened = await service.openEvents(sessionId, {
+      userId,
+      requestId: "request-log",
+    });
+
+    await expect(collect(opened.events)).resolves.toEqual([
+      expect.objectContaining({
+        id: "event-1",
+        type: "message",
+        payload: { content: "from the log" },
+      }),
+      expect.objectContaining({ id: "event-2", type: "message" }),
+    ]);
+    expect(repository.projectEvent).not.toHaveBeenCalled();
+    expect(repository.appendEvents).not.toHaveBeenCalled();
+  });
+
+  it("copies the upstream history into the log and marks it complete", async () => {
+    const state = { backfilled: false, stored: [] as StoredSessionEvent[] };
+    const repository = loggedRepository(state);
+    const service = createService(repository, {
+      async streamEvents() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield event("event-3", "session.status", { status: "terminated" });
+          },
+        };
+      },
+      async listEvents() {
+        return [
+          event("event-1", "agent.message", { content: "one" }),
+          event("event-2", "agent.message", { content: "two" }),
+        ];
+      },
+    });
+
+    const opened = await service.openEvents(sessionId, {
+      userId,
+      requestId: "request-backfill",
+    });
+
+    await expect(collect(opened.events)).resolves.toMatchObject([
+      { id: "event-1" },
+      { id: "event-2" },
+      { id: "event-3" },
+    ]);
+    expect(state.stored.map((item) => item.eventId)).toEqual([
+      "event-1",
+      "event-2",
+      // The live event is written before it is handed to the browser.
+      "event-3",
+    ]);
+    expect(repository.markHistoryBackfilled).toHaveBeenCalledOnce();
+  });
+
+  it("survives an unwritable log and still streams the Session", async () => {
+    const repository = loggedRepository({ backfilled: false, stored: [] });
+    repository.appendEvents.mockRejectedValue(new Error("database down"));
+    repository.markHistoryBackfilled.mockRejectedValue(
+      new Error("database down"),
+    );
+    const service = createService(repository, {
+      async streamEvents() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield event("event-2", "session.status", { status: "terminated" });
+          },
+        };
+      },
+      async listEvents() {
+        return [event("event-1", "agent.message", { content: "one" })];
+      },
+    });
+
+    const opened = await service.openEvents(sessionId, {
+      userId,
+      requestId: "request-unwritable",
+    });
+
+    await expect(collect(opened.events)).resolves.toMatchObject([
+      { id: "event-1" },
+      { id: "event-2" },
     ]);
   });
 

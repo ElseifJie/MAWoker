@@ -1,30 +1,45 @@
 :root {
-  --ui-color-surface-canvas: #f5f7f8;
+  color-scheme: light;
+
+  /*
+   * A system stack rather than a webfont: it renders instantly, needs no
+   * network, and gives the UI the flat, editorial look the product is after.
+   */
+  --ui-font-sans:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --ui-font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+    monospace;
+
+  /* Near-neutral surfaces: the accent carries emphasis, not the background. */
+  --ui-color-surface-canvas: #f7f7f8;
   --ui-color-surface: #ffffff;
-  --ui-color-surface-subtle: #f1f4f5;
-  --ui-color-surface-hover: #e9eef0;
-  --ui-color-border: #d3dade;
-  --ui-color-border-strong: #aeb9bf;
-  --ui-color-text: #1d272d;
-  --ui-color-text-muted: #627078;
+  --ui-color-surface-subtle: #f1f2f4;
+  --ui-color-surface-hover: #eaebee;
+  --ui-color-border: #e4e5e9;
+  --ui-color-border-strong: #c9ccd3;
+  --ui-color-text: #16181d;
+  --ui-color-text-muted: #5b6270;
   --ui-color-text-inverse: #ffffff;
-  --ui-color-accent: #176b68;
-  --ui-color-accent-hover: #125a57;
-  --ui-color-accent-subtle: #e5f1f0;
-  --ui-color-success: #28734f;
-  --ui-color-success-subtle: #e7f3ec;
-  --ui-color-warning: #8f6110;
-  --ui-color-warning-subtle: #faf0d9;
-  --ui-color-danger: #a23e35;
-  --ui-color-danger-hover: #87342d;
-  --ui-color-danger-subtle: #f8e9e7;
-  --ui-focus-ring: #147d78;
-  --ui-color-overlay: rgb(20 30 34 / 46%);
+  --ui-color-accent: #1a1c21;
+  --ui-color-accent-hover: #33363d;
+  --ui-color-accent-subtle: #f1f2f4;
+  --ui-color-success: #15683c;
+  --ui-color-success-subtle: #e8f5ee;
+  --ui-color-warning: #8a5300;
+  --ui-color-warning-subtle: #fdf3e0;
+  --ui-color-danger: #b42318;
+  --ui-color-danger-hover: #8f1c13;
+  --ui-color-danger-subtle: #fef3f2;
+  --ui-focus-ring: #3b3f47;
+  --ui-color-overlay: rgb(16 18 21 / 42%);
   --ui-color-embed-canvas: #ffffff;
   --ui-shadow-raised:
-    0 1px 2px rgb(29 39 45 / 8%), 0 8px 24px rgb(29 39 45 / 10%);
+    0 1px 2px rgb(16 18 21 / 6%), 0 4px 14px rgb(16 18 21 / 8%);
   --ui-shadow-overlay:
-    0 12px 34px rgb(24 38 39 / 14%), 0 2px 6px rgb(24 38 39 / 10%);
+    0 14px 36px rgb(16 18 21 / 12%), 0 2px 8px rgb(16 18 21 / 8%);
 
   --ui-space-1: 4px;
   --ui-space-2: 8px;
@@ -34,47 +49,48 @@
   --ui-space-6: 24px;
   --ui-space-8: 32px;
 
-  --ui-radius-small: 4px;
-  --ui-radius-medium: 6px;
+  --ui-radius-small: 5px;
+  --ui-radius-medium: 8px;
   --ui-radius-large: 8px;
 
-  --ui-control-height-small: 32px;
-  --ui-control-height-default: 36px;
+  --ui-control-height-small: 30px;
+  --ui-control-height-default: 34px;
   --ui-control-height-large: 38px;
 
-  --ui-sidebar-width: 232px;
-  --ui-rail-width: 320px;
-  --ui-transcript-max-width: 760px;
+  --ui-sidebar-width: 264px;
+  --ui-rail-width: 340px;
+  --ui-transcript-max-width: 780px;
 }
 
 /*
  * Dark theme redefines the same semantic variables, so component styles never
- * branch on theme. Values keep the light theme's teal accent but lift it for
- * contrast against the darker surfaces.
+ * branch on theme. The accent inverts rather than shifting hue: emphasis is
+ * carried by lightness contrast in both palettes.
  */
 [data-theme="dark"] {
-  --ui-color-surface-canvas: #111719;
-  --ui-color-surface: #1a2225;
-  --ui-color-surface-subtle: #212b2f;
-  --ui-color-surface-hover: #2a353a;
-  --ui-color-border: #334046;
-  --ui-color-border-strong: #4a5b62;
-  --ui-color-text: #e6edf0;
-  --ui-color-text-muted: #9dabb3;
-  --ui-color-text-inverse: #111719;
-  --ui-color-accent: #55b8b1;
-  --ui-color-accent-hover: #6cc8c1;
-  --ui-color-accent-subtle: #1c3634;
-  --ui-color-success: #62bb8c;
-  --ui-color-success-subtle: #1b3226;
-  --ui-color-warning: #d8a445;
-  --ui-color-warning-subtle: #37291a;
-  --ui-color-danger: #e0796e;
-  --ui-color-danger-hover: #ec8f85;
-  --ui-color-danger-subtle: #3b2320;
-  --ui-focus-ring: #6cc8c1;
-  --ui-color-overlay: rgb(6 10 12 / 62%);
+  color-scheme: dark;
+  --ui-color-surface-canvas: #0e0f11;
+  --ui-color-surface: #17181b;
+  --ui-color-surface-subtle: #1f2125;
+  --ui-color-surface-hover: #26282d;
+  --ui-color-border: #282a2f;
+  --ui-color-border-strong: #3d4046;
+  --ui-color-text: #f2f3f5;
+  --ui-color-text-muted: #a3a9b4;
+  --ui-color-text-inverse: #131417;
+  --ui-color-accent: #f2f3f5;
+  --ui-color-accent-hover: #d9dbe0;
+  --ui-color-accent-subtle: #23252a;
+  --ui-color-success: #7dc9a1;
+  --ui-color-success-subtle: #1b2f26;
+  --ui-color-warning: #e0b268;
+  --ui-color-warning-subtle: #372c19;
+  --ui-color-danger: #f2938a;
+  --ui-color-danger-hover: #f7b0a8;
+  --ui-color-danger-subtle: #3a2420;
+  --ui-focus-ring: #b9bec7;
+  --ui-color-overlay: rgb(4 5 6 / 66%);
   --ui-color-embed-canvas: #ffffff;
-  --ui-shadow-raised: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 44%);
-  --ui-shadow-overlay: 0 12px 34px rgb(0 0 0 / 52%), 0 2px 6px rgb(0 0 0 / 40%);
+  --ui-shadow-raised: 0 1px 2px rgb(0 0 0 / 46%), 0 4px 14px rgb(0 0 0 / 40%);
+  --ui-shadow-overlay: 0 14px 36px rgb(0 0 0 / 56%), 0 2px 8px rgb(0 0 0 / 44%);
 }

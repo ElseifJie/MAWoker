@@ -14,6 +14,15 @@ export interface ArtifactStorage {
     signal?: AbortSignal,
   ): PromiseLike<void>;
   openRead(objectKey: string, signal?: AbortSignal): PromiseLike<Readable>;
+  /**
+   * Reads an object this deployment did not write — an Ark export parked in TOS
+   * under Ark's own prefix. Separate from `openRead` because the bucket is not
+   * ours to assume.
+   */
+  readExternal(
+    input: { bucket: string; objectKey: string },
+    signal?: AbortSignal,
+  ): PromiseLike<Readable>;
   delete(objectKey: string): PromiseLike<void>;
 }
 
@@ -119,13 +128,25 @@ export class TosArtifactStorage implements ArtifactStorage {
   }
 
   async openRead(objectKey: string, signal?: AbortSignal): Promise<Readable> {
+    return this.read(this.dependencies.bucket, objectKey, signal);
+  }
+
+  async readExternal(
+    input: { bucket: string; objectKey: string },
+    signal?: AbortSignal,
+  ): Promise<Readable> {
+    return this.read(input.bucket, input.objectKey, signal);
+  }
+
+  private async read(
+    bucket: string,
+    objectKey: string,
+    signal?: AbortSignal,
+  ): Promise<Readable> {
     let result: { body: Readable };
     try {
       result = await this.dependencies.client.getObject(
-        {
-          bucket: this.dependencies.bucket,
-          key: objectKey,
-        },
+        { bucket, key: objectKey },
         {
           ...(signal ? { signal } : {}),
         },
@@ -173,8 +194,20 @@ export class TosArtifactStorage implements ArtifactStorage {
   }
 }
 
+function externalKey(input: { bucket: string; objectKey: string }): string {
+  return `${input.bucket}/${input.objectKey}`;
+}
+
 export class InMemoryArtifactStorage implements ArtifactStorage {
   private readonly objects = new Map<
+    string,
+    { bytes: Uint8Array; contentType: string }
+  >();
+  /**
+   * Source objects live in a separate map so `keys()` keeps meaning "what this
+   * deployment wrote", which is what cleanup assertions care about.
+   */
+  private readonly external = new Map<
     string,
     { bytes: Uint8Array; contentType: string }
   >();
@@ -219,6 +252,33 @@ export class InMemoryArtifactStorage implements ArtifactStorage {
     signal?.addEventListener("abort", abort, { once: true });
     stream.once("close", () => signal?.removeEventListener("abort", abort));
     return stream;
+  }
+
+  async readExternal(
+    input: { bucket: string; objectKey: string },
+    signal?: AbortSignal,
+  ): Promise<Readable> {
+    if (signal?.aborted) {
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
+    const object = this.external.get(externalKey(input));
+    if (!object) {
+      throw new StorageProviderError("read");
+    }
+    const stream = Readable.from([new Uint8Array(object.bytes)]);
+    const abort = () => stream.destroy();
+    signal?.addEventListener("abort", abort, { once: true });
+    stream.once("close", () => signal?.removeEventListener("abort", abort));
+    return stream;
+  }
+
+  /** Primes a source object as if Ark had parked it in TOS. */
+  putExternal(
+    input: { bucket: string; objectKey: string },
+    bytes: Uint8Array,
+    contentType: string,
+  ): void {
+    this.external.set(externalKey(input), { bytes, contentType });
   }
 
   async delete(objectKey: string): Promise<void> {

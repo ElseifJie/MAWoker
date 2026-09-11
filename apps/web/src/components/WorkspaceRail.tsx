@@ -28,6 +28,8 @@ export interface WorkspaceRailProps {
   todos: TodoEntry[];
   artifacts: readonly ArtifactSummary[];
   artifactsError: boolean;
+  /** The last refresh of the Agent's output folder failed; the list may be stale. */
+  artifactsSyncError?: boolean;
   onRetryArtifacts: () => void;
   selectedArtifactId: string | null;
   onSelectArtifact: (artifactId: string | null) => void;
@@ -47,6 +49,7 @@ export function WorkspaceRail({
   todos,
   artifacts,
   artifactsError,
+  artifactsSyncError = false,
   onRetryArtifacts,
   selectedArtifactId,
   onSelectArtifact,
@@ -113,6 +116,19 @@ export function WorkspaceRail({
           <span className="workspace-rail__count">{artifacts.length}</span>
         ) : null}
       </header>
+
+      {artifactsSyncError && !artifactsError ? (
+        <p className="workspace-rail__stale" role="status">
+          New files could not be checked.{" "}
+          <button
+            type="button"
+            className="workspace-rail__stale-retry"
+            onClick={onRetryArtifacts}
+          >
+            Retry
+          </button>
+        </p>
+      ) : null}
 
       {artifactsError ? (
         <div className="workspace-rail__empty">

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { Readable } from "node:stream";
 import {
   ArkGatewayError,
   HttpArkGateway,
   InMemoryArkGateway,
+  stubExportBucket,
 } from "../packages/ark-client/src/index.js";
 
 const agentInput = {
@@ -212,16 +212,21 @@ describe("InMemoryArkGateway", () => {
     await expect(gateway.listArtifacts(session.id)).resolves.toMatchObject([
       {
         id: "artifact-1",
-        mountPath: "/mnt/session/outputs/result.txt",
         name: "result.txt",
         size: 2,
+        tos: {
+          bucket: stubExportBucket,
+          objectKey: `ark_ma/outputs/${session.id}/result.txt`,
+        },
       },
     ]);
-    const download = await gateway.downloadFile("artifact-1");
-    expect(download.contentLength).toBe(2);
-    const chunks: Buffer[] = [];
-    for await (const chunk of download.stream) chunks.push(Buffer.from(chunk));
-    expect(Buffer.concat(chunks)).toEqual(Buffer.from([4, 5]));
+    // Ark's Files API has no content endpoint, so the export is read from the
+    // TOS location it reports rather than downloaded through the gateway.
+    expect(gateway.artifactExport("artifact-1")).toMatchObject({
+      bucket: stubExportBucket,
+      objectKey: `ark_ma/outputs/${session.id}/result.txt`,
+      bytes: new Uint8Array([4, 5]),
+    });
 
     await gateway.deleteFile(file.id);
     await expect(
@@ -528,21 +533,90 @@ describe("HttpArkGateway", () => {
     ).toBe("cleanup-1");
   });
 
-  it("returns the Files API body as a stream with its known content length", async () => {
-    let pulls = 0;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(new Uint8Array([pulls]));
-        if (pulls === 2) controller.close();
-      },
-    });
-    const fetch = vi.fn().mockResolvedValue(
-      new Response(body, {
-        headers: {
-          "content-type": "application/octet-stream",
-          "content-length": "2",
+  it("maps the Files API envelope and keeps only this Session's exports", async () => {
+    const envelope = {
+      object: "file",
+      data: [
+        {
+          object: "file",
+          id: "file-export",
+          purpose: "agent",
+          filename: "康冠科技KTC演示稿.html",
+          bytes: 11762,
+          mime_type: "text/html; charset=UTF-8",
+          created_at: 1789114336,
+          expire_at: 1789719135,
+          status: "active",
+          tos: {
+            bucket: "wj-ma-demo",
+            object_key:
+              "ark_ma/outputs/env-1/sesn-1/ark_processed/file-export/x.html",
+          },
+          scope: { type: "session", id: "sesn-1" },
         },
+        {
+          object: "file",
+          id: "file-upload",
+          purpose: "agent",
+          filename: "brief.pdf",
+          bytes: 549325,
+          mime_type: "application/pdf",
+          created_at: 1789110044,
+          status: "active",
+        },
+        {
+          object: "file",
+          id: "file-other-session",
+          purpose: "agent",
+          filename: "elsewhere.txt",
+          bytes: 1,
+          mime_type: "text/plain",
+          created_at: 1789110000,
+          status: "active",
+          scope: { type: "session", id: "sesn-2" },
+        },
+      ],
+      first_id: "file-export",
+      last_id: "file-other-session",
+      has_more: false,
+    };
+    const fetch = vi.fn().mockResolvedValue(Response.json(envelope));
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      maxAttempts: 1,
+    });
+
+    await expect(gateway.listArtifacts("sesn-1")).resolves.toEqual([
+      {
+        id: "file-export",
+        sessionId: "sesn-1",
+        name: "康冠科技KTC演示稿.html",
+        contentType: "text/html; charset=UTF-8",
+        size: 11762,
+        createdAt: "2026-09-11T08:12:16.000Z",
+        tos: {
+          bucket: "wj-ma-demo",
+          objectKey:
+            "ark_ma/outputs/env-1/sesn-1/ark_processed/file-export/x.html",
+        },
+      },
+    ]);
+    // The query no longer sends `kind=artifact`, which Ark ignores.
+    expect(String(fetch.mock.calls[0]?.[0])).toBe(
+      "https://ark.example.com/api/v3/files?scope_id=sesn-1&limit=100",
+    );
+  });
+
+  it("treats a null data field as an empty file list", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        object: "file",
+        data: null,
+        first_id: null,
+        last_id: null,
+        has_more: false,
       }),
     );
     const gateway = new HttpArkGateway({
@@ -552,19 +626,7 @@ describe("HttpArkGateway", () => {
       maxAttempts: 1,
     });
 
-    const download = await gateway.downloadFile("file/one", {
-      correlationId: "download-1",
-    });
-
-    expect(download.contentLength).toBe(2);
-    expect(download.stream).toBeInstanceOf(Readable);
-    const chunks: Buffer[] = [];
-    for await (const chunk of download.stream) chunks.push(Buffer.from(chunk));
-    expect(Buffer.concat(chunks)).toEqual(Buffer.from([1, 2]));
-    expect(fetch).toHaveBeenCalledWith(
-      "https://ark.example.com/api/v3/files/file%2Fone/content",
-      expect.objectContaining({ method: "GET", headers: expect.any(Headers) }),
-    );
+    await expect(gateway.listArtifacts("sesn-1")).resolves.toEqual([]);
   });
 
   it.each(unsafeJsonWrites)(

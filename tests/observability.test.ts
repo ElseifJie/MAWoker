@@ -171,4 +171,72 @@ describe("structured application logging", () => {
     );
     await app.close();
   });
+
+  // Fastify rejects these before any handler runs: an empty JSON body is a
+  // client mistake, and reporting it as 500 hid that behind a server error.
+  it("reports a malformed request body as a client error, not a server error", async () => {
+    const logs = captureLogs();
+    const app = buildApp({ logStream: logs.stream });
+    app.delete("/logging-body-probe", async () => ({ ok: true }));
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/logging-body-probe",
+      headers: { "content-type": "application/json" },
+      payload: "",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: "VALIDATION_FAILED", retryable: false },
+    });
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        event: "request.failed",
+        result: "error",
+        status_code: 400,
+        error_code: "VALIDATION_FAILED",
+      }),
+    );
+    await app.close();
+  });
+
+  it("reports an unsupported content type as a client error", async () => {
+    const app = buildApp({});
+    app.post("/logging-content-type-probe", async () => ({ ok: true }));
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/logging-content-type-probe",
+      headers: { "content-type": "application/xml" },
+      payload: "<ok/>",
+    });
+
+    expect(response.statusCode).toBe(415);
+    expect(response.json()).toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+    await app.close();
+  });
+
+  it("keeps Session routes answering a malformed body with a client error", async () => {
+    const app = buildApp({
+      auth: authService(),
+      sessions: {} as unknown as SessionApiService,
+    });
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/sessions/${sessionId}/archive`,
+      cookies: { [AUTH_COOKIE_NAME]: "cookie-session-secret" },
+      headers: { "content-type": "application/json" },
+      payload: "",
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({
+      error: { code: "VALIDATION_FAILED" },
+    });
+    await app.close();
+  });
 });

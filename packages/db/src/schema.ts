@@ -9,6 +9,7 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -212,6 +213,7 @@ export const sessions = pgTable(
       .default(false)
       .notNull(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
+    pinnedAt: timestamp("pinned_at", { withTimezone: true }),
     deletionState: deletionState("deletion_state").default("none").notNull(),
     lastEventAt: timestamp("last_event_at", { withTimezone: true }),
     ...timestamps,
@@ -254,6 +256,13 @@ export const sessionEventCursors = pgTable("session_event_cursors", {
   lastObservedAt: timestamp("last_observed_at", { withTimezone: true }),
   runningSince: timestamp("running_since", { withTimezone: true }),
   lastReconciledAt: timestamp("last_reconciled_at", { withTimezone: true }),
+  /**
+   * Set once the full Ark history has been copied into `session_events`. Until
+   * then the read path cannot trust the local log to be complete.
+   */
+  historyBackfilledAt: timestamp("history_backfilled_at", {
+    withTimezone: true,
+  }),
   recentEventIds: jsonb("recent_event_ids")
     .$type<string[]>()
     .default(sql`'[]'::jsonb`)
@@ -262,6 +271,37 @@ export const sessionEventCursors = pgTable("session_event_cursors", {
     .defaultNow()
     .notNull(),
 });
+
+/**
+ * The projected UI events for a Session, kept so reopening a Session is a
+ * database read instead of a full replay from Ark. Ark stays authoritative: the
+ * log is only ever a cache of events already observed, and rows are written
+ * with `on conflict do nothing` so a replay cannot duplicate them.
+ */
+export const sessionEvents = pgTable(
+  "session_events",
+  {
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    eventId: text("event_id").notNull(),
+    sourceType: text("source_type").notNull(),
+    type: text("type").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
+    payload: jsonb("payload")
+      .$type<Record<string, unknown>>()
+      .default(sql`'{}'::jsonb`)
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sessionId, table.eventId] }),
+    index("session_events_session_occurred_idx").on(
+      table.sessionId,
+      table.occurredAt,
+      table.eventId,
+    ),
+  ],
+);
 
 export const sessionInputs = pgTable(
   "session_inputs",

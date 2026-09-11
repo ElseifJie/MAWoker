@@ -107,6 +107,12 @@ export const deleteSessionSchema = z
   })
   .strict();
 
+export const renameSessionSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120),
+  })
+  .strict();
+
 export const quotaSchema = z
   .object({
     personalAgentLimit: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
@@ -219,6 +225,15 @@ function stringField(
     if (typeof data[name] === "string") return data[name];
   }
   return undefined;
+}
+
+/**
+ * The UI type for an Ark event name. Exported so a stored event can be
+ * re-projected on read rather than trusting a denormalized column, which keeps
+ * rows written by an older release rendering correctly.
+ */
+export function uiEventType(sourceType: string): UiEventType {
+  return eventTypes[sourceType] ?? "unknown";
 }
 
 // The `retry_status.type` probe is unverified: no `session.error` appeared in the

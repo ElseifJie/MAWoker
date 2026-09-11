@@ -20,6 +20,7 @@
     "db:migrate": "npm run db:migrate -w @pwa/db",
     "admin:seed": "tsx --env-file=.env scripts/seed-admin.ts",
     "data:reset": "tsx --env-file=.env scripts/reset-data.ts",
+    "sessions:backfill-events": "tsx --env-file=.env scripts/backfill-session-events.ts",
     "healthcheck": "node scripts/container-healthcheck.mjs",
     "healthcheck:api": "node scripts/container-healthcheck.mjs api",
     "healthcheck:worker": "node scripts/container-healthcheck.mjs worker",

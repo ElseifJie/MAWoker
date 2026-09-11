@@ -5,6 +5,7 @@ import {
   KeyRound,
   Plus,
   Puzzle,
+  Search,
   Server,
   Settings as SettingsIcon,
 } from "lucide-react";
@@ -17,20 +18,13 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  Navigate,
-  NavLink,
-  Route,
-  Routes,
-  useNavigate,
-} from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import {
   ApiClientError,
   apiClient,
   type AgentList,
   type ClientCapabilities,
   type CurrentUser,
-  type SessionStatus,
   type SessionSummary,
   type UsageSummary,
 } from "./api.js";
@@ -39,6 +33,7 @@ import { AgentPage } from "./AgentPage.js";
 import { SessionIntro } from "./components/SessionIntro.js";
 import type { FirstMessageDelivery } from "./components/SessionComposer.js";
 import { CommandPalette, type Command } from "./components/CommandPalette.js";
+import { SessionList } from "./components/SessionList.js";
 import { FilesPage } from "./FilesPage.js";
 import { SessionPage } from "./SessionPage.js";
 import {
@@ -251,9 +246,13 @@ const reservedNavigation: ReservedNavigation[] = [
  * the matching route; until then every reserved entry is disabled, so nothing
  * can navigate to a route that is not there.
  */
-function navigationFor(capabilities: ClientCapabilities): NavigationItem[] {
+function navigationFor(
+  capabilities: ClientCapabilities,
+  onSearch: () => void,
+): NavigationItem[] {
   return [
     { to: "/", label: "New task", icon: Plus },
+    { to: "/search", label: "Search", icon: Search, onSelect: onSearch },
     { to: "/agents", label: "Agents", icon: Bot },
     { to: "/files", label: "My files", icon: FolderOpen },
     ...reservedNavigation.map(
@@ -264,75 +263,6 @@ function navigationFor(capabilities: ClientCapabilities): NavigationItem[] {
     ),
     { to: "/settings", label: "Settings", icon: SettingsIcon },
   ];
-}
-
-const statusLabels: Record<SessionStatus, string> = {
-  idle: "Idle",
-  running: "Running",
-  rescheduled: "Rescheduled",
-  terminated: "Terminated",
-};
-
-function SessionNavigation({
-  sessions,
-  archivedSessions,
-}: {
-  sessions: SessionSummary[];
-  archivedSessions: SessionSummary[];
-}) {
-  return (
-    <>
-      <section className="session-navigation" aria-label="Active Sessions">
-        <div className="section-label">
-          <span>Sessions</span>
-          <span>{sessions.length}</span>
-        </div>
-        {sessions.length === 0 ? (
-          <p className="empty-navigation">No active Sessions</p>
-        ) : (
-          sessions.map((session) => (
-            <NavLink
-              key={session.id}
-              to={`/sessions/${session.id}`}
-              className={({ isActive }) =>
-                `session-link${isActive ? " active" : ""}`
-              }
-            >
-              <span className="session-title">{session.title}</span>
-              <span className={`status status-${session.status}`}>
-                {statusLabels[session.status]}
-              </span>
-            </NavLink>
-          ))
-        )}
-      </section>
-      <section
-        className="session-navigation archived-navigation"
-        aria-label="Archived Sessions"
-      >
-        <div className="section-label">
-          <span>Archived</span>
-          <span>{archivedSessions.length}</span>
-        </div>
-        {archivedSessions.length === 0 ? (
-          <p className="empty-navigation">No archived Sessions</p>
-        ) : (
-          archivedSessions.map((session) => (
-            <NavLink
-              key={session.id}
-              to={`/sessions/${session.id}`}
-              className={({ isActive }) =>
-                `session-link${isActive ? " active" : ""}`
-              }
-            >
-              <span className="session-title">{session.title}</span>
-              <span className="status">Archived</span>
-            </NavLink>
-          ))
-        )}
-      </section>
-    </>
-  );
 }
 
 function Workspace({
@@ -351,6 +281,7 @@ function Workspace({
   const waitingFirstMessages = useRef(new Map<string, string>());
   const firstMessageTimers = useRef(new Map<string, number>());
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const themeResolved = theme.resolved;
   const setThemePreference = theme.setPreference;
 
@@ -611,11 +542,16 @@ function Workspace({
     <AppShell
       brand="Work Agent"
       navigationLabel="Workspace"
-      navigation={navigationFor(data.capabilities)}
+      navigation={navigationFor(data.capabilities, () =>
+        setSearchOpen((open) => !open),
+      )}
       navigationExtra={
-        <SessionNavigation
+        <SessionList
           sessions={data.sessions}
           archivedSessions={data.archivedSessions}
+          searchOpen={searchOpen}
+          onSessionChanged={handleSessionChanged}
+          onAuthRequired={onAuthRequired}
         />
       }
       backdropLabel="Close navigation"
