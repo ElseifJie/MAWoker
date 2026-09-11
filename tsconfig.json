@@ -8,7 +8,6 @@
     { "path": "./packages/auth" },
     { "path": "./packages/domain" },
     { "path": "./packages/storage" },
-    { "path": "./packages/ui" },
     { "path": "./apps/web" },
     { "path": "./apps/api" },
     { "path": "./apps/worker" }

@@ -30,9 +30,8 @@ async function signIn(email: string) {
   const user = userEvent.setup();
   await screen.findByRole("heading", { name: "Sign in to your workspace" });
   await user.type(screen.getByLabelText("Email"), email);
-  await user.click(screen.getByRole("button", { name: "Send code" }));
-  await user.type(screen.getByLabelText("Verification code"), "123456");
-  await user.click(screen.getByRole("button", { name: "Verify and sign in" }));
+  await user.type(screen.getByLabelText("Password"), "acceptance-password");
+  await user.click(screen.getByRole("button", { name: "Sign in" }));
   return user;
 }
 
@@ -88,7 +87,11 @@ describe("Task 18 browser acceptance", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByText("brief.txt")).toBeInTheDocument();
-    const stream = AcceptanceEventSource.instances.at(-1)!;
+    const stream = await waitFor(() => {
+      const instance = AcceptanceEventSource.instances.at(-1);
+      if (!instance) throw new Error("event stream not opened yet");
+      return instance;
+    });
     act(() => stream.emitOpen());
     await waitFor(() =>
       expect(backend.callsFor("POST", "/messages")).toHaveLength(1),
@@ -113,7 +116,7 @@ describe("Task 18 browser acceptance", () => {
       stream.emit("user.message", {
         id: "event-user",
         sourceType: "user.message",
-        type: "unknown",
+        type: "message",
         createdAt: "2026-09-07T08:00:00.000Z",
         payload: { content: "Prepare an acceptance report" },
       });
@@ -124,12 +127,34 @@ describe("Task 18 browser acceptance", () => {
         createdAt: "2026-09-07T08:00:01.000Z",
         payload: { content: "must remain private" },
       });
-      stream.emit("tool.call", {
-        id: "event-tool",
-        sourceType: "tool.call",
-        type: "tool",
+      stream.emit("agent.tool_use", {
+        id: "call_write_1",
+        sourceType: "agent.tool_use",
+        type: "tool_use",
         createdAt: "2026-09-07T08:00:02.000Z",
-        payload: { name: "files", status: "completed" },
+        payload: {
+          callId: "call_write_1",
+          name: "write",
+          argsSummary: "/workspace/acceptance-report.md",
+        },
+      });
+    });
+    const toolRow = () =>
+      document.querySelector('[data-event-id="call_write_1"]')!;
+    expect(toolRow().textContent).toContain("Writing");
+    expect(toolRow().textContent).toContain("acceptance-report.md");
+
+    act(() => {
+      stream.emit("agent.tool_result", {
+        id: "event-tool-result",
+        sourceType: "agent.tool_result",
+        type: "tool_result",
+        createdAt: "2026-09-07T08:00:02.500Z",
+        payload: {
+          callId: "call_write_1",
+          status: "ok",
+          preview: "Wrote /workspace/acceptance-report.md",
+        },
       });
       stream.emit("agent.message", {
         id: "event-agent",
@@ -148,7 +173,13 @@ describe("Task 18 browser acceptance", () => {
     });
     expect(await screen.findByText("Acceptance report ready.")).toBeVisible();
     expect(screen.queryByText("must remain private")).not.toBeInTheDocument();
-    expect(screen.getByText("files · Completed")).toBeVisible();
+    // The result folded into the same row rather than adding a second one.
+    expect(toolRow().textContent).toContain("Wrote");
+    expect(toolRow().textContent).not.toContain("Writing");
+    expect(toolRow().textContent).toContain("500ms");
+    const preview = screen.getByText("Wrote /workspace/acceptance-report.md");
+    expect(preview).toBeInTheDocument();
+    expect(preview).not.toBeVisible();
 
     act(() => stream.emitError());
     expect(screen.getByText("Reconnecting…")).toBeVisible();

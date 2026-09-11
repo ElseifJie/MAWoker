@@ -16,8 +16,7 @@ const generatedAt = new Date("2026-09-06T00:00:00.000Z");
 
 function auth(): ApiAuthService {
   return {
-    async requestEmailCode() {},
-    async verifyEmailCode() {
+    async login() {
       return { token: "token", expiresAt: new Date(Date.now() + 60_000) };
     },
     async authenticate(token) {

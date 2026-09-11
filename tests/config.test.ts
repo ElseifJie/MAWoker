@@ -20,6 +20,16 @@ const valid = {
   OUTBOUND_HOST_ALLOWLIST: "ark.example.com,tos.example.com",
   SESSION_DAILY_LIMIT: "25",
   MONTHLY_TOKEN_LIMIT: "1000000",
+  API_RATE_LIMIT_MAX: "120",
+  API_RATE_LIMIT_WINDOW_MS: "60000",
+  ARK_REQUEST_TIMEOUT_MS: "15000",
+  ARK_MAX_ATTEMPTS: "3",
+  ARK_RETRY_BASE_DELAY_MS: "100",
+  ARK_RETRY_MAX_DELAY_MS: "2000",
+  HEALTH_DB_TIMEOUT_MS: "1000",
+  WORKER_HEALTH_HOST: "0.0.0.0",
+  WORKER_HEALTH_PORT: "3001",
+  WORKER_POLL_INTERVAL_MS: "1000",
 };
 
 describe("server configuration", () => {
@@ -29,6 +39,15 @@ describe("server configuration", () => {
     expect(config.modelAllowlist).toEqual(["model-a", "model-b"]);
     expect(config.personalAgentLimit).toBe(10);
     expect(config.concurrentSessionLimit).toBe(2);
+    expect(config.apiRateLimit).toEqual({ max: 120, windowMs: 60_000 });
+    expect(config.ark.requestTimeoutMs).toBe(15_000);
+    expect(config.ark.maxAttempts).toBe(3);
+    expect(config.health.databaseTimeoutMs).toBe(1_000);
+    expect(config.worker).toEqual({
+      healthHost: "0.0.0.0",
+      healthPort: 3_001,
+      pollIntervalMs: 1_000,
+    });
   });
 
   it("derives the TOS S3-compatible endpoint for the configured region", () => {
@@ -36,6 +55,7 @@ describe("server configuration", () => {
       ...valid,
       NODE_ENV: "production",
       TOS_ENDPOINT: "https://tos-cn-beijing.volces.com",
+      OUTBOUND_HOST_ALLOWLIST: "ark.example.com,tos-s3-cn-beijing.volces.com",
     });
 
     expect(config.tos.endpoint).toBe("https://tos-s3-cn-beijing.volces.com");
@@ -46,6 +66,7 @@ describe("server configuration", () => {
       ...valid,
       NODE_ENV: "production",
       TOS_ENDPOINT: "https://tos-s3-cn-beijing.volces.com",
+      OUTBOUND_HOST_ALLOWLIST: "ark.example.com,tos-s3-cn-beijing.volces.com",
     });
 
     expect(config.tos.endpoint).toBe("https://tos-s3-cn-beijing.volces.com");
@@ -130,6 +151,7 @@ describe("server configuration", () => {
         ...valid,
         NODE_ENV: nodeEnv,
         TOS_ENDPOINT: "http://127.0.0.1:9000",
+        OUTBOUND_HOST_ALLOWLIST: "ark.example.com,127.0.0.1",
       });
 
       expect(config.tos.endpoint).toBe("http://127.0.0.1:9000");
@@ -141,5 +163,30 @@ describe("server configuration", () => {
 
     expect(JSON.stringify(config.public)).not.toContain("ark-secret");
     expect(JSON.stringify(config.public)).not.toContain("secret");
+  });
+
+  it.each([
+    ["APP_ORIGIN", "https://assistant.example.com/path"],
+    ["APP_ORIGIN", "https://user:pass@assistant.example.com"],
+    ["API_RATE_LIMIT_MAX", "0"],
+    ["API_RATE_LIMIT_WINDOW_MS", "0"],
+    ["ARK_REQUEST_TIMEOUT_MS", "0"],
+    ["ARK_MAX_ATTEMPTS", "0"],
+    ["HEALTH_DB_TIMEOUT_MS", "0"],
+    ["WORKER_HEALTH_PORT", "70000"],
+    ["WORKER_POLL_INTERVAL_MS", "0"],
+  ])("rejects unsafe process configuration %s=%s", (name, value) => {
+    expect(() => parseServerConfig({ ...valid, [name]: value })).toThrow(
+      new RegExp(name),
+    );
+  });
+
+  it("requires Ark and TOS endpoints to be in the outbound host allowlist", () => {
+    expect(() =>
+      parseServerConfig({
+        ...valid,
+        OUTBOUND_HOST_ALLOWLIST: "unrelated.example.com",
+      }),
+    ).toThrow(/OUTBOUND_HOST_ALLOWLIST/);
   });
 });

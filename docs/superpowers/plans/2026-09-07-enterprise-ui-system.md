@@ -95,8 +95,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean;
 }
 
-interface IconButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+interface IconButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   label: string;
   size?: "default" | "small";
 }
@@ -220,8 +219,7 @@ interface PageHeaderProps {
   headingRef?: React.Ref<HTMLHeadingElement>;
 }
 
-interface DataTableProps
-  extends React.TableHTMLAttributes<HTMLTableElement> {
+interface DataTableProps extends React.TableHTMLAttributes<HTMLTableElement> {
   caption: string;
   minWidth?: "standard" | "wide";
 }

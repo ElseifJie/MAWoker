@@ -14,34 +14,32 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { App } from "./App.js";
+import { App, FIRST_MESSAGE_STREAM_TIMEOUT_MS } from "./App.js";
 
-const pageStyles = readFileSync(
-  resolve(
-    process.cwd(),
-    process.cwd().endsWith("apps/web")
-      ? "src/styles.css"
-      : "apps/web/src/styles.css",
-  ),
-  "utf8",
-);
+function readCss(path: string): string {
+  return readFileSync(
+    resolve(
+      process.cwd(),
+      process.cwd().endsWith("apps/web") ? path : `apps/web/${path}`,
+    ),
+    "utf8",
+  );
+}
 
-const migratedCss = [
+const cssFiles = [
   "src/ui/tokens.css",
   "src/ui/components.css",
   "src/ui/layouts.css",
   "src/styles.css",
-]
-  .map((path) =>
-    readFileSync(
-      resolve(
-        process.cwd(),
-        process.cwd().endsWith("apps/web") ? path : `apps/web/${path}`,
-      ),
-      "utf8",
-    ),
-  )
+] as const;
+
+const pageStyles = readCss("src/styles.css");
+const tokensCss = readCss("src/ui/tokens.css");
+const componentCss = cssFiles
+  .filter((path) => path !== "src/ui/tokens.css")
+  .map(readCss)
   .join("\n");
+const migratedCss = cssFiles.map(readCss).join("\n");
 
 const agentId = "00000000-0000-4000-8000-000000000001";
 const uploadId = "00000000-0000-4000-8000-000000000002";
@@ -225,6 +223,10 @@ const usageResponse = {
 };
 
 const capabilitiesResponse = {
+  skills: { available: false },
+  mcpServers: { available: false },
+  vaults: { available: false },
+  memoryStores: { available: false },
   personalAgentModels: ["model-a", "model-b"],
 };
 
@@ -404,9 +406,9 @@ afterEach(() => {
 });
 
 describe("authentication", () => {
-  it("routes unauthenticated users through email-code login and normalizes expired codes", async () => {
+  it("routes unauthenticated users through password login and reports rejected credentials", async () => {
     let authenticated = false;
-    let verificationAttempts = 0;
+    let loginAttempts = 0;
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const path = new URL(String(input), "http://localhost").pathname;
       if (path === "/api/v1/me") {
@@ -414,18 +416,15 @@ describe("authentication", () => {
           ? json({
               user: {
                 userId: "user-1",
-                authSubject: "managed:user@example.com",
+                authSubject: "local:user@example.com",
                 role: "user",
               },
             })
           : apiError("AUTH_REQUIRED", 401);
       }
-      if (path === "/api/v1/auth/email-code") {
-        return json({ accepted: true }, 202);
-      }
-      if (path === "/api/v1/auth/verify") {
-        verificationAttempts += 1;
-        if (verificationAttempts === 1) {
+      if (path === "/api/v1/auth/login") {
+        loginAttempts += 1;
+        if (loginAttempts === 1) {
           return apiError("AUTH_REQUIRED", 401);
         }
         authenticated = true;
@@ -445,40 +444,27 @@ describe("authentication", () => {
     ).not.toBeInTheDocument();
 
     const email = screen.getByLabelText("Email");
-    expect(email).toHaveAccessibleDescription(
-      "Use your work email. No password is required.",
-    );
+    const password = screen.getByLabelText("Password");
     await user.type(email, "User@Example.com");
-    await user.click(screen.getByRole("button", { name: "Send code" }));
-    expect(
-      await screen.findByText("We sent a code to user@example.com."),
-    ).toBeInTheDocument();
+    await user.type(password, "wrong-password");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
 
-    const verificationCode = screen.getByLabelText("Verification code");
-    expect(verificationCode).toHaveAccessibleDescription(
-      "We sent a code to user@example.com.",
-    );
-    await user.type(verificationCode, "000000");
-    await user.click(
-      screen.getByRole("button", { name: "Verify and sign in" }),
-    );
     expect(
-      await screen.findByText(
-        "The code is invalid or expired. Request a new code and try again.",
-      ),
+      await screen.findByText("Email or password is incorrect."),
     ).toBeInTheDocument();
-    expect(verificationCode).toHaveAccessibleDescription(
-      "The code is invalid or expired. Request a new code and try again.",
+    expect(password).toHaveAccessibleDescription(
+      "Email or password is incorrect.",
     );
+    expect(password).toHaveAttribute("aria-invalid", "true");
 
-    await user.clear(verificationCode);
-    await user.type(verificationCode, "123456");
-    await user.click(
-      screen.getByRole("button", { name: "Verify and sign in" }),
-    );
+    await user.clear(password);
+    await user.type(password, "correct-password");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
     expect(
       await screen.findByRole("heading", { name: "Session" }),
     ).toBeInTheDocument();
+    expect(loginAttempts).toBe(2);
   });
 
   it("logs out and returns to the unauthenticated route", async () => {
@@ -563,17 +549,32 @@ describe("workspace shell", () => {
     ).toBeInTheDocument();
     const navigation = screen.getByRole("navigation", { name: "Workspace" });
     expect(navigation).toHaveClass("ui-app-shell__navigation");
-    for (const name of [
-      "New task",
-      "Agents",
-      "My files",
-      "Context",
-      "Settings",
-    ]) {
+    for (const name of ["New task", "Agents", "My files", "Settings"]) {
       expect(
         within(navigation).getByRole("link", { name }),
       ).toBeInTheDocument();
     }
+
+    // Reserved capabilities stay visible so the workspace shape is stable, but
+    // they are not links and explain themselves instead of leading to a stub.
+    const reserved = Array.from(
+      navigation.querySelectorAll<HTMLElement>('[aria-disabled="true"]'),
+    );
+    expect(
+      reserved.map((entry) => entry.querySelector("span")?.textContent),
+    ).toEqual(["Context", "Skills", "MCP servers", "Vault"]);
+    expect(reserved.map((entry) => entry.getAttribute("title"))).toEqual([
+      "Memory stores are not available in this release.",
+      "Custom Skills are not available in this release.",
+      "MCP server management is not available in this release.",
+      "Private credential storage is not available in this release.",
+    ]);
+    expect(
+      within(navigation).queryByRole("link", {
+        name: /Context|Skills|MCP servers|Vault/,
+      }),
+    ).toBeNull();
+
     expect(within(navigation).getByText("Quarterly plan")).toBeInTheDocument();
     expect(within(navigation).getByText("Running")).toBeInTheDocument();
 
@@ -588,13 +589,6 @@ describe("workspace shell", () => {
     expect(menu).toHaveAttribute("title", "Close navigation");
     await user.keyboard("{Escape}");
     expect(menu).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(within(navigation).getByRole("link", { name: "Context" }));
-    expect(
-      await screen.findByRole("heading", { name: "Context" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Not available yet")).toBeInTheDocument();
-    expect(screen.queryByRole("form")).not.toBeInTheDocument();
   });
 
   it("removes the closed mobile drawer from the accessibility tree and tab order", async () => {
@@ -760,7 +754,10 @@ describe("Agent management", () => {
   it("uses only the server capability allowlist for personal Agent models", async () => {
     vi.mocked(fetch).mockImplementation(
       authenticatedHandler({
-        capabilities: { personalAgentModels: ["model-c"] },
+        capabilities: {
+          ...capabilitiesResponse,
+          personalAgentModels: ["model-c"],
+        },
       }),
     );
 
@@ -1056,12 +1053,14 @@ describe("Session page", () => {
       within(dialog).getByRole("button", { name: "Delete permanently" }),
     ).toHaveClass("ui-button", "ui-button--danger");
 
-    const [timelineRule] = findStyleRules(".timeline");
+    const [transcriptRule] = findStyleRules(".transcript");
     const [composerRule] = findStyleRules(".session-composer");
     const [connectionRule] = findStyleRules(".session-connection-badge");
-    expect(timelineRule?.style.width).toBe("100%");
-    expect(timelineRule?.style.maxWidth).toBe("760px");
-    expect(timelineRule?.style.marginInline).toBe("auto");
+    expect(transcriptRule?.style.width).toBe("100%");
+    expect(transcriptRule?.style.maxWidth).toBe(
+      "var(--ui-transcript-max-width)",
+    );
+    expect(transcriptRule?.style.marginInline).toBe("auto");
     expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
     expect(connectionRule?.style.minWidth).toBe("7.5rem");
   });
@@ -1395,7 +1394,7 @@ describe("Session page", () => {
       source.emit("user.message", {
         id: "event-1",
         sourceType: "user.message",
-        type: "unknown",
+        type: "message",
         createdAt: "2026-09-07T08:01:00.000Z",
         payload: { content: "Prepare the plan" },
       });
@@ -1406,12 +1405,27 @@ describe("Session page", () => {
         createdAt: "2026-09-07T08:02:00.000Z",
         payload: { content: "private chain of thought" },
       });
-      source.emit("tool.call", {
-        id: "event-3",
-        sourceType: "tool.call",
-        type: "tool",
+      source.emit("agent.tool_use", {
+        id: "call_search_1",
+        sourceType: "agent.tool_use",
+        type: "tool_use",
         createdAt: "2026-09-07T08:03:00.000Z",
-        payload: { name: "search", status: "running" },
+        payload: {
+          callId: "call_search_1",
+          name: "web_search",
+          argsSummary: "doubao pricing",
+        },
+      });
+      source.emit("agent.tool_result", {
+        id: "event-3r",
+        sourceType: "agent.tool_result",
+        type: "tool_result",
+        createdAt: "2026-09-07T08:03:01.000Z",
+        payload: {
+          callId: "call_search_1",
+          status: "ok",
+          preview: "3 results",
+        },
       });
       source.emit("agent.message", {
         id: "event-4",
@@ -1458,6 +1472,7 @@ describe("Session page", () => {
     });
 
     const timeline = screen.getByLabelText("Session timeline");
+    // The tool result folds into its call, so it has no row of its own.
     expect(
       Array.from(timeline.querySelectorAll("[data-event-id]")).map((item) =>
         item.getAttribute("data-event-id"),
@@ -1465,17 +1480,21 @@ describe("Session page", () => {
     ).toEqual([
       "event-1",
       "event-2",
-      "event-3",
+      "call_search_1",
       "event-4",
       "event-5",
       "event-6",
     ]);
     expect(screen.getByText("Prepare the plan")).toBeInTheDocument();
-    expect(screen.getByText("Agent is thinking…")).toBeInTheDocument();
+    expect(screen.getByText("Thinking…")).toBeInTheDocument();
     expect(
       screen.queryByText("private chain of thought"),
     ).not.toBeInTheDocument();
-    expect(screen.getByText("search · Running")).toBeInTheDocument();
+    const toolRow = timeline.querySelector('[data-event-id="call_search_1"]')!;
+    expect(toolRow.textContent).toContain("Searched the web for");
+    expect(toolRow.textContent).toContain("doubao pricing");
+    expect(toolRow.textContent).toContain("1.0s");
+    expect(screen.getByText("3 results")).toBeInTheDocument();
     expect(screen.getByText("Recoverable error")).toBeInTheDocument();
     expect(screen.getByText("Execution stopped")).toBeInTheDocument();
     expect(screen.getAllByText("Terminated")).toHaveLength(2);
@@ -1880,32 +1899,164 @@ describe("artifact management", () => {
 });
 
 describe("unavailable capabilities", () => {
-  it("provides explicit Context, Skills, MCP, and Vault pages without controls", async () => {
+  it("reports reserved capabilities as statements, not controls", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/settings");
+
+    await screen.findByRole("heading", { name: "Settings" });
+    const section = screen
+      .getByRole("heading", { name: "Workspace capabilities" })
+      .closest("section")!;
+
+    for (const label of ["Context", "Skills", "MCP servers", "Vault"]) {
+      expect(within(section).getByText(label)).toBeInTheDocument();
+    }
+    expect(
+      within(section).getAllByText("Not available in this release"),
+    ).toHaveLength(4);
+    expect(within(section).queryByRole("link")).toBeNull();
+    expect(within(section).queryByRole("button")).toBeNull();
+    expect(within(section).queryByRole("textbox")).toBeNull();
+    expect(within(section).queryByRole("combobox")).toBeNull();
+  });
+
+  it("leaves no route behind for a capability that is unavailable", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/settings/vault");
+
+    expect(
+      await screen.findByRole("heading", { name: "New task" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Not available yet")).not.toBeInTheDocument();
+  });
+
+  it("paints the chosen theme onto the document and remembers it", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/settings");
     const user = userEvent.setup();
 
     await screen.findByRole("heading", { name: "Settings" });
-    for (const [linkName, heading] of [
-      ["Skills", "Skills"],
-      ["MCP servers", "MCP"],
-      ["Vault", "Vault"],
-    ]) {
-      await user.click(screen.getByRole("link", { name: linkName }));
-      expect(
-        await screen.findByRole("heading", { name: heading }),
-      ).toBeInTheDocument();
-      expect(screen.getByText("Not available yet")).toBeInTheDocument();
-      expect(screen.queryByRole("form")).not.toBeInTheDocument();
-      await user.click(screen.getByRole("link", { name: "Settings" }));
-    }
+    const theme = screen.getByLabelText("Theme");
+    expect(theme).toHaveValue("system");
+    expect(document.documentElement.dataset.theme).toBe("light");
 
-    await user.click(screen.getByRole("link", { name: "Context" }));
+    await user.selectOptions(theme, "dark");
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("pwa.theme")).toBe("dark");
+
+    document.documentElement.dataset.theme = "light";
+    localStorage.removeItem("pwa.theme");
+  });
+});
+
+describe("command palette", () => {
+  it("opens on the shortcut, filters, and navigates by keyboard alone", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/agents");
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agents" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    const search = await screen.findByRole("combobox", {
+      name: "Search commands",
+    });
     expect(
-      await screen.findByRole("heading", { name: "Context" }),
+      screen.getByRole("dialog", { name: "Command palette" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Not available yet")).toBeInTheDocument();
-    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(search).toHaveFocus();
+    expect(screen.getAllByRole("option").length).toBeGreaterThan(4);
+
+    await user.type(search, "quarterly");
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent("Quarterly plan");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    expect(search).toHaveAttribute("aria-activedescendant", options[0]!.id);
+
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Current location").textContent).toMatch(
+      /^\/sessions\//,
+    );
+  });
+
+  it("moves the selection with the arrow keys", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/agents");
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agents" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    const search = await screen.findByRole("combobox", {
+      name: "Search commands",
+    });
+    const options = screen.getAllByRole("option");
+    expect(search).toHaveAttribute("aria-activedescendant", options[0]!.id);
+
+    await user.keyboard("{ArrowDown}");
+    expect(search).toHaveAttribute("aria-activedescendant", options[1]!.id);
+
+    await user.keyboard("{ArrowUp}");
+    expect(search).toHaveAttribute("aria-activedescendant", options[0]!.id);
+
+    // The selection does not run off the end of the list.
+    await user.keyboard("{ArrowUp}");
+    expect(search).toHaveAttribute("aria-activedescendant", options[0]!.id);
+  });
+
+  it("closes on Escape without navigating", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/agents");
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agents" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    await screen.findByRole("combobox", { name: "Search commands" });
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Current location").textContent).toBe(
+      "/agents",
+    );
+  });
+
+  it("reports no match instead of an empty listbox", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/agents");
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agents" });
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    const search = await screen.findByRole("combobox", {
+      name: "Search commands",
+    });
+    await user.type(search, "zzzz-no-such-command");
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByText("No matching commands.")).toBeInTheDocument();
+    expect(search).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("switches the theme from the palette", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/agents");
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Agents" });
+    expect(document.documentElement.dataset.theme).toBe("light");
+
+    await user.keyboard("{Meta>}k{/Meta}");
+    const search = await screen.findByRole("combobox", {
+      name: "Search commands",
+    });
+    await user.type(search, "dark theme");
+    await user.keyboard("{Enter}");
+
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("pwa.theme")).toBe("dark");
+
+    document.documentElement.dataset.theme = "light";
+    localStorage.removeItem("pwa.theme");
   });
 });
 
@@ -1918,6 +2069,106 @@ describe("migrated CSS contracts", () => {
     expect(oversizedRadii).toEqual([]);
     expect(migratedCss).not.toMatch(/font-size\s*:[^;]*(?:vw|vh|vmin|vmax)/i);
     expect(migratedCss).not.toMatch(/letter-spacing\s*:\s*-/i);
+  });
+
+  it("keeps component styles free of hardcoded colors", () => {
+    // A literal cannot be rethemed, so it would sit dark-on-dark in dark mode.
+    const literals = componentCss.match(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g);
+
+    expect(literals ?? []).toEqual([]);
+  });
+
+  it("redefines every themed token in the dark palette", () => {
+    const declarationsOf = (block: string) =>
+      new Map(
+        [...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((match) => [
+          match[1],
+          match[2]!.trim(),
+        ]),
+      );
+    const rootBlock = /:root\s*\{([^}]*)\}/.exec(tokensCss)?.[1] ?? "";
+    const darkBlock =
+      /\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(tokensCss)?.[1] ?? "";
+    const root = declarationsOf(rootBlock);
+    const dark = declarationsOf(darkBlock);
+
+    const isThemed = (value: string) =>
+      value.startsWith("#") ||
+      value.startsWith("rgb") ||
+      value.startsWith("hsl") ||
+      value.startsWith("oklch");
+    const missing = [...root.entries()]
+      .filter(([, value]) => isThemed(value))
+      .map(([name]) => name)
+      .filter((name) => !dark.has(name));
+
+    expect(dark.size).toBeGreaterThan(0);
+    expect(missing).toEqual([]);
+  });
+
+  it("keeps the composer row fixed so loading events cannot shift it", () => {
+    const [rule] = findStyleRules(".session-page");
+    const rows = rule?.style.gridTemplateRows ?? "";
+
+    // header auto · transcript flexible · composer a fixed length
+    expect(rows).toMatch(/^auto\s+minmax\([^)]*\)\s+\d+(\.\d+)?px$/);
+  });
+
+  it("meets WCAG AA contrast for text pairs in both palettes", () => {
+    const parseBlock = (selector: string) => {
+      const body =
+        new RegExp(`${selector}\\s*\\{([^}]*)\\}`).exec(tokensCss)?.[1] ?? "";
+      return new Map(
+        [...body.matchAll(/(--[\w-]+)\s*:\s*(#[0-9a-fA-F]{6})\s*;/g)].map(
+          (match) => [match[1], match[2]!],
+        ),
+      );
+    };
+    const luminance = (hex: string) => {
+      const channel = (offset: number) => {
+        const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+        return value <= 0.03928
+          ? value / 12.92
+          : ((value + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+    };
+    const ratio = (a: string, b: string) => {
+      const [lighter, darker] = [luminance(a), luminance(b)].sort(
+        (x, y) => y - x,
+      );
+      return (lighter! + 0.05) / (darker! + 0.05);
+    };
+
+    const pairs: [string, string][] = [
+      ["--ui-color-text", "--ui-color-surface"],
+      ["--ui-color-text", "--ui-color-surface-canvas"],
+      ["--ui-color-text-muted", "--ui-color-surface"],
+      ["--ui-color-text-muted", "--ui-color-surface-subtle"],
+      ["--ui-color-accent", "--ui-color-surface"],
+      ["--ui-color-text-inverse", "--ui-color-accent"],
+      ["--ui-color-danger", "--ui-color-danger-subtle"],
+      ["--ui-color-warning", "--ui-color-warning-subtle"],
+      ["--ui-color-success", "--ui-color-success-subtle"],
+    ];
+
+    for (const [selector, theme] of [
+      [":root", "light"],
+      ['\\[data-theme="dark"\\]', "dark"],
+    ] as const) {
+      const tokens = parseBlock(selector);
+      expect(tokens.size).toBeGreaterThan(0);
+      for (const [foreground, background] of pairs) {
+        const contrast = ratio(
+          tokens.get(foreground)!,
+          tokens.get(background)!,
+        );
+        expect(
+          contrast,
+          `${theme}: ${foreground} on ${background}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });
 
@@ -1976,6 +2227,65 @@ describe("new task composer", () => {
     expect(smallControlRule?.style.height).toBe("");
     expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
     expect(findStyleRules(".ui-app-shell__main > .page")).toHaveLength(1);
+  });
+
+  it("fails a first message the event stream never opened for", async () => {
+    const handler = authenticatedHandler();
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === "/api/v1/sessions" && (init?.method ?? "GET") === "POST") {
+        return json({
+          ...sessionsResponse.sessions[0],
+          id: createdSessionId,
+        });
+      }
+      return handler(input, init);
+    });
+
+    renderApp();
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "New task" });
+    await user.type(screen.getByLabelText("Task message"), "Prepare the plan");
+
+    // Fake timers from here: this is the moment the delivery timer is armed.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const flush = async () => {
+        for (let tick = 0; tick < 5; tick += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(0);
+          });
+        }
+      };
+
+      await act(async () => {
+        screen.getByRole("button", { name: "Send task" }).click();
+      });
+      await flush();
+
+      expect(
+        screen.getByText("Connecting before first message…"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Retry first message" }),
+      ).not.toBeInTheDocument();
+
+      // The stream is never opened, so the delivery must not wait forever.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(FIRST_MESSAGE_STREAM_TIMEOUT_MS);
+      });
+
+      expect(
+        screen.getByText(
+          "The first message could not be sent. Retry from this Session.",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Retry first message" }),
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains a created Session and retries only its failed first message", async () => {
@@ -2140,5 +2450,194 @@ describe("new task composer", () => {
     expect(
       calls.filter((call) => call.path.endsWith("/messages")),
     ).toHaveLength(2);
+  });
+});
+
+describe("artifact chips in replies", () => {
+  const reportArtifactId = "00000000-0000-4000-8000-000000000008";
+  const reportArtifact = {
+    id: reportArtifactId,
+    sessionId,
+    name: "report.html",
+    mimeType: "text/html",
+    sizeBytes: 64,
+    generatedAt: "2026-09-07T08:07:00.000Z",
+    deletionState: "none",
+    error: null,
+  };
+  const syncPath = `/api/v1/sessions/${sessionId}/artifacts/sync`;
+
+  function artifactHandler(options: {
+    artifacts: unknown;
+    syncArtifacts?: unknown;
+    downloads?: Record<string, string>;
+    calls: FetchCall[];
+  }) {
+    const base = authenticatedHandler({
+      artifacts: { artifacts: options.artifacts },
+    });
+    return async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      const method = init?.method ?? "GET";
+      if (method !== "GET") {
+        options.calls.push({ path: url.pathname, method, body: init?.body });
+      }
+      if (url.pathname === syncPath && method === "POST") {
+        return json(options.syncArtifacts ?? { artifacts: [] });
+      }
+      const download = options.downloads?.[url.pathname];
+      if (download !== undefined) {
+        return new Response(download, {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        });
+      }
+      return base(input, init);
+    };
+  }
+
+  function emitTimelineMessage(name: string, id: string, content: string) {
+    const source = MockEventSource.instances[0]!;
+    act(() => {
+      source.emitOpen();
+      source.emit(name, {
+        id,
+        sourceType: name,
+        type: name === "user.message" ? "message" : "message",
+        createdAt: "2026-09-07T08:04:00.000Z",
+        payload: { content },
+      });
+    });
+  }
+
+  it("renders an artifact path in a reply as a chip that opens the side panel preview", async () => {
+    const calls: FetchCall[] = [];
+    vi.mocked(fetch).mockImplementation(
+      artifactHandler({
+        artifacts: [reportArtifact],
+        downloads: {
+          [`/api/v1/artifacts/${reportArtifactId}/download`]: "<h1>Report</h1>",
+        },
+        calls,
+      }),
+    );
+    renderApp(`/sessions/${sessionId}`);
+    expect(
+      await screen.findByRole("heading", { name: "Quarterly plan" }),
+    ).toBeInTheDocument();
+
+    emitTimelineMessage(
+      "agent.message",
+      "event-chip-1",
+      "搞定啦！文件在 /mnt/session/outputs/report.html。",
+    );
+    const timeline = screen.getByLabelText("Session timeline");
+    await userEvent
+      .setup()
+      .click(within(timeline).getByRole("button", { name: "report.html" }));
+
+    expect(
+      await screen.findByRole("region", { name: "Preview of report.html" }),
+    ).toBeInTheDocument();
+  });
+
+  it("syncs artifacts once after a turn settles and not on mount or later ticks", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: FetchCall[] = [];
+      vi.mocked(fetch).mockImplementation(
+        artifactHandler({
+          artifacts: [reportArtifact],
+          syncArtifacts: { artifacts: [reportArtifact] },
+          calls,
+        }),
+      );
+      renderApp(`/sessions/${sessionId}`);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        screen.getByRole("heading", { name: "Quarterly plan" }),
+      ).toBeInTheDocument();
+      const syncCount = () =>
+        calls.filter((call) => call.path === syncPath).length;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(syncCount()).toBe(0);
+
+      const source = MockEventSource.instances[0]!;
+      act(() => {
+        source.emitOpen();
+        source.emit("session.status_running", {
+          id: "event-status-1",
+          sourceType: "session.status_running",
+          type: "status",
+          createdAt: "2026-09-07T08:04:00.000Z",
+          payload: { status: "running" },
+        });
+      });
+      act(() => {
+        source.emit("session.status_idle", {
+          id: "event-status-2",
+          sourceType: "session.status_idle",
+          type: "status",
+          createdAt: "2026-09-07T08:05:00.000Z",
+          payload: { status: "idle" },
+        });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1499);
+      });
+      expect(syncCount()).toBe(0);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(syncCount()).toBe(1);
+      const syncCall = calls.find((call) => call.path === syncPath);
+      expect(syncCall?.method).toBe("POST");
+      expect(JSON.parse(String(syncCall?.body))).toEqual({});
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10000);
+      });
+      expect(syncCount()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("syncs on click when the path is unsynced and reports a missing file", async () => {
+    const calls: FetchCall[] = [];
+    vi.mocked(fetch).mockImplementation(
+      artifactHandler({
+        artifacts: [],
+        syncArtifacts: { artifacts: [] },
+        calls,
+      }),
+    );
+    renderApp(`/sessions/${sessionId}`);
+    expect(
+      await screen.findByRole("heading", { name: "Quarterly plan" }),
+    ).toBeInTheDocument();
+
+    emitTimelineMessage(
+      "agent.message",
+      "event-chip-2",
+      "Done: /mnt/session/outputs/later.html",
+    );
+    const timeline = screen.getByLabelText("Session timeline");
+    await userEvent
+      .setup()
+      .click(within(timeline).getByRole("button", { name: "later.html" }));
+
+    expect(
+      await screen.findByText(
+        "That file isn't available in this Session's outputs yet.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      calls.some((call) => call.path === syncPath && call.method === "POST"),
+    ).toBe(true);
   });
 });

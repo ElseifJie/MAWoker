@@ -1,5 +1,13 @@
 import type { ArkAgentInput, ArkGateway } from "@pwa/ark-client";
+import {
+  createUserSchema,
+  quotaSchema,
+  resetPasswordSchema,
+  type CreateUserInput,
+  type ResetPasswordInput,
+} from "@pwa/contracts";
 import { ResourceNotFoundError } from "./errors.js";
+import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
 
 export const PLATFORM_AGENT_TOOLSET_ID = "agent_toolset_20260701";
 export const PLATFORM_AGENT_TOOL_PERMISSION = "always_allow";
@@ -31,8 +39,27 @@ export interface DefaultAgentRecord {
 export interface AdminUserSummary {
   id: string;
   email: string;
+  role: "user" | "admin";
   status: "active" | "disabled";
+  hasPassword: boolean;
   defaultAgentId: string | null;
+  quota: {
+    personalAgentLimit: number;
+    concurrentSessionLimit: number;
+    dailySessionLimit: number;
+    monthlyTokenLimit: number;
+  };
+}
+
+export interface AdminUserCreated {
+  id: string;
+  email: string;
+  role: "user" | "admin";
+  status: "active" | "disabled";
+}
+
+export interface PasswordHasher {
+  hash(password: string): Promise<string>;
 }
 
 export interface UserQuota {
@@ -47,7 +74,12 @@ interface AuditEntry {
   actorUserId: string;
   ownerUserId?: string | undefined;
   action: string;
-  resourceType: "platform_agent" | "user_default_agent" | "user_quota";
+  resourceType:
+    | "platform_agent"
+    | "user_default_agent"
+    | "user_quota"
+    | "user"
+    | "user_password";
   resourceId?: string | undefined;
   result: "succeeded" | "failed";
   requestId: string;
@@ -108,6 +140,19 @@ export interface PlatformAgentRepository {
     assignedBy: string;
   }): PromiseLike<DefaultAgentRecord | undefined>;
   listUsers(): PromiseLike<AdminUserSummary[]>;
+  createUser(input: {
+    id: string;
+    authSubject: string;
+    email: string;
+    passwordHash: string;
+    role: "user" | "admin";
+    createdBy: string;
+  }): PromiseLike<{ id: string } | undefined>;
+  resetUserPassword(input: {
+    userId: string;
+    passwordHash: string;
+    updatedBy: string;
+  }): PromiseLike<boolean>;
   updateUserQuota(
     input: UserQuota & {
       updatedBy: string;
@@ -121,6 +166,22 @@ export class InvalidModelError extends Error {
   constructor() {
     super("Model is not allowed");
     this.name = "InvalidModelError";
+  }
+}
+
+export class InvalidUserInputError extends Error {
+  readonly code = "VALIDATION_FAILED";
+  constructor() {
+    super("User details are invalid");
+    this.name = "InvalidUserInputError";
+  }
+}
+
+export class UserEmailConflictError extends Error {
+  readonly code = "USER_EMAIL_CONFLICT";
+  constructor() {
+    super("A user with this email already exists");
+    this.name = "UserEmailConflictError";
   }
 }
 
@@ -143,6 +204,18 @@ export class AgentReferencedError extends Error {
   }
 }
 
+function parseCreateUser(input: unknown): CreateUserInput {
+  const result = createUserSchema.safeParse(input);
+  if (!result.success) throw new InvalidUserInputError();
+  return result.data;
+}
+
+function parseResetPassword(input: unknown): ResetPasswordInput {
+  const result = resetPasswordSchema.safeParse(input);
+  if (!result.success) throw new InvalidUserInputError();
+  return result.data;
+}
+
 interface MutationContext {
   adminId: string;
   requestId: string;
@@ -160,35 +233,6 @@ interface UpdateInput extends Partial<AgentConfiguration> {
   status?: "active" | "disabled";
 }
 
-function arkErrorCode(error: unknown): string {
-  const category =
-    typeof error === "object" && error !== null && "category" in error
-      ? String(error.category)
-      : "unavailable";
-  return `ARK_${category.toUpperCase()}`;
-}
-
-function isArkCategory(error: unknown, category: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "category" in error &&
-    error.category === category
-  );
-}
-
-function arkRequestId(error: unknown): string | undefined {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "arkRequestId" in error &&
-    typeof error.arkRequestId === "string"
-  ) {
-    return error.arkRequestId;
-  }
-  return undefined;
-}
-
 export class PlatformAgentService {
   private readonly models: Set<string>;
 
@@ -198,6 +242,7 @@ export class PlatformAgentService {
       ark: Pick<ArkGateway, "createAgent" | "updateAgent" | "deleteAgent">;
       modelAllowlist: readonly string[];
       createId: () => string;
+      passwordHasher: PasswordHasher;
     },
   ) {
     this.models = new Set(dependencies.modelAllowlist);
@@ -447,16 +492,97 @@ export class PlatformAgentService {
     quota: Omit<UserQuota, "userId">,
     context: MutationContext,
   ): Promise<UserQuota> {
-    const updated = await this.dependencies.repository.updateUserQuota({
-      userId,
-      ...quota,
-      updatedBy: context.adminId,
-    });
-    if (!updated) throw new ResourceNotFoundError();
-    await this.audit(context, "user_quota.update", userId, "succeeded", {
-      ownerUserId: userId,
-    });
-    return updated;
+    try {
+      const validated = quotaSchema.parse(quota);
+      const updated = await this.dependencies.repository.updateUserQuota({
+        userId,
+        ...validated,
+        updatedBy: context.adminId,
+      });
+      if (!updated) throw new ResourceNotFoundError();
+      await this.audit(context, "user_quota.update", userId, "succeeded", {
+        ownerUserId: userId,
+      });
+      return updated;
+    } catch (error) {
+      await this.audit(context, "user_quota.update", userId, "failed", {
+        ownerUserId: userId,
+        errorCode:
+          error instanceof Error && error.name === "ZodError"
+            ? "VALIDATION_FAILED"
+            : error instanceof ResourceNotFoundError
+              ? "RESOURCE_NOT_FOUND"
+              : "QUOTA_UPDATE_FAILED",
+      });
+      throw error;
+    }
+  }
+
+  async createUser(
+    input: { email: string; password: string; role?: "user" | "admin" },
+    context: MutationContext,
+  ): Promise<AdminUserCreated> {
+    const parsed = parseCreateUser(input);
+    const passwordHash = await this.dependencies.passwordHasher.hash(
+      parsed.password,
+    );
+    const email = parsed.email;
+    try {
+      const created = await this.dependencies.repository.createUser({
+        id: this.dependencies.createId(),
+        authSubject: `local:${email}`,
+        email,
+        passwordHash,
+        role: parsed.role,
+        createdBy: context.adminId,
+      });
+      if (!created) throw new UserEmailConflictError();
+      await this.audit(context, "user.create", created.id, "succeeded", {
+        ownerUserId: created.id,
+      });
+      return { id: created.id, email, role: parsed.role, status: "active" };
+    } catch (error) {
+      await this.audit(context, "user.create", email, "failed", {
+        errorCode:
+          error instanceof UserEmailConflictError
+            ? "USER_EMAIL_CONFLICT"
+            : error instanceof InvalidUserInputError
+              ? "VALIDATION_FAILED"
+              : "USER_CREATE_FAILED",
+      });
+      throw error;
+    }
+  }
+
+  async resetUserPassword(
+    userId: string,
+    password: string,
+    context: MutationContext,
+  ): Promise<void> {
+    const parsed = parseResetPassword({ password });
+    const passwordHash = await this.dependencies.passwordHasher.hash(
+      parsed.password,
+    );
+    try {
+      const updated = await this.dependencies.repository.resetUserPassword({
+        userId,
+        passwordHash,
+        updatedBy: context.adminId,
+      });
+      if (!updated) throw new ResourceNotFoundError();
+      await this.audit(context, "user_password.reset", userId, "succeeded", {
+        ownerUserId: userId,
+      });
+    } catch (error) {
+      await this.audit(context, "user_password.reset", userId, "failed", {
+        ownerUserId: userId,
+        errorCode:
+          error instanceof ResourceNotFoundError
+            ? "RESOURCE_NOT_FOUND"
+            : "USER_PASSWORD_RESET_FAILED",
+      });
+      throw error;
+    }
   }
 
   private async requireAgent(id: string): Promise<PlatformAgentRecord> {
@@ -497,7 +623,11 @@ export class PlatformAgentService {
           ? "user_default_agent"
           : action === "user_quota.update"
             ? "user_quota"
-            : "platform_agent",
+            : action === "user.create"
+              ? "user"
+              : action === "user_password.reset"
+                ? "user_password"
+                : "platform_agent",
       resourceId,
       result,
       requestId: context.requestId,

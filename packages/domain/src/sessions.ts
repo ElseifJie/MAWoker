@@ -5,15 +5,19 @@ import type {
   ArkSession,
 } from "@pwa/ark-client";
 import {
-  isRecoverableArkError,
   normalizeArkEvent,
-  sessionStatusSchema,
   type SessionStatus,
   type UiEvent,
 } from "@pwa/contracts";
 import type { AvailableAgentRecord } from "./user-agents.js";
+import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
 import { ResourceNotFoundError } from "./errors.js";
 import type { SessionInputRecord } from "./session-inputs.js";
+import {
+  isPublicSessionEvent,
+  projectArkEvent,
+  type ArkEventProjection,
+} from "./usage.js";
 
 export interface SessionRecord {
   id: string;
@@ -114,13 +118,14 @@ export interface SessionRepository {
   projectEvent(
     userId: string,
     id: string,
-    projection: {
-      eventId: string;
-      observedAt: Date;
-      status?: SessionStatus;
-      errorCode?: string | null;
-      errorRecoverable?: boolean | null;
-    },
+    projection: ArkEventProjection,
+  ): PromiseLike<void>;
+  listRunningForQuota?(userId: string): PromiseLike<SessionRecord[]>;
+  syncQuotaStatus?(
+    userId: string,
+    id: string,
+    status: SessionStatus,
+    observedAt: Date,
   ): PromiseLike<void>;
   audit(entry: SessionAuditEntry): PromiseLike<void>;
 }
@@ -152,35 +157,6 @@ export class SessionDeletionConflictError extends Error {
     this.code =
       deletionState === "pending" ? "DELETION_PENDING" : "DELETION_FAILED";
   }
-}
-
-function isArkCategory(error: unknown, category: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "category" in error &&
-    error.category === category
-  );
-}
-
-function arkErrorCode(error: unknown): string {
-  const category =
-    typeof error === "object" && error !== null && "category" in error
-      ? String(error.category)
-      : "unavailable";
-  return `ARK_${category.toUpperCase()}`;
-}
-
-function arkRequestId(error: unknown): string | undefined {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "arkRequestId" in error &&
-    typeof error.arkRequestId === "string"
-  ) {
-    return error.arkRequestId;
-  }
-  return undefined;
 }
 
 function createOperationId(id: string): string {
@@ -395,10 +371,20 @@ export class SessionService {
     input: { content: string },
     context: SessionContext,
   ): Promise<{ eventId: string; delivery: "accepted" | "queued" }> {
-    const prepared = await this.dependencies.repository.beginMessage(
-      context.userId,
-      id,
-    );
+    let prepared;
+    try {
+      prepared = await this.dependencies.repository.beginMessage(
+        context.userId,
+        id,
+      );
+    } catch (error) {
+      if (!this.isConcurrentQuotaError(error)) throw error;
+      await this.reconcileConcurrentQuota(context);
+      prepared = await this.dependencies.repository.beginMessage(
+        context.userId,
+        id,
+      );
+    }
     if (!prepared) throw new ResourceNotFoundError();
     if (prepared.kind === "deletion_conflict") {
       throw new SessionDeletionConflictError(prepared.deletionState);
@@ -471,7 +457,7 @@ export class SessionService {
     id: string,
     context: SessionContext,
     downstreamSignal?: AbortSignal,
-  ): Promise<{ events: AsyncIterable<UiEvent> }> {
+  ): Promise<{ session: SessionRecord; events: AsyncIterable<UiEvent> }> {
     const session = await this.requireOwned(context.userId, id);
     const upstreamController = new AbortController();
     const abortUpstream = () => upstreamController.abort();
@@ -514,7 +500,7 @@ export class SessionService {
           const next = await liveIterator.next();
           if (next.done) break;
           if (!buffered.push(next.value)) break;
-          if (this.eventProjection(next.value).status === "terminated") break;
+          if (projectArkEvent(next.value).status === "terminated") break;
         }
       } catch (error) {
         if (!upstreamController.signal.aborted) streamError = error;
@@ -530,6 +516,7 @@ export class SessionService {
       this.projectEvent(session, source, context.userId);
 
     return {
+      session,
       events: {
         async *[Symbol.asyncIterator]() {
           const seen = new Set<string>();
@@ -539,7 +526,9 @@ export class SessionService {
               if (seen.has(source.id)) continue;
               seen.add(source.id);
               const projected = await projectEvent(source);
-              yield normalizeArkEvent(source);
+              if (isPublicSessionEvent(source.type)) {
+                yield normalizeArkEvent(source);
+              }
               if (projected.status === "terminated") return;
             }
 
@@ -550,7 +539,9 @@ export class SessionService {
               if (seen.has(source.id)) continue;
               seen.add(source.id);
               const projected = await projectEvent(source);
-              yield normalizeArkEvent(source);
+              if (isPublicSessionEvent(source.type)) {
+                yield normalizeArkEvent(source);
+              }
               if (projected.status === "terminated") return;
             }
           } finally {
@@ -609,6 +600,43 @@ export class SessionService {
     if (session.status === "terminated") throw new SessionTerminatedError();
   }
 
+  private isConcurrentQuotaError(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      error.name === "QuotaExceededError" &&
+      "dimension" in error &&
+      error.dimension === "concurrent_sessions"
+    );
+  }
+
+  private async reconcileConcurrentQuota(
+    context: SessionContext,
+  ): Promise<void> {
+    const { listRunningForQuota, syncQuotaStatus } =
+      this.dependencies.repository;
+    if (!listRunningForQuota || !syncQuotaStatus) {
+      throw Object.assign(new Error("Concurrent Session quota exceeded"), {
+        name: "QuotaExceededError",
+        dimension: "concurrent_sessions",
+      });
+    }
+    const active = await listRunningForQuota(context.userId);
+    for (const session of active) {
+      const upstream = await this.dependencies.ark.getSession(
+        session.arkSessionId,
+        {
+          correlationId: `${context.requestId}:quota:${session.id}`,
+        },
+      );
+      await syncQuotaStatus(
+        context.userId,
+        session.id,
+        upstream.status,
+        (this.dependencies.now ?? (() => new Date()))(),
+      );
+    }
+  }
+
   private arkCreateInput(
     session: SessionRecord,
     inputs: SessionInputRecord[] = [],
@@ -638,57 +666,12 @@ export class SessionService {
     };
   }
 
-  private eventProjection(event: ArkEvent): {
-    eventId: string;
-    observedAt: Date;
-    status?: SessionStatus;
-    errorCode?: string | null;
-    errorRecoverable?: boolean | null;
-  } {
-    const base = {
-      eventId: event.id,
-      observedAt: new Date(event.createdAt),
-    };
-    if (event.type === "agent.thinking" || event.type.startsWith("tool.")) {
-      return {
-        ...base,
-        status: "running",
-        errorCode: null,
-        errorRecoverable: null,
-      };
-    }
-    if (event.type === "session.status") {
-      const status = sessionStatusSchema.safeParse(event.data.status);
-      return status.success
-        ? {
-            ...base,
-            status: status.data,
-            errorCode: null,
-            errorRecoverable: null,
-          }
-        : base;
-    }
-    if (event.type === "session.error") {
-      const recoverable = isRecoverableArkError(event.data);
-      return {
-        ...base,
-        status: recoverable ? "rescheduled" : "terminated",
-        errorCode:
-          typeof event.data.code === "string"
-            ? event.data.code
-            : "SESSION_ERROR",
-        errorRecoverable: recoverable,
-      };
-    }
-    return base;
-  }
-
   private async projectEvent(
     session: SessionRecord,
     event: ArkEvent,
     userId: string,
   ) {
-    const projection = this.eventProjection(event);
+    const projection = projectArkEvent(event);
     await this.dependencies.repository.projectEvent(
       userId,
       session.id,

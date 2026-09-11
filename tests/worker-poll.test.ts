@@ -16,6 +16,8 @@ describe("production worker poll", () => {
     };
     const session = { runOnce: vi.fn(async () => 0) };
     const sessionDeletion = { runOnce: vi.fn(async () => 1) };
+    const usage = { runOnce: vi.fn(async () => 1) };
+    const quotaInterrupt = { runOnce: vi.fn(async () => 1) };
     const uploadCleanup = { runOnce: vi.fn(async () => 0) };
     const reportError = vi.fn();
 
@@ -24,6 +26,8 @@ describe("production worker poll", () => {
         personalAgent: earlier,
         session,
         sessionDeletion,
+        usage,
+        quotaInterrupt,
         uploadCleanup,
         artifactDeletion,
         artifactCleanup,
@@ -34,6 +38,8 @@ describe("production worker poll", () => {
     expect(earlier.runOnce).toHaveBeenCalledOnce();
     expect(session.runOnce).toHaveBeenCalledOnce();
     expect(sessionDeletion.runOnce).toHaveBeenCalledOnce();
+    expect(usage.runOnce).toHaveBeenCalledOnce();
+    expect(quotaInterrupt.runOnce).toHaveBeenCalledOnce();
     expect(uploadCleanup.runOnce).toHaveBeenCalledOnce();
     expect(artifactDeletion.runOnce).toHaveBeenCalledOnce();
     expect(artifactCleanup.runOnce).toHaveBeenCalledOnce();

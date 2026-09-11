@@ -155,6 +155,16 @@ function retryError(error: unknown): string {
   return "SESSION_DELETE_FAILED";
 }
 
+export interface SessionDeletionAlert {
+  jobType: "delete_session";
+  jobId: string;
+  userId: string | null;
+  sessionId: string;
+  attempts: number;
+  maxAttempts: number;
+  errorCode: string;
+}
+
 export class SessionDeletionProcessor {
   constructor(
     private readonly dependencies: {
@@ -164,6 +174,7 @@ export class SessionDeletionProcessor {
       storage: Pick<ArtifactStorage, "delete">;
       workerId: string;
       batchSize?: number;
+      alert?: (event: SessionDeletionAlert) => void;
     },
   ) {}
 
@@ -278,11 +289,29 @@ export class SessionDeletionProcessor {
       }
       await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
     } catch (error) {
+      const final = job.attempts >= job.maxAttempts;
+      const errorCode = retryError(error);
+      if (final && this.dependencies.alert) {
+        const rawSessionId = job.payload.sessionId;
+        const sessionId =
+          typeof rawSessionId === "string" && rawSessionId.length > 0
+            ? rawSessionId
+            : job.id;
+        this.dependencies.alert({
+          jobType: "delete_session",
+          jobId: job.id,
+          userId: job.ownerUserId ?? null,
+          sessionId,
+          attempts: job.attempts + 1,
+          maxAttempts: job.maxAttempts,
+          errorCode,
+        });
+      }
       await this.dependencies.jobs.retry(
         job.id,
         this.dependencies.workerId,
-        retryError(error),
-        job.attempts >= job.maxAttempts,
+        errorCode,
+        final,
       );
     }
   }

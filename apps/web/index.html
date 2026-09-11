@@ -7,8 +7,51 @@
       name="description"
       content="A focused workspace for personal Agent tasks."
     />
-    <meta name="theme-color" content="#eef3f2" />
+    <meta name="theme-color" content="#f5f7f8" />
     <title>Work Agent</title>
+    <style>
+      /* Painted before the bundle loads so a dark preference never flashes white. */
+      html,
+      body {
+        margin: 0;
+        background: #f5f7f8;
+      }
+      html[data-theme="dark"],
+      html[data-theme="dark"] body {
+        background: #111719;
+      }
+    </style>
+    <script>
+      // Resolves the stored theme preference before first paint. Mirrors
+      // src/theme.ts; keep the storage key and the three values in sync.
+      (function () {
+        var resolved = "light";
+        try {
+          var stored = localStorage.getItem("pwa.theme");
+          var preference =
+            stored === "light" || stored === "dark" ? stored : "system";
+          var prefersDark =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches;
+          resolved =
+            preference === "dark" || (preference === "system" && prefersDark)
+              ? "dark"
+              : "light";
+        } catch (error) {
+          resolved = "light";
+        }
+        var root = document.documentElement;
+        root.dataset.theme = resolved;
+        root.style.colorScheme = resolved;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) {
+          meta.setAttribute(
+            "content",
+            resolved === "dark" ? "#111719" : "#f5f7f8",
+          );
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

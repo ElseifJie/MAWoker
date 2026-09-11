@@ -13,12 +13,18 @@
   --ui-color-accent-subtle: #e5f1f0;
   --ui-color-success: #28734f;
   --ui-color-success-subtle: #e7f3ec;
-  --ui-color-warning: #946512;
+  --ui-color-warning: #8f6110;
   --ui-color-warning-subtle: #faf0d9;
   --ui-color-danger: #a23e35;
   --ui-color-danger-hover: #87342d;
   --ui-color-danger-subtle: #f8e9e7;
   --ui-focus-ring: #147d78;
+  --ui-color-overlay: rgb(20 30 34 / 46%);
+  --ui-color-embed-canvas: #ffffff;
+  --ui-shadow-raised:
+    0 1px 2px rgb(29 39 45 / 8%), 0 8px 24px rgb(29 39 45 / 10%);
+  --ui-shadow-overlay:
+    0 12px 34px rgb(24 38 39 / 14%), 0 2px 6px rgb(24 38 39 / 10%);
 
   --ui-space-1: 4px;
   --ui-space-2: 8px;
@@ -35,4 +41,40 @@
   --ui-control-height-small: 32px;
   --ui-control-height-default: 36px;
   --ui-control-height-large: 38px;
+
+  --ui-sidebar-width: 232px;
+  --ui-rail-width: 320px;
+  --ui-transcript-max-width: 760px;
+}
+
+/*
+ * Dark theme redefines the same semantic variables, so component styles never
+ * branch on theme. Values keep the light theme's teal accent but lift it for
+ * contrast against the darker surfaces.
+ */
+[data-theme="dark"] {
+  --ui-color-surface-canvas: #111719;
+  --ui-color-surface: #1a2225;
+  --ui-color-surface-subtle: #212b2f;
+  --ui-color-surface-hover: #2a353a;
+  --ui-color-border: #334046;
+  --ui-color-border-strong: #4a5b62;
+  --ui-color-text: #e6edf0;
+  --ui-color-text-muted: #9dabb3;
+  --ui-color-text-inverse: #111719;
+  --ui-color-accent: #55b8b1;
+  --ui-color-accent-hover: #6cc8c1;
+  --ui-color-accent-subtle: #1c3634;
+  --ui-color-success: #62bb8c;
+  --ui-color-success-subtle: #1b3226;
+  --ui-color-warning: #d8a445;
+  --ui-color-warning-subtle: #37291a;
+  --ui-color-danger: #e0796e;
+  --ui-color-danger-hover: #ec8f85;
+  --ui-color-danger-subtle: #3b2320;
+  --ui-focus-ring: #6cc8c1;
+  --ui-color-overlay: rgb(6 10 12 / 62%);
+  --ui-color-embed-canvas: #ffffff;
+  --ui-shadow-raised: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px rgb(0 0 0 / 44%);
+  --ui-shadow-overlay: 0 12px 34px rgb(0 0 0 / 52%), 0 2px 6px rgb(0 0 0 / 40%);
 }

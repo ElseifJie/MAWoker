@@ -1,0 +1,970 @@
+{
+  "_fixture": {
+    "captured": "2026-09-08",
+    "source_session": "sesn-fixture-00000000000000-00000",
+    "note": "Synthetic fixture derived from Ark Managed Agents event shapes. All identifiers, URLs, credentials and message text are fabricated; credential-shaped strings (X-Tos-*, x-signature, lk3s, /mnt/skills/ paths) are retained as redaction test bait.",
+    "turns": 2,
+    "covers": [
+      "agent.tool_use(todo_write: input.todos[].content/status)",
+      "agent.tool_use(bash: input.command/description/run_in_background)",
+      "agent.tool_use(write: input.file_path/content)",
+      "agent.mcp_tool_use(mcp_server_name)",
+      "agent.mcp_tool_result(mcp_tool_use_id NOT tool_use_id)",
+      "evaluated_permission=allow on every tool_use"
+    ]
+  },
+  "events": [
+    {
+      "id": "sevt-20260907170002-tl6qi",
+      "type": "session.status_running",
+      "processed_at": "2026-09-08T01:00:02.365060354+08:00"
+    },
+    {
+      "id": "sevt-20260907170002-8rhzo",
+      "type": "session.thread_status_running",
+      "agent_name": "fixture-agent",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "processed_at": "2026-09-08T01:00:02.365083679+08:00"
+    },
+    {
+      "id": "sevt-20260907170002-wq8vh",
+      "type": "user.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "a一一一一一一一一一一a\n一一一一一一一一一一一一一一一一一一一一a一一一一一a一一一一一一一一一一一一一一a\naa一一一一一一一一aaa一一一一一一一a一一一一一一一一一一一一a\n\na a一一一一a一一一一一一一一一一一一一一一一一一a一一 a 一一一一一一一一\n   一一一一一a一一一a一一a一一一一a一一a一一a一一一一一一一一一一一一一一一一一一aa\n   一一 aaaa aaaaa ahttps://example.com/synthetica aa /workspace/fixture-artifact\n   一一 aaaaaaaaaa 一一一一一一一 aaaaa一 aaaaaaa 一一aa\n   aa一一一 aaaaaaaaa a aaaaaaaaaa 一一一一一一一一aaaa一一一一一一一一一一a\n   一一一一一一一 aaaaa一一一一一一a一一一一一一一一aa\n   一一一一一一a一一一一一一一一 /workspace/fixture-artifact\n   一一一一一 aaaaaaaaaaaaaa 一一一一aaaaaaaa一一一aaaaaaaaaa一一一aaaaaaaaa一一一aaaaaaaaa一一一一一一一一aa\n   一一a一一一一一一一一一 aaaaaa 一一一a一一一一一一一一一一一一一一aa一一 aaaaaaaaaa 一一一a\n\na a一一一一一一a一一一一一一一一一一a一一a一一一一一一aa\n   一一 aaaa aaaaa ahttps://example.com/synthetica aa /workspace/fixture-artifact\n   一一一一 aaaaa一 aaaaaa 一一aa一一一一一一一a一一一一一一a\n   一一一一一一一一一一一一一一一一 /workspace/fixture-artifact\n   aaa\n一一一一一一a一一一一",
+          "_fixture_truncated_from": 1229
+        }
+      ],
+      "processed_at": "2026-09-08T01:00:02.343272717+08:00"
+    },
+    {
+      "id": "sevt-20260907170002-784mj",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:00:02.405173936+08:00"
+    },
+    {
+      "id": "sevt-20260907170002-kyex1",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一一一一一一一一a一一一一一一一一一一a一一一一一一一一一一一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:00:11.512023893+08:00"
+    },
+    {
+      "id": "call_sd23cgxqphzagzqwmgpon00p",
+      "type": "agent.tool_use",
+      "name": "todo_write",
+      "processed_at": "2026-09-08T01:00:11.512074528+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "todos": [
+          {
+            "status": "in_progress",
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaa 一一一"
+          },
+          {
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaaaaa 一一一",
+            "status": "pending"
+          },
+          {
+            "status": "pending",
+            "content": "一一 aaaaaaaaa 一一一一"
+          },
+          {
+            "content": "一一一一a一一一a一一一一a一一一一一一",
+            "status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sevt-20260907170011-zaloq",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170002-784mj",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 13842,
+        "output_tokens": 178
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:00:11.512066587+08:00"
+    },
+    {
+      "id": "sevt-20260907170011-300hs",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_sd23cgxqphzagzqwmgpon00p",
+      "processed_at": "2026-09-08T01:00:11.512107327+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aaaa aaaa aaaaaaaa aaaaaaaaaaaaa aaaaaa aaaa aaa aaaaaaaa aa aaa aaa aaaa aaaa aa aaaaa aaaa aaaaaaaaa aaaaaa aaaaaaa aaaa aaa aaaaaaa aaaaa aa aaaaaaaaaa\naaaaaaa aaaa aaaaa a aaaaaaaa a aa aaaaaaaaa a aaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170011-t25er",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:00:11.512121077+08:00"
+    },
+    {
+      "id": "sevt-20260907170011-bdckd",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一a一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:00:22.775256930+08:00"
+    },
+    {
+      "id": "call_53670fhnywf4y8z9byubqdri",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T01:00:22.775301956+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaa aaaaa ahttps://example.com/synthetica aa /workspace/fixture-artifact aa aaaa a一一一一a aa aaaaaaa aa aaaaaaa aaaaa aaaaaaaaaaaaaaaaaa/workspace/fixture-artifactaaaa aaaaaaaaaaa一一aaa aaaaaaaaaaaaaa一一一一aaa aaaaaaaaa aa aaa aaaaaaa一一一aaa aaaaaaaaaaaaaaaaaaa",
+        "description": "一一一一一一一一一aaaa"
+      }
+    },
+    {
+      "id": "sevt-20260907170022-ip99x",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170011-t25er",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 13624,
+        "input_tokens": 14098,
+        "output_tokens": 165
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:00:22.775295437+08:00"
+    },
+    {
+      "id": "sevt-20260907170043-i43k3",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_53670fhnywf4y8z9byubqdri",
+      "processed_at": "2026-09-08T01:00:43.822368685+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n一一一一\naaaa一一\naaaaaaa一一一一a aaaa\n一一一a a\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170043-04570",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:00:43.822391629+08:00"
+    },
+    {
+      "id": "sevt-20260907170043-sas4o",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一a一一一一a一a一一一一一一一一一一一一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:00:56.494340568+08:00"
+    },
+    {
+      "id": "call_hmoykzrdg3xccx0xikdwdz6m",
+      "type": "agent.tool_use",
+      "name": "todo_write",
+      "processed_at": "2026-09-08T01:00:56.494394477+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "todos": [
+          {
+            "status": "completed",
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaa 一一一"
+          },
+          {
+            "status": "in_progress",
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaaaaa 一一一"
+          },
+          {
+            "content": "一一 aaaaaaaaa 一一一一",
+            "status": "pending"
+          },
+          {
+            "status": "pending",
+            "content": "一一一一a一一一a一一一一a一一一一一一"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sevt-20260907170056-8zo1j",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170043-04570",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 13624,
+        "input_tokens": 14438,
+        "output_tokens": 162
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:00:56.494385574+08:00"
+    },
+    {
+      "id": "sevt-20260907170056-2r57j",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_hmoykzrdg3xccx0xikdwdz6m",
+      "processed_at": "2026-09-08T01:00:56.494435358+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aaaa aaaa aaaaaaaa aaaaaaaaaaaaa aaaaaa aaaa aaa aaaaaaaa aa aaa aaa aaaa aaaa aa aaaaa aaaa aaaaaaaaa aaaaaa aaaaaaa aaaa aaa aaaaaaa aaaaa aa aaaaaaaaaa\naaaaaaa aaaa aaaaa a aaaaaaaa a aa aaaaaaaaa a aaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170056-b9459",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:00:56.494448868+08:00"
+    },
+    {
+      "id": "sevt-20260907170056-ntpyp",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一a一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:06.619750971+08:00"
+    },
+    {
+      "id": "call_fl7v59vsmcsj9m8x6s57qsgb",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T01:01:06.619798572+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaa aaaaa ahttps://example.com/synthetica aa /workspace/fixture-artifact aa aaaa a一一一一a aa aaaaaaa aa aaaaaaa aaaaa aaaaaaaaaaaaaaaaaa/workspace/fixture-artifactaaaa aaaaaaaaaaa一一aaa aaaaaaaaaaaaa一一一一aaa aaaaaaaa aa aaa aaaaaaa一一一一aaa aaaaaaaaaaaaaaaaaa",
+        "description": "一一一一一一一一一一一aaaa"
+      }
+    },
+    {
+      "id": "sevt-20260907170106-uplcp",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170056-b9459",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 14136,
+        "input_tokens": 14688,
+        "output_tokens": 155
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:01:06.619792212+08:00"
+    },
+    {
+      "id": "sevt-20260907170107-bpica",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_fl7v59vsmcsj9m8x6s57qsgb",
+      "processed_at": "2026-09-08T01:01:07.188568183+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n一一一一\naaaa一一\naaaaaa一一一一a aaaa\n一一一一a aa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170107-rsfpk",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:01:07.188594422+08:00"
+    },
+    {
+      "id": "sevt-20260907170107-c9fs7",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一aaa一一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:16.813161617+08:00"
+    },
+    {
+      "id": "call_gnkr5kml7l58ntsk93cibv50",
+      "type": "agent.tool_use",
+      "name": "todo_write",
+      "processed_at": "2026-09-08T01:01:16.813206404+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "todos": [
+          {
+            "status": "completed",
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaa 一一一"
+          },
+          {
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaaaaa 一一一",
+            "status": "completed"
+          },
+          {
+            "status": "in_progress",
+            "content": "一一 aaaaaaaaa 一一一一"
+          },
+          {
+            "content": "一一一一a一一一a一一一一a一一一一一一",
+            "status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sevt-20260907170116-3q3mh",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170107-rsfpk",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 14648,
+        "input_tokens": 15026,
+        "output_tokens": 141
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:01:16.813199764+08:00"
+    },
+    {
+      "id": "sevt-20260907170116-yto4x",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_gnkr5kml7l58ntsk93cibv50",
+      "processed_at": "2026-09-08T01:01:16.813239573+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aaaa aaaa aaaaaaaa aaaaaaaaaaaaa aaaaaa aaaa aaa aaaaaaaa aa aaa aaa aaaa aaaa aa aaaaa aaaa aaaaaaaaa aaaaaa aaaaaaa aaaa aaa aaaaaaa aaaaa aa aaaaaaaaaa\naaaaaaa aaaa aaaaa a aaaaaaaa a aa aaaaaaaaa a aaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170116-2a657",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:01:16.813251671+08:00"
+    },
+    {
+      "id": "sevt-20260907170116-93f07",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一aaaaaaaaa一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:28.924197305+08:00"
+    },
+    {
+      "id": "call_q3lktpzxdxz4f0ai49i4j4sw",
+      "type": "agent.tool_use",
+      "name": "write",
+      "processed_at": "2026-09-08T01:01:28.924248090+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/workspace/fixture-artifact",
+        "content": "一一一一一一a一一一一一一a一一一一一一一一一一一一一 aaaaaaaaaaaaaaaaaaaaa\n一一一一一一aa一一 a a一一 a a一一 a aa一一aa aaa 一a一一一a一一一一\na一一一一一一一一a一一一一a一一一一aaaa 一一a一一一一a一一 aaaa\n一一一一一一一一a一一一一a一一一一a一一一一a一一一一a一一一一aa\n一一a一一一 a 一一一一a一一一一一一aa一一一一一一一一一一一一\na一一一一一一一一aa一一一一一一一一一一一a\n"
+      }
+    },
+    {
+      "id": "sevt-20260907170128-xwnzo",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170116-2a657",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 14648,
+        "input_tokens": 15272,
+        "output_tokens": 213
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:01:28.924241070+08:00"
+    },
+    {
+      "id": "sevt-20260907170128-rz6r1",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_q3lktpzxdxz4f0ai49i4j4sw",
+      "processed_at": "2026-09-08T01:01:28.975122879+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaa /workspace/fixture-artifact aaa aaaa aaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170128-1iaey",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:01:28.975144201+08:00"
+    },
+    {
+      "id": "sevt-20260907170128-mi1al",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一一一一一一一一a一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:37.884783377+08:00"
+    },
+    {
+      "id": "call_ynyx5iabis8y8f2sjz86gjzc",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T01:01:37.884827732+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaaaaa aa a\naaaaaa aaaa\na a aaaaaaaaaaaaaaaa/workspace/fixture-artifactaaa\naaaaa a aaaaaaaaaaaaaaaaaaaa aaa a aa aaaaaaaaaaaaaaaaaaaaaa\naaaaaaa一一一一一aaa aaaaaa\naaaaaaa一一一一aaa aaaaaaaaaaaaaaaaaaaaaaaaaa\na",
+        "description": "一一一一一一一一一一一"
+      }
+    },
+    {
+      "id": "sevt-20260907170137-p97hh",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170128-1iaey",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 15160,
+        "input_tokens": 15573,
+        "output_tokens": 129
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:01:37.884821533+08:00"
+    },
+    {
+      "id": "sevt-20260907170138-7iadx",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_ynyx5iabis8y8f2sjz86gjzc",
+      "processed_at": "2026-09-08T01:01:38.454705728+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n一一一一一a aaa\n一一一一a aaaaaaaaaa aaaaaaaaaaa aaaaaaaaaa aaaaaaa aaaaaaaaaa aaaaaaaaaa aaaaaaaaaaaaa aaaaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170138-a0vd8",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:01:38.454736063+08:00"
+    },
+    {
+      "id": "sevt-20260907170138-hzywp",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一a一一一一一一a一a一一a一一一一一一一一一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:47.241424664+08:00"
+    },
+    {
+      "id": "call_5sxnaqgz3gm5hfb79ccyhkmm",
+      "type": "agent.tool_use",
+      "name": "todo_write",
+      "processed_at": "2026-09-08T01:01:47.241477552+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "todos": [
+          {
+            "status": "completed",
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaa 一一一"
+          },
+          {
+            "status": "completed",
+            "content": "一一一一一一一一 aaaaaaaaaaaaaaaaaaaa 一一一"
+          },
+          {
+            "content": "一一 aaaaaaaaa 一一一一",
+            "status": "completed"
+          },
+          {
+            "content": "一一一一a一一一a一一一一a一一一一一一",
+            "status": "completed"
+          }
+        ]
+      }
+    },
+    {
+      "id": "sevt-20260907170147-c1uxx",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170138-a0vd8",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 15160,
+        "input_tokens": 15914,
+        "output_tokens": 169
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:01:47.241468699+08:00"
+    },
+    {
+      "id": "sevt-20260907170147-h8p0t",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_5sxnaqgz3gm5hfb79ccyhkmm",
+      "processed_at": "2026-09-08T01:01:47.241519574+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aaaa aaaa aaaaaaaa aaaaaaaaaaaaa aaaaaa aaaa aaa aaaaaaaa aa aaa aaa aaaa aaaa aa aaaaa aaaa aaaaaaaaa aaaaaa aaaaaaa aaaa aaa aaaaaaa aaaaa aa aaaaaaaaaa\naaaaaaa aaaa aaaaa a aaaaaaaa a aa aaaaaaaaa a aaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260907170147-78ug1",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T01:01:47.241535839+08:00"
+    },
+    {
+      "id": "sevt-20260907170147-9i4kh",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一a一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:57.966796231+08:00"
+    },
+    {
+      "id": "sevt-20260907170147-2y2g4",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "aa一一一一一一a一一一一一一aaa\n\na 一一 a 一一 a\naaaaaaaaa\na 一一一一 a/workspace/fixture-artifact a a 一一 aaaa a\na 一一一一一一一 a a 一aaaaaaa a aaaaaaaa a aaaaaaa a aaaa a aaaaaaa a aaaaaaa a aaaaaaaaaa a aaaaaa a\na 一一一一一一一一 a aaa 一 a\na 一一一一 a/workspace/fixture-artifact a a 一一 aaaa a\na 一一一一一一一一 a aa 一 a\na 一一一一 a/workspace/fixture-artifact a a 一一一 a\n\n一一一一一一a一一a一一一一一一一一一一一一一a一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-08T01:01:57.966798074+08:00"
+    },
+    {
+      "id": "sevt-20260907170157-faa0c",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260907170147-78ug1",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 15672,
+        "input_tokens": 16165,
+        "output_tokens": 198
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T01:01:57.966854478+08:00"
+    },
+    {
+      "id": "sevt-20260907170158-e5jeq",
+      "type": "session.thread_status_idle",
+      "agent_name": "fixture-agent",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "processed_at": "2026-09-08T01:01:58.040945342+08:00"
+    },
+    {
+      "id": "sevt-20260907170158-jiuii",
+      "type": "session.status_idle",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "processed_at": "2026-09-08T01:01:58.040951932+08:00"
+    },
+    {
+      "id": "sevt-20260908021409-0aiuw",
+      "type": "session.status_running",
+      "processed_at": "2026-09-08T10:14:09.385903259+08:00"
+    },
+    {
+      "id": "sevt-20260908021409-gg7qu",
+      "type": "session.thread_status_running",
+      "agent_name": "fixture-agent",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "processed_at": "2026-09-08T10:14:09.385929448+08:00"
+    },
+    {
+      "id": "sevt-20260908021409-q6qtl",
+      "type": "user.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一 aaa aaa aaaaa 一一一一"
+        }
+      ],
+      "processed_at": "2026-09-08T10:14:09.343727132+08:00"
+    },
+    {
+      "id": "sevt-20260908021409-zbe32",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:14:09.426179689+08:00"
+    },
+    {
+      "id": "sevt-20260908021409-ws1zx",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一一 aaa aaa aaaaaa一一一一一一一一一一一aaa aaa aaaaa一一一a一一一一一一一a一一一一一一一一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T10:14:16.442456908+08:00"
+    },
+    {
+      "id": "call_gman3hkqwavqp507n91d2p65",
+      "type": "agent.mcp_tool_use",
+      "mcp_server_name": "price-mcp",
+      "name": "list_models",
+      "processed_at": "2026-09-08T10:14:16.442501404+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "category": "aaaa",
+        "q": "aaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260908021416-ug7r0",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021409-zbe32",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 16056,
+        "output_tokens": 205
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:14:16.442496086+08:00"
+    },
+    {
+      "id": "sevt-20260908021416-sfpjf",
+      "type": "agent.mcp_tool_result",
+      "mcp_tool_use_id": "call_gman3hkqwavqp507n91d2p65",
+      "processed_at": "2026-09-08T10:14:16.608629071+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一aa 一a一一一一一一一aa\na a一一a 一一一一一 aaaaaaaaaaaaaa一一一一一aaaaaaaaaaaaaaaaa一一 aaa a 一一 aaa 一a一一aaaaaaa一一一一aa 一一一一一\na a一一a 一一 aa aaaaaaaaaaaaa a一一一一一aaaaaaaaaaaaaaaa一一 aaa a 一一 aaa 一a一一aaaaaaa一一一一aa 一一一一一"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260908021416-1ia1d",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:14:16.608667317+08:00"
+    },
+    {
+      "id": "sevt-20260908021416-zb677",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一 aaa 一一一一一一一一一一一一一一 aaaaaaaaaaaaa 一一一一a一一一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T10:14:27.315289472+08:00"
+    },
+    {
+      "id": "call_alzfjer0s4zs9rf7rnxdfvdg",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T10:14:27.315344393+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "一一一一一一一一a一一a一一一aaa aaaaa一一",
+        "command": "aaaaaaa aa a\naaaaaa aaaa\na a aaaaaaaaaaaaaaaa/workspace/fixture-artifactaaa\naaa aaaaaa aa aaaaaaaaaaaaaa aaaaaaaaa aaaaaaaaaaa\n    aa aaaaaa aa aaaaaaaaaaaaa\n        aaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        aaaaaaaaa a aaaaaaa aaaaaaaaaaaaaaaaaa aaa aaaaa a aa aaaaaaaaaaaaaa aa aaaaa aa aaaaaaaaaaaa aaa aaaaaaa aa aaaaaaaaaaaaa\n        aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaa 一aa\n        aaa aaaaa aaaa aa aaaaaaaaaa\n            aaaaaaaa  a aaaaaa a aaaaaaaa\na"
+      }
+    },
+    {
+      "id": "sevt-20260908021427-m2n7w",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021416-1ia1d",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 15672,
+        "input_tokens": 16369,
+        "output_tokens": 247
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:14:27.315336632+08:00"
+    },
+    {
+      "id": "sevt-20260908021429-kvrgd",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_alzfjer0s4zs9rf7rnxdfvdg",
+      "processed_at": "2026-09-08T10:14:29.299206759+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaaaa a 一\naaaaaaa a 一\naaaaaaaa a 一\n  a aaaaaaaaaaaaa a aaaaaaaaaaaaaa一一一一一a\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260908021429-vva0j",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:14:29.299227329+08:00"
+    },
+    {
+      "id": "sevt-20260908021429-q18nq",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一一一一 aaaaaaaaaaaaaa一一一一一一a一一一一一一一一一a一一一一一一a\n"
+        }
+      ],
+      "processed_at": "2026-09-08T10:14:40.045388311+08:00"
+    },
+    {
+      "id": "call_2dtez7v5nsen3v98z3jthmzc",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T10:14:40.045444604+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "一一一一a一一一一一aaa一一",
+        "command": "aaaaaaa aa a\naaaaaa aaaa\na a aaaaaaaaaaaaaaaa/workspace/fixture-artifactaaa\naaa aaaaaa aa aaaaaaaaaaaaaa aaaaaaaaaa\n    aa aaaaaa aa aaaaaaaaaaaaa\n        aaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        aaa a aaaaaaa aaaaaaaaaaaaaaaaaa aaa aaaaa a aa aaaaaaaaaaaaaa aa aaaaa aa aaaaaaaaaaaaa\n        aaaaaaaaaaaaaaaa aaa一一一 aaaaaaaaaa 一aaa\n        aaa aaaaa aaaa aa aaaaaaaaa\n            aaaaaaaa  a aaaaaa a aaaaaaaa\na"
+      }
+    },
+    {
+      "id": "sevt-20260908021440-xbhv2",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021429-vva0j",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 16184,
+        "input_tokens": 16812,
+        "output_tokens": 247
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:14:40.045437273+08:00"
+    },
+    {
+      "id": "sevt-20260908021440-3po6f",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_2dtez7v5nsen3v98z3jthmzc",
+      "processed_at": "2026-09-08T10:14:40.628799104+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaaa aaa一一一 a 一a\n  a aaaaaaa a aaaaaaaa一一一一a\n  a aaaaaaa a aaaaaaaa一一一一a\naaaaaa aaa一一一 a 一a\n  a aaaaaaa a aaaaaaaa一一一一一a\n  a aaaaaaaaaaa a aaaaaaaaaaaa一一一一一a\n  a aaaaaaa a aaaaaaaa一一一一一a\n  a aaaaaaa a aaaaaaaa一一一一一a\n  a aaaaa a aaaaaa一一一一一a\n  a aaaaaaa a aaaaaaaa一一一一一a\n  a aaaaaaa a aaaaaaaa一一一一一a\n  a aaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaa一一一一一a\n  a aaaaaaaaaa a aaaaaaaaaaa一一一一一a\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260908021440-tb6em",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:14:40.628826384+08:00"
+    },
+    {
+      "id": "call_elrbe6v8ss8lxo9ceiglp204",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T10:14:49.380502632+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaaaaa aa a\naaaaaa aaaa\na a aaaaaaaaaaaaaaaa/workspace/fixture-artifactaaa\naaa aaaaaaa aaaaa aa aaaaaaaaaaaaaaaa一一aaa aaaaaaaaaaa一一aaa aaaaaaaaaaaa一一aaa aaaaaaaaaa一一一一aaaa\n    aa aaaaaa aa aaaaaaaaaaaaa\n        aaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        aaa aaaaa a aa aaaaaaaaaaaaaaa\n            aa aaaaa aa aaaaa\n                aaaaaaaaaaaaaaaaa aaaaaa a aaaaaaaaaaaaaaaaaaaaaaa\n                aaa aa aa aaaaaaaaaaaaaaaaa\n                    aaaaaaaa    一一a aaaaaaaaaaaaaaaaaaaaaaaaaaaaa  一一a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  一一a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  一一a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  一一a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\na",
+        "description": "一一一一一aaa aaa一一一一一一一一"
+      }
+    },
+    {
+      "id": "sevt-20260908021449-mueik",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021440-tb6em",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 16696,
+        "input_tokens": 17425,
+        "output_tokens": 278
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:14:49.380490163+08:00"
+    },
+    {
+      "id": "sevt-20260908021449-jytw1",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_elrbe6v8ss8lxo9ceiglp204",
+      "processed_at": "2026-09-08T10:14:49.953475169+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\na一一a aaaaaaa a aaaaaaaa一一一一一a\n    一一a 一一aaaaa一一  一一a a  一一a a  一一a aa  一一a \na一一a aaaaaaaaaaaaa a aaaaaaaaaaaaaa一一一一一a\n    一一a 一一aaaaa一一  一一a aaa  一一a a  一一a aaa  一一a \na一一一一a aaaaaaa a aaaaaaa 一一\n    一一a 一一  一一a a  一一a a  一一a aa  一一a \na一一一一a aaaaaaaaaaaaa a aaaaaaaaaaaaa a一一一一一\n    一一a 一一  一一a aaa  一一a a  一一a aaa  一一a \n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260908021449-1c02n",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:14:49.953504863+08:00"
+    },
+    {
+      "id": "sevt-20260908021449-gywyi",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一 aaa aaa aaaaa 一一a一一一一一一一一一a一一一一一一一一一一一一一aaaa\n"
+        }
+      ],
+      "processed_at": "2026-09-08T10:14:59.225874695+08:00"
+    },
+    {
+      "id": "call_wc672hcb06ho7k4pu0arp9zd",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T10:14:59.226103394+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaaaaa aa a\naaaaaa aaaa\na a aaaaaaaaaaaaaaaa/workspace/fixture-artifactaaa\na 一一aaa aaa a 一一aaa aaa a 一一aaaaaaaaaaaaa\naaaaaaa a a\n    aaaaaaaaaaaaaa aaaaaaaaaaa\n    aaaaaaaaaa aaaaaaaaaaa\n    aaaaaaaaaaa aaaaaaaaaaaaaaaaa\na\naaa aaaaaaa aaaa aa aaaaaaaa\n    a a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaaaaa aaaaaa a aaaaaaaaaaaaaaaaaaaaaaa\n    aaaaaaaa  aaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  aaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  aaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    aaa aa aa aaaaaaaaaaaaaaaaa\n        aaaaaaaa    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    aaaaaaa\na",
+        "description": "一一一一aaaaaaa一一aaaaaaa一一aaaaaaaaaaa一一一一"
+      }
+    },
+    {
+      "id": "sevt-20260908021459-jvwbo",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021449-1c02n",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 17208,
+        "input_tokens": 18084,
+        "output_tokens": 423
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:14:59.226094461+08:00"
+    },
+    {
+      "id": "sevt-20260908021459-9h4ac",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_wc672hcb06ho7k4pu0arp9zd",
+      "processed_at": "2026-09-08T10:14:59.796148660+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaaaaa aaaaaaa a aaaaaaaa一一一一a\n  aaaaaaaa aaaa  aaaaaaaaaa aaaaaa  aaaaaaaaaaaa aaaaaaaa\n    一一aaaaa一一a aaaa aaaaaaa aaaaaa \n\naaaaaaaa aaaaaaa a aaaaaaaa一一一一一a\n  aaaaaaaa aaaa  aaaaaaaaaa aaaaaa  aaaaaaaaaaaa aaaaaaaa\n    一一aaaaa一一a aaaa aaaaaaa aaaaaa \n\naaaaaaaaa aaaaaaaaaaaaa a aaaaaaaaaaaaaa一一一一一a\n  aaaaaaaa aaaa  aaaaaaaaaa aaaaaa  aaaaaaaaaaaa aaaaa\n    一一aaaaa一一a aaaaaa aaaaaaa aaaaaaa \n\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260908021459-pt5bf",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:14:59.796167588+08:00"
+    },
+    {
+      "id": "call_0igvlg9e18hpe5tld1ywo03j",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-08T10:15:06.649617899+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaaaaa aa a\naaaaaa aaaa\na a aaaaaaaaaaaaaaaa/workspace/fixture-artifactaaa\na 一aaa一一一一一一一\naaa a aa aaaaaaaaaaaa\n    aaaa a aaaaaaaaaaaaaaaaaaaaaa\n    aa aaaaa aa aaaaaaaaaaaa aa a一一a aa aaaaa\n        aaaaaaaaaaa\n        aaaaaaa  aaaaaaaaaaaa aaaaaaaaaaaaaaaaaa aaaa\n        aaaaaaa  aaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaa\n        aaa a aa aaaaaaaaaaaaaaaaaa aaaaaaaa\n            aaaaaaaa   a aaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaa aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        aaaaaaa  aaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaa\n        aaaaaaa  aaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaa\n        aaaaaaa\na",
+        "description": "一一一一一一一aaa一一一一一一"
+      }
+    },
+    {
+      "id": "sevt-20260908021506-13uhc",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021459-pt5bf",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 17720,
+        "input_tokens": 18788,
+        "output_tokens": 254
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:15:06.649608815+08:00"
+    },
+    {
+      "id": "sevt-20260908021507-lxnwb",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_0igvlg9e18hpe5tld1ywo03j",
+      "processed_at": "2026-09-08T10:15:07.226479240+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260908021507-soedg",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-08T10:15:07.226508904+08:00"
+    },
+    {
+      "id": "sevt-20260908021507-fivfl",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一aaa一一一一一一一一一一一一一一一一一 aaaaaaaaaaaaa 一一一一aaa一一一一一一a一一一一一 aaaaaaaa 一一一 aaaaaaaaaaaaaa\n\naaa\n\naa 一aaaaaaaaaaaaaa 一一一一一\n\na 一一一一 a 一一一一 aaaaaaaaaaaaa a 一一一 a 一一一 a 一一 a\naaaaaaaaaaaaaaaaaaaaaaa\na 一一一一aaaaa 一一a a a 一一一 a a a a a a a\na 一一一一一aaaaa 一一a a a 一一一 a a a a a a a\na 一一一 aaaaaaaaaaaaa 一一a a a 一一一 a aaa a aaa a 一a一一 aaaaaa a\na 一一一一a一一a a a a一一一 a aaa a aaa a 一a一一 aaaaaa a\n\na 一一一一一aa一一一一一aa一一一一一一a一一一一一一一一一一一一a一一一一一一一一一一一一一一一一一一一a\n\naaa\n\naa 一a一一 a 一一一一一一一 aaa 一一一一一一\n\n一一一一一一一一一 aaaaaaaaaaaa一一一aa一一一 aaa 一一a一一 aaaaa 一a\n\na 一一a一一a a 一一 a 一一一 a 一一一 a 一一 a aaaaaaaaa a\naaaaaaaaaaaaaaaaaaaaaaaaaaa\na aaaaaaaa一一一一一一a a 一一 a a a aa a 一a一一 aaaaaa a aaaaaa a\na aaaaaaaa一一一一一一一a a 一一 a a a aa a 一a一一 aaaaaa a aaaaaa a\na aaaaaaaaaaaaaa一一一一一a a aaaaa 一一一一 a aaa a aaa a 一a一一 aaaaaa a aaaaaa a\n\naa一一一一aaa\na aaaaaaaaaaaaa 一 aaaaaaa 一一 aa一一一一 aaaa一一一一 aaaaaa一一一一一一一aaaaaa aa 一一aa一一一一一一一一a\na 一一a一一一 aaaaaaa 一一一一一aa一一",
+          "_fixture_truncated_from": 1272
+        }
+      ],
+      "processed_at": "2026-09-08T10:15:22.236395450+08:00"
+    },
+    {
+      "id": "sevt-20260908021522-x3khx",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260908021507-soedg",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 18744,
+        "input_tokens": 19204,
+        "output_tokens": 765
+      },
+      "is_error": false,
+      "processed_at": "2026-09-08T10:15:22.236431784+08:00"
+    },
+    {
+      "id": "sevt-20260908021522-ozpga",
+      "type": "session.thread_status_idle",
+      "agent_name": "fixture-agent",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "processed_at": "2026-09-08T10:15:22.274418269+08:00"
+    },
+    {
+      "id": "sevt-20260908021522-u42wa",
+      "type": "session.status_idle",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "processed_at": "2026-09-08T10:15:22.274418760+08:00"
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "session_event_cursors" ADD COLUMN "running_since" timestamp with time zone;

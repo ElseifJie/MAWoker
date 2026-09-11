@@ -63,7 +63,9 @@ const adminUsers = {
     {
       id: userId,
       email: "user@example.com",
+      role: "user",
       status: "active",
+      hasPassword: true,
       defaultAgentId: agentId,
       quota: {
         personalAgentLimit: 10,
@@ -146,7 +148,13 @@ function userHandler() {
     }
     if (url.pathname === "/api/v1/sessions") return json({ sessions: [] });
     if (url.pathname === "/api/v1/capabilities") {
-      return json({ personalAgentModels: ["model-a"] });
+      return json({
+        skills: { available: false },
+        mcpServers: { available: false },
+        vaults: { available: false },
+        memoryStores: { available: false },
+        personalAgentModels: ["model-a"],
+      });
     }
     if (url.pathname === "/api/v1/usage") {
       return json({
@@ -962,5 +970,127 @@ describe("user administration", () => {
             disabledAgentId,
       ),
     ).toBe(false);
+  });
+});
+
+describe("user account administration", () => {
+  async function createUserHandler() {
+    const users = structuredClone(adminUsers.users);
+    const calls: Array<{ method: string; path: string; body: unknown }> = [];
+    const base = adminHandler();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = requestPath(input);
+        const method = init?.method ?? "GET";
+        calls.push({
+          method,
+          path,
+          body:
+            typeof init?.body === "string"
+              ? (JSON.parse(init.body) as unknown)
+              : undefined,
+        });
+        if (path === "/api/v1/admin/users" && method === "GET") {
+          return json({ users });
+        }
+        if (path === "/api/v1/admin/users" && method === "POST") {
+          const body = JSON.parse(String(init?.body)) as {
+            email: string;
+            role: "user" | "admin";
+          };
+          users.push({
+            id: "00000000-0000-4000-8000-000000000777",
+            email: body.email,
+            role: body.role,
+            status: "active",
+            hasPassword: true,
+            defaultAgentId: null,
+            quota: adminUsers.users[0]!.quota,
+          });
+          return json(
+            {
+              id: "00000000-0000-4000-8000-000000000777",
+              email: body.email,
+              role: body.role,
+              status: "active",
+            },
+            201,
+          );
+        }
+        if (path.endsWith("/password") && method === "POST") {
+          return new Response(null, { status: 204 });
+        }
+        return base(input);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return { calls };
+  }
+
+  it("creates an account from the New user dialog and refreshes the list", async () => {
+    const { calls } = await createUserHandler();
+
+    renderApp("/admin/users");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New user" }));
+
+    await user.type(screen.getByLabelText("Email"), "Newcomer@Example.com");
+    await user.type(screen.getByLabelText("Password"), "newcomer-password");
+    await user.type(
+      screen.getByLabelText("Confirm password"),
+      "newcomer-password",
+    );
+    await user.click(screen.getByRole("button", { name: "Create user" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "newcomer@example.com" }),
+    ).toBeInTheDocument();
+    const createCall = calls.find(
+      (call) => call.path === "/api/v1/admin/users" && call.method === "POST",
+    );
+    expect(createCall?.body).toEqual({
+      email: "newcomer@example.com",
+      password: "newcomer-password",
+      role: "user",
+    });
+  });
+
+  it("blocks creation until the confirmation matches", async () => {
+    const { calls } = await createUserHandler();
+
+    renderApp("/admin/users");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "New user" }));
+    await user.type(screen.getByLabelText("Email"), "newcomer@example.com");
+    await user.type(screen.getByLabelText("Password"), "newcomer-password");
+    await user.type(screen.getByLabelText("Confirm password"), "different");
+
+    expect(screen.getByRole("button", { name: "Create user" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Create user" }));
+    expect(calls.some((call) => call.method === "POST")).toBe(false);
+  });
+
+  it("resets a password from the account record", async () => {
+    const { calls } = await createUserHandler();
+
+    renderApp("/admin/users");
+    const user = userEvent.setup();
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Reset password for user@example.com",
+      }),
+    );
+    await user.type(screen.getByLabelText("New password"), "rotated-password");
+    await user.type(
+      screen.getByLabelText("Confirm password"),
+      "rotated-password",
+    );
+    await user.click(screen.getByRole("button", { name: "Reset password" }));
+
+    expect(await screen.findByText("Password reset.")).toBeInTheDocument();
+    const resetCall = calls.find((call) => call.path.endsWith("/password"));
+    expect(resetCall?.path).toBe(`/api/v1/admin/users/${userId}/password`);
+    expect(resetCall?.body).toEqual({ password: "rotated-password" });
   });
 });

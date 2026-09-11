@@ -9,6 +9,83 @@ import {
 import { createTestDatabase, id } from "./support/test-database.js";
 
 describe("platform Agent database integration", () => {
+  it("atomically enqueues monthly quota interrupts after an admin limit reduction", async () => {
+    const database = await createTestDatabase();
+    const adminId = id();
+    const userId = id();
+    const agentId = id();
+    const sessionId = id();
+    await database.client.query(
+      `insert into users (id, auth_subject, email, role)
+       values ($1, $2, 'admin@example.com', 'admin'),
+              ($3, $4, 'user@example.com', 'user')`,
+      [adminId, `admin-${adminId}`, userId, `user-${userId}`],
+    );
+    await database.client.query(
+      `insert into quota_policies
+         (key, personal_agent_limit, concurrent_session_limit,
+          daily_session_limit, monthly_token_limit)
+       values ('default', 10, 2, 25, 1000)`,
+    );
+    await database.client.query(
+      `insert into personal_agents
+         (id, owner_user_id, ark_agent_id, name, model_id, system_prompt,
+          ark_version, status)
+       values ($1, $2, 'ark-agent-quota', 'Agent', 'model-a', 'Prompt',
+               '1', 'active')`,
+      [agentId, userId],
+    );
+    await database.client.query(
+      `insert into sessions
+         (id, owner_user_id, ark_session_id, agent_kind, personal_agent_id,
+          ark_agent_id, agent_version, environment_id, status)
+       values ($1, $2, 'ark-session-quota', 'personal', $3,
+               'ark-agent-quota', '1', 'environment-1', 'rescheduled')`,
+      [sessionId, userId, agentId],
+    );
+    await database.client.query(
+      `insert into usage_ledger
+         (id, user_id, ark_session_id, ark_event_id, metric_type, quantity)
+       values ($1, $2, 'ark-session-quota', 'event-usage',
+               'input_tokens', 100)`,
+      [id(), userId],
+    );
+    const repositories = createRepositories(database.db);
+    const service = new PlatformAgentService({
+      repository: repositories.platformAgents as PlatformAgentRepository,
+      ark: new InMemoryArkGateway(),
+      modelAllowlist: ["model-a"],
+      createId: id,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
+    });
+
+    await service.updateUserQuota(
+      userId,
+      {
+        personalAgentLimit: 10,
+        concurrentSessionLimit: 2,
+        dailySessionLimit: 25,
+        monthlyTokenLimit: 50,
+      },
+      { adminId, requestId: "req-reduce-quota" },
+    );
+
+    const jobs = await database.client.query<{
+      user_id: string;
+      session_id: string;
+      status: string;
+    }>(
+      `select user_id, session_id, status
+         from quota_interrupt_jobs`,
+    );
+    expect(jobs.rows).toEqual([
+      { user_id: userId, session_id: sessionId, status: "pending" },
+    ]);
+    await database.close();
+  });
+
   it("checks references and transitions to deleting in one repository operation", async () => {
     const database = await createTestDatabase();
     const adminId = id();
@@ -25,6 +102,9 @@ describe("platform Agent database integration", () => {
       ark: new InMemoryArkGateway(),
       modelAllowlist: ["model-a"],
       createId: id,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
     });
     const context = { adminId, requestId: "req-delete" };
     const agent = await service.create(
@@ -79,6 +159,9 @@ describe("platform Agent database integration", () => {
       ark: new InMemoryArkGateway(),
       modelAllowlist: ["model-a"],
       createId: id,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
     });
     const context = { adminId, requestId: "req-db" };
     const first = await service.create(
@@ -151,12 +234,28 @@ describe("platform Agent database integration", () => {
               ($3, $4, 'user@example.com', 'user')`,
       [adminId, `admin-${adminId}`, userId, `user-${userId}`],
     );
+    await database.client.query(
+      `insert into quota_policies
+         (key, personal_agent_limit, concurrent_session_limit,
+          daily_session_limit, monthly_token_limit)
+       values ('default', 10, 2, 25, 1000)`,
+    );
+    await database.client.query(
+      `insert into user_quota_overrides
+         (user_id, personal_agent_limit, concurrent_session_limit,
+          daily_session_limit, monthly_token_limit, updated_by)
+       values ($1, 3, 1, 5, 500, $2)`,
+      [userId, adminId],
+    );
     const repositories = createRepositories(database.db);
     const service = new PlatformAgentService({
       repository: repositories.platformAgents as PlatformAgentRepository,
       ark: new InMemoryArkGateway(),
       modelAllowlist: ["model-a"],
       createId: id,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
     });
     const context = { adminId, requestId: "req-audit" };
     const agent = await service.create(
@@ -175,10 +274,32 @@ describe("platform Agent database integration", () => {
     ).rejects.toMatchObject({ code: "RESOURCE_NOT_FOUND" });
     expect(await service.listUsers()).toEqual([
       {
+        id: adminId,
+        email: "admin@example.com",
+        role: "admin",
+        status: "active",
+        hasPassword: false,
+        defaultAgentId: null,
+        quota: {
+          personalAgentLimit: 10,
+          concurrentSessionLimit: 2,
+          dailySessionLimit: 25,
+          monthlyTokenLimit: 1000,
+        },
+      },
+      {
         id: userId,
         email: "user@example.com",
+        role: "user",
         status: "active",
+        hasPassword: false,
         defaultAgentId: null,
+        quota: {
+          personalAgentLimit: 3,
+          concurrentSessionLimit: 1,
+          dailySessionLimit: 5,
+          monthlyTokenLimit: 500,
+        },
       },
     ]);
     await expect(

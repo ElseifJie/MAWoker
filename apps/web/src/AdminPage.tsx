@@ -1,11 +1,21 @@
-import { Bot, Pencil, Plus, Power, Trash2, Users } from "lucide-react";
+import {
+  Bot,
+  KeyRound,
+  Pencil,
+  Plus,
+  Power,
+  Trash2,
+  Users,
+} from "lucide-react";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { PASSWORD_MIN_LENGTH } from "@pwa/contracts";
 import {
   ApiClientError,
   apiClient,
   type AdminPlatformAgent,
   type AdminQuota,
+  type AdminUserRole,
   type AdminUserSummary,
 } from "./api.js";
 import {
@@ -19,6 +29,7 @@ import {
   Field,
   Input,
   PageHeader,
+  PasswordInput,
   Select,
   Spinner,
   Textarea,
@@ -474,21 +485,82 @@ function AdminUsersPage({
   agents,
   users,
   onUserChanged,
+  onUsersChanged,
   onAuthRequired,
 }: {
   agents: AdminPlatformAgent[];
   users: AdminUserSummary[];
   onUserChanged: (user: AdminUserSummary) => void;
+  onUsersChanged: (users: AdminUserSummary[]) => void;
   onAuthRequired: () => void;
 }) {
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState<CreateUserDraft>(emptyUserDraft);
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
+
+  function closeDialog() {
+    if (pending) return;
+    setCreating(false);
+    setDraft(emptyUserDraft);
+    setFeedback(null);
+  }
+
+  async function createUser(
+    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
+  ) {
+    event.preventDefault();
+    if (pending) return;
+    if (draft.password !== draft.confirmPassword) {
+      setFeedback("The passwords do not match.");
+      return;
+    }
+    setPending(true);
+    setFeedback(null);
+    try {
+      await apiClient.createAdminUser({
+        email: draft.email.trim().toLowerCase(),
+        password: draft.password,
+        role: draft.role,
+      });
+      const refreshed = await apiClient.listAdminUsers();
+      onUsersChanged(refreshed.users);
+      setCreating(false);
+      setDraft(emptyUserDraft);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.isAuthRequired) {
+        onAuthRequired();
+        return;
+      }
+      setFeedback(
+        userAdminErrorMessage(error, "The user could not be created."),
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+
   return (
     <div className="page admin-page">
       <PageHeader
         eyebrow="Administration"
         title="Users"
-        description="Manage default Agents and limits from identity summaries only."
+        description="Create accounts and manage default Agents and limits. Users sign in with the email and password set here."
+        actions={
+          <Button onClick={() => setCreating(true)}>
+            <Plus size={16} aria-hidden="true" />
+            New user
+          </Button>
+        }
       />
       <section className="admin-user-records" aria-label="User administration">
+        {users.length === 0 ? (
+          <EmptyState
+            title="No users yet"
+            description="Create the first account to let someone sign in."
+          />
+        ) : null}
         {users.map((user) => (
           <AdminUserRecord
             key={user.id}
@@ -499,11 +571,159 @@ function AdminUsersPage({
           />
         ))}
       </section>
+
+      <Dialog
+        open={creating}
+        title="New user"
+        eyebrow="User account"
+        onClose={closeDialog}
+        closeLabel="Close new user dialog"
+        closeDisabled={pending}
+        initialFocusRef={emailRef}
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={closeDialog}
+              disabled={pending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="admin-user-create-form"
+              loading={pending}
+              disabled={!createUserReady(draft)}
+            >
+              <span className="admin-loading-icon-slot" aria-hidden="true">
+                {pending ? <Spinner size={15} /> : null}
+              </span>
+              Create user
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="admin-user-create-form"
+          className="admin-agent-editor-form"
+          onSubmit={createUser}
+        >
+          <Field label="Email">
+            <Input
+              ref={emailRef}
+              type="email"
+              autoComplete="off"
+              value={draft.email}
+              maxLength={320}
+              required
+              disabled={pending}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  email: event.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field
+            label="Password"
+            hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+          >
+            <PasswordInput
+              autoComplete="new-password"
+              value={draft.password}
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={200}
+              required
+              disabled={pending}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  password: event.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field label="Confirm password">
+            <PasswordInput
+              autoComplete="new-password"
+              value={draft.confirmPassword}
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={200}
+              required
+              disabled={pending}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  confirmPassword: event.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field label="Role">
+            <Select
+              value={draft.role}
+              disabled={pending}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  role: event.target.value as AdminUserRole,
+                }))
+              }
+            >
+              <option value="user">User</option>
+              <option value="admin">Administrator</option>
+            </Select>
+          </Field>
+        </form>
+        {feedback ? (
+          <Alert className="admin-dialog-feedback" tone="danger">
+            {feedback}
+          </Alert>
+        ) : null}
+      </Dialog>
     </div>
   );
 }
 
 type QuotaDraft = Record<keyof AdminQuota, string>;
+
+interface CreateUserDraft {
+  email: string;
+  password: string;
+  confirmPassword: string;
+  role: AdminUserRole;
+}
+
+const emptyUserDraft: CreateUserDraft = {
+  email: "",
+  password: "",
+  confirmPassword: "",
+  role: "user",
+};
+
+function createUserReady(draft: CreateUserDraft): boolean {
+  return (
+    draft.email.trim().length > 0 &&
+    draft.password.length >= PASSWORD_MIN_LENGTH &&
+    draft.password === draft.confirmPassword
+  );
+}
+
+function userAdminErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ApiClientError) {
+    if (error.code === "USER_EMAIL_CONFLICT") {
+      return "A user with this email already exists.";
+    }
+    if (error.code === "VALIDATION_FAILED") {
+      return `Check the email and password (at least ${PASSWORD_MIN_LENGTH} characters).`;
+    }
+    if (error.retryable) {
+      return "The service is temporarily unavailable. Try again.";
+    }
+  }
+  return fallback;
+}
 
 function quotaDraft(quota: AdminQuota): QuotaDraft {
   return {
@@ -550,6 +770,14 @@ function AdminUserRecord({
   const [quota, setQuota] = useState<QuotaDraft>(() => quotaDraft(user.quota));
   const [pending, setPending] = useState<"agent" | "quota" | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetDraft, setResetDraft] = useState({
+    password: "",
+    confirmPassword: "",
+  });
+  const [resetPending, setResetPending] = useState(false);
+  const [resetFeedback, setResetFeedback] = useState<string | null>(null);
+  const resetPasswordRef = useRef<HTMLInputElement>(null);
   const {
     personalAgentLimit,
     concurrentSessionLimit,
@@ -637,6 +865,47 @@ function AdminUserRecord({
     }
   }
 
+  function openResetDialog() {
+    setResetDraft({ password: "", confirmPassword: "" });
+    setResetFeedback(null);
+    setResetOpen(true);
+  }
+
+  function closeResetDialog() {
+    if (resetPending) return;
+    setResetOpen(false);
+    setResetFeedback(null);
+  }
+
+  async function submitReset(
+    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
+  ) {
+    event.preventDefault();
+    if (resetPending) return;
+    if (resetDraft.password !== resetDraft.confirmPassword) {
+      setResetFeedback("The passwords do not match.");
+      return;
+    }
+    setResetPending(true);
+    setResetFeedback(null);
+    try {
+      await apiClient.resetAdminUserPassword(user.id, resetDraft.password);
+      onUserChanged({ ...user, hasPassword: true });
+      setResetOpen(false);
+      setFeedback("Password reset.");
+    } catch (error) {
+      if (error instanceof ApiClientError && error.isAuthRequired) {
+        onAuthRequired();
+        return;
+      }
+      setResetFeedback(
+        userAdminErrorMessage(error, "The password could not be reset."),
+      );
+    } finally {
+      setResetPending(false);
+    }
+  }
+
   const quotaFields: Array<{
     key: keyof AdminQuota;
     label: string;
@@ -651,7 +920,7 @@ function AdminUserRecord({
   const userHeadingId = `admin-user-${user.id}`;
   const defaultAgentHeadingId = `admin-user-default-agent-${user.id}`;
   const quotaHeadingId = `admin-user-quotas-${user.id}`;
-  const feedbackSucceeded = feedback?.endsWith("saved.") ?? false;
+  const feedbackSucceeded = /(saved|reset)\.$/.test(feedback ?? "");
 
   return (
     <section className="admin-user-record" aria-labelledby={userHeadingId}>
@@ -661,13 +930,30 @@ function AdminUserRecord({
       >
         <div className="admin-user-identity__summary">
           <h2 id={userHeadingId}>{user.email}</h2>
-          <Badge tone={user.status === "active" ? "success" : "neutral"}>
-            {user.status}
-          </Badge>
+          <div className="admin-user-identity__badges">
+            <Badge tone={user.role === "admin" ? "info" : "neutral"}>
+              {user.role === "admin" ? "Administrator" : "User"}
+            </Badge>
+            <Badge tone={user.hasPassword ? "neutral" : "warning"}>
+              {user.hasPassword ? "Password set" : "No password"}
+            </Badge>
+            <Badge tone={user.status === "active" ? "success" : "neutral"}>
+              {user.status}
+            </Badge>
+          </div>
         </div>
         <h3 className="admin-user-group__label" id={identityHeadingId}>
           Identity
         </h3>
+        <Button
+          size="compact"
+          variant="secondary"
+          aria-label={`Reset password for ${user.email}`}
+          onClick={openResetDialog}
+        >
+          <KeyRound size={14} aria-hidden="true" />
+          Reset password
+        </Button>
         {feedback ? (
           <Alert
             className="admin-user-feedback"
@@ -679,96 +965,187 @@ function AdminUserRecord({
         ) : null}
       </section>
 
-      <section
-        className="admin-user-group admin-user-default-agent"
-        aria-labelledby={defaultAgentHeadingId}
-      >
-        <h3 className="admin-user-group__label" id={defaultAgentHeadingId}>
-          Default Agent
-        </h3>
-        <div className="admin-default-agent-controls">
-          <Select
-            aria-label={`Default Agent for ${user.email}`}
-            value={selectedAgentId}
-            onChange={(event) => setSelectedAgentId(event.target.value)}
-            disabled={controlsDisabled}
+      {user.role === "user" ? (
+        <>
+          <section
+            className="admin-user-group admin-user-default-agent"
+            aria-labelledby={defaultAgentHeadingId}
           >
-            <option value="" disabled>
-              Select Agent
-            </option>
-            {agents.map((agent) => (
-              <option
-                key={agent.id}
-                value={agent.id}
-                disabled={agent.status !== "active"}
-              >
-                {agent.name}
-              </option>
-            ))}
-          </Select>
-          <Button
-            size="compact"
-            variant="secondary"
-            aria-label={`Save default Agent for ${user.email}`}
-            onClick={() => void saveDefaultAgent()}
-            loading={pending === "agent"}
-            disabled={
-              controlsDisabled ||
-              !activeSelection ||
-              selectedAgentId === user.defaultAgentId
-            }
-          >
-            <span className="admin-loading-icon-slot" aria-hidden="true">
-              {pending === "agent" ? <Spinner size={14} /> : null}
-            </span>
-            Save
-          </Button>
-        </div>
-      </section>
-
-      <section
-        className="admin-user-group admin-user-quotas"
-        aria-labelledby={quotaHeadingId}
-      >
-        <h3 className="admin-user-group__label" id={quotaHeadingId}>
-          Quotas
-        </h3>
-        <div className="admin-quota-fields">
-          {quotaFields.map(({ key, label }) => (
-            <Field label={label} key={key}>
-              <Input
-                aria-label={`${label} for ${user.email}`}
-                type="number"
-                min={0}
-                max={Number.MAX_SAFE_INTEGER}
-                step={1}
-                value={quota[key]}
-                onChange={(event) =>
-                  setQuota((current) => ({
-                    ...current,
-                    [key]: event.target.value,
-                  }))
-                }
+            <h3 className="admin-user-group__label" id={defaultAgentHeadingId}>
+              Default Agent
+            </h3>
+            <div className="admin-default-agent-controls">
+              <Select
+                aria-label={`Default Agent for ${user.email}`}
+                value={selectedAgentId}
+                onChange={(event) => setSelectedAgentId(event.target.value)}
                 disabled={controlsDisabled}
-              />
-            </Field>
-          ))}
-        </div>
-        <Button
-          size="compact"
-          variant="secondary"
-          className="admin-save-quotas"
-          aria-label={`Save quotas for ${user.email}`}
-          onClick={() => void saveQuota()}
-          loading={pending === "quota"}
-          disabled={controlsDisabled || quotaValue === null}
+              >
+                <option value="" disabled>
+                  Select Agent
+                </option>
+                {agents.map((agent) => (
+                  <option
+                    key={agent.id}
+                    value={agent.id}
+                    disabled={agent.status !== "active"}
+                  >
+                    {agent.name}
+                  </option>
+                ))}
+              </Select>
+              <Button
+                size="compact"
+                variant="secondary"
+                aria-label={`Save default Agent for ${user.email}`}
+                onClick={() => void saveDefaultAgent()}
+                loading={pending === "agent"}
+                disabled={
+                  controlsDisabled ||
+                  !activeSelection ||
+                  selectedAgentId === user.defaultAgentId
+                }
+              >
+                <span className="admin-loading-icon-slot" aria-hidden="true">
+                  {pending === "agent" ? <Spinner size={14} /> : null}
+                </span>
+                Save
+              </Button>
+            </div>
+          </section>
+
+          <section
+            className="admin-user-group admin-user-quotas"
+            aria-labelledby={quotaHeadingId}
+          >
+            <h3 className="admin-user-group__label" id={quotaHeadingId}>
+              Quotas
+            </h3>
+            <div className="admin-quota-fields">
+              {quotaFields.map(({ key, label }) => (
+                <Field label={label} key={key}>
+                  <Input
+                    aria-label={`${label} for ${user.email}`}
+                    type="number"
+                    min={0}
+                    max={Number.MAX_SAFE_INTEGER}
+                    step={1}
+                    value={quota[key]}
+                    onChange={(event) =>
+                      setQuota((current) => ({
+                        ...current,
+                        [key]: event.target.value,
+                      }))
+                    }
+                    disabled={controlsDisabled}
+                  />
+                </Field>
+              ))}
+            </div>
+            <Button
+              size="compact"
+              variant="secondary"
+              className="admin-save-quotas"
+              aria-label={`Save quotas for ${user.email}`}
+              onClick={() => void saveQuota()}
+              loading={pending === "quota"}
+              disabled={controlsDisabled || quotaValue === null}
+            >
+              <span className="admin-loading-icon-slot" aria-hidden="true">
+                {pending === "quota" ? <Spinner size={14} /> : null}
+              </span>
+              Save quotas
+            </Button>
+          </section>
+        </>
+      ) : null}
+
+      <Dialog
+        open={resetOpen}
+        title="Reset password"
+        eyebrow="User account"
+        onClose={closeResetDialog}
+        closeLabel="Close password reset dialog"
+        closeDisabled={resetPending}
+        initialFocusRef={resetPasswordRef}
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={closeResetDialog}
+              disabled={resetPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form={`admin-user-password-form-${user.id}`}
+              loading={resetPending}
+              disabled={
+                resetDraft.password.length < PASSWORD_MIN_LENGTH ||
+                resetDraft.password !== resetDraft.confirmPassword
+              }
+            >
+              <span className="admin-loading-icon-slot" aria-hidden="true">
+                {resetPending ? <Spinner size={15} /> : null}
+              </span>
+              Reset password
+            </Button>
+          </>
+        }
+      >
+        <p className="admin-dialog-copy">
+          Set a new password for <strong>{user.email}</strong>. Existing
+          sessions for this account are signed out.
+        </p>
+        <form
+          id={`admin-user-password-form-${user.id}`}
+          className="admin-agent-editor-form"
+          onSubmit={submitReset}
         >
-          <span className="admin-loading-icon-slot" aria-hidden="true">
-            {pending === "quota" ? <Spinner size={14} /> : null}
-          </span>
-          Save quotas
-        </Button>
-      </section>
+          <Field
+            label="New password"
+            hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+          >
+            <PasswordInput
+              ref={resetPasswordRef}
+              autoComplete="new-password"
+              value={resetDraft.password}
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={200}
+              required
+              disabled={resetPending}
+              onChange={(event) =>
+                setResetDraft((current) => ({
+                  ...current,
+                  password: event.target.value,
+                }))
+              }
+            />
+          </Field>
+          <Field label="Confirm password">
+            <PasswordInput
+              autoComplete="new-password"
+              value={resetDraft.confirmPassword}
+              minLength={PASSWORD_MIN_LENGTH}
+              maxLength={200}
+              required
+              disabled={resetPending}
+              onChange={(event) =>
+                setResetDraft((current) => ({
+                  ...current,
+                  confirmPassword: event.target.value,
+                }))
+              }
+            />
+          </Field>
+        </form>
+        {resetFeedback ? (
+          <Alert className="admin-dialog-feedback" tone="danger">
+            {resetFeedback}
+          </Alert>
+        ) : null}
+      </Dialog>
     </section>
   );
 }
@@ -878,6 +1255,11 @@ export function AdminWorkspace({
             <AdminUsersPage
               agents={data.agents}
               users={data.users}
+              onUsersChanged={(users) =>
+                setData((current) =>
+                  current ? { ...current, users } : current,
+                )
+              }
               onUserChanged={(user) =>
                 setData((current) =>
                   current

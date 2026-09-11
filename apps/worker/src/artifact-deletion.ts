@@ -65,6 +65,16 @@ function retryError(error: unknown): string {
   return "ARTIFACT_DELETE_FAILED";
 }
 
+export interface ArtifactDeletionAlert {
+  jobType: "delete_artifact";
+  jobId: string;
+  userId: string | null;
+  artifactId: string;
+  attempts: number;
+  maxAttempts: number;
+  errorCode: string;
+}
+
 export class ArtifactDeletionProcessor {
   constructor(
     private readonly dependencies: {
@@ -72,6 +82,7 @@ export class ArtifactDeletionProcessor {
       service: ArtifactDeletionService;
       workerId: string;
       batchSize?: number;
+      alert?: (event: ArtifactDeletionAlert) => void;
     },
   ) {}
 
@@ -99,11 +110,24 @@ export class ArtifactDeletionProcessor {
       );
       await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
     } catch (error) {
+      const final = job.attempts >= job.maxAttempts;
+      const errorCode = retryError(error);
+      if (final && this.dependencies.alert) {
+        this.dependencies.alert({
+          jobType: "delete_artifact",
+          jobId: job.id,
+          userId: job.ownerUserId ?? null,
+          artifactId: job.id,
+          attempts: job.attempts + 1,
+          maxAttempts: job.maxAttempts,
+          errorCode,
+        });
+      }
       await this.dependencies.jobs.retry(
         job.id,
         this.dependencies.workerId,
-        retryError(error),
-        job.attempts >= job.maxAttempts,
+        errorCode,
+        final,
       );
     }
   }

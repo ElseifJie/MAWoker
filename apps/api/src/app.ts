@@ -1,48 +1,58 @@
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
-import {
-  AuthRequiredError,
-  AuthVerificationError,
-  type AuthContext,
-} from "@pwa/auth";
+import staticFiles from "@fastify/static";
+import { AuthRequiredError, type AuthContext } from "@pwa/auth";
 import {
   AgentConflictError,
   AgentReferencedError,
   type ArtifactRecord,
   InvalidModelError,
   InvalidUploadNameError,
+  InvalidUserInputError,
   PersonalAgentQuotaExceededError,
   ResourceNotFoundError,
   SessionTerminatedError,
+  UserEmailConflictError,
+  type AdminUserCreated,
   type AvailableAgentRecord,
   type DefaultAgentRecord,
   type PersonalAgentRecord,
   type PlatformAgentRecord,
   type SessionRecord,
   type SessionInputRecord,
+  type QuotaUsageSummary,
   type TenantAuthorizationService,
   type TenantResource,
   type TenantResourceKind,
 } from "@pwa/domain";
-import type { UiEvent } from "@pwa/contracts";
-import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import {
+  capabilities as featureCapabilities,
+  type ErrorCode,
+  type UiEvent,
+} from "@pwa/contracts";
+import Fastify, {
+  LogController,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import type { ServerResponse } from "node:http";
+import { extname } from "node:path";
 import type { Readable } from "node:stream";
 
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthContext;
     tenantResource?: TenantResource;
+    arkRequestId?: string;
   }
 }
 
 export const AUTH_COOKIE_NAME = "pwa_session";
 
 export interface ApiAuthService {
-  requestEmailCode(email: string): Promise<void>;
-  verifyEmailCode(
+  login(
     email: string,
-    code: string,
+    password: string,
   ): Promise<{ token: string; expiresAt: Date }>;
   authenticate(token?: string): Promise<AuthContext>;
   renew(token: string): Promise<{ expiresAt: Date }>;
@@ -80,10 +90,27 @@ export interface AdminService {
     Array<{
       id: string;
       email: string;
+      role: "user" | "admin";
       status: "active" | "disabled";
+      hasPassword: boolean;
       defaultAgentId: string | null;
+      quota: {
+        personalAgentLimit: number;
+        concurrentSessionLimit: number;
+        dailySessionLimit: number;
+        monthlyTokenLimit: number;
+      };
     }>
   >;
+  createUser(
+    input: { email: string; password: string; role?: "user" | "admin" },
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<AdminUserCreated>;
+  resetUserPassword(
+    userId: string,
+    password: string,
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<void>;
   assignDefaultAgent(
     userId: string,
     platformAgentId: string,
@@ -181,7 +208,7 @@ export interface SessionApiService {
     id: string,
     context: { userId: string; requestId: string },
     signal?: AbortSignal,
-  ): PromiseLike<{ events: AsyncIterable<UiEvent> }>;
+  ): PromiseLike<{ session: SessionRecord; events: AsyncIterable<UiEvent> }>;
 }
 
 export interface SessionInputApiService {
@@ -210,6 +237,10 @@ export interface ArtifactApiService {
   requestDelete(id: string, userId: string): PromiseLike<ArtifactRecord>;
 }
 
+export interface QuotaUsageApiService {
+  getSummary(userId: string): PromiseLike<QuotaUsageSummary>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
   admin?: AdminService;
@@ -217,26 +248,53 @@ interface BuildAppOptions {
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
   artifacts?: ArtifactApiService;
+  quotaUsage?: QuotaUsageApiService;
+  capabilities?: {
+    personalAgentModels: readonly string[];
+  };
   isProduction?: boolean;
   logStream?: { write(message: string): void };
+  appOrigin?: string;
+  rateLimit?: {
+    max: number;
+    windowMs: number;
+    maxEntries?: number;
+  };
+  readiness?: {
+    configurationReady: boolean;
+    checkDatabase: (signal?: AbortSignal) => PromiseLike<void>;
+    timeoutMs: number;
+  };
+  webRoot?: string;
 }
 
-const emailCodeBodySchema = {
+const credentialsBodySchema = {
   type: "object",
   additionalProperties: false,
-  required: ["email"],
+  required: ["email", "password"],
   properties: {
     email: { type: "string", minLength: 3, maxLength: 320 },
+    password: { type: "string", minLength: 1, maxLength: 200 },
   },
 } as const;
 
-const verifyBodySchema = {
+const createUserBodySchema = {
   type: "object",
   additionalProperties: false,
-  required: ["email", "code"],
+  required: ["email", "password"],
   properties: {
     email: { type: "string", minLength: 3, maxLength: 320 },
-    code: { type: "string", minLength: 1, maxLength: 32 },
+    password: { type: "string", minLength: 8, maxLength: 200 },
+    role: { type: "string", enum: ["user", "admin"] },
+  },
+} as const;
+
+const resetPasswordBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["password"],
+  properties: {
+    password: { type: "string", minLength: 8, maxLength: 200 },
   },
 } as const;
 
@@ -331,10 +389,26 @@ const quotaBodySchema = {
     "monthlyTokenLimit",
   ],
   properties: {
-    personalAgentLimit: { type: "integer", minimum: 0 },
-    concurrentSessionLimit: { type: "integer", minimum: 0 },
-    dailySessionLimit: { type: "integer", minimum: 0 },
-    monthlyTokenLimit: { type: "integer", minimum: 0 },
+    personalAgentLimit: {
+      type: "integer",
+      minimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    },
+    concurrentSessionLimit: {
+      type: "integer",
+      minimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    },
+    dailySessionLimit: {
+      type: "integer",
+      minimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    },
+    monthlyTokenLimit: {
+      type: "integer",
+      minimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    },
   },
 } as const;
 
@@ -398,6 +472,139 @@ const deleteSessionBodySchema = {
   },
 } as const;
 
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "base-uri 'none'",
+  "connect-src 'self'",
+  "font-src 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "img-src 'self' data:",
+  "manifest-src 'self'",
+  "object-src 'none'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "worker-src 'self'",
+].join("; ");
+
+const logRedactionPaths = [
+  "req.headers.authorization",
+  "req.headers.cookie",
+  "headers.authorization",
+  "headers.cookie",
+  "authorization",
+  "cookie",
+  "token",
+  "*.token",
+  "password",
+  "*.password",
+  "apiKey",
+  "*.apiKey",
+  "clientSecret",
+  "*.clientSecret",
+  "accessKeySecret",
+  "*.accessKeySecret",
+  "stsToken",
+  "*.stsToken",
+  "systemPrompt",
+  "*.systemPrompt",
+  "prompt",
+  "*.prompt",
+  "message",
+  "*.message",
+  "content",
+  "*.content",
+  "filename",
+  "*.filename",
+  "fileName",
+  "*.fileName",
+  "bytes",
+  "*.bytes",
+  "body",
+  "req.body",
+];
+
+function rateLimitBucket(method: string, route: string): string {
+  if (method === "GET" && route === "/api/v1/sessions/:id/events") {
+    return "events";
+  }
+  if (method === "GET" && route === "/api/v1/artifacts/:id/download") {
+    return "downloads";
+  }
+  return "api";
+}
+
+function resourceContext(request: FastifyRequest) {
+  const route = request.routeOptions.url ?? "";
+  const segments = route.split("/").filter(Boolean);
+  const segment = segments[2] === "admin" ? segments[3] : segments[2];
+  const resourceType =
+    segment === "sessions"
+      ? "session"
+      : segment === "agents" || segment === "platform-agents"
+        ? "agent"
+        : segment === "artifacts"
+          ? "artifact"
+          : segment === "uploads"
+            ? "upload"
+            : segment === "users"
+              ? "user"
+              : segment === "auth"
+                ? "authentication"
+                : undefined;
+  const params =
+    typeof request.params === "object" && request.params !== null
+      ? (request.params as Record<string, unknown>)
+      : undefined;
+  return {
+    ...(resourceType ? { resource_type: resourceType } : {}),
+    ...(typeof params?.id === "string" ? { resource_id: params.id } : {}),
+  };
+}
+
+function captureArkRequestId(error: unknown, request: FastifyRequest): void {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "arkRequestId" in error &&
+    typeof error.arkRequestId === "string"
+  ) {
+    request.arkRequestId = error.arkRequestId;
+  }
+}
+
+async function runBoundedProbe(
+  probe: (signal?: AbortSignal) => PromiseLike<void>,
+  timeoutMs: number,
+): Promise<void> {
+  const controller = new AbortController();
+  const probePromise = Promise.resolve().then(() => probe(controller.signal));
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let timedOut = false;
+      timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        void probePromise.then(
+          () => reject(new Error("Readiness probe timed out")),
+          () => reject(new Error("Readiness probe timed out")),
+        );
+      }, timeoutMs);
+      void probePromise.then(
+        () => {
+          if (!timedOut) resolve();
+        },
+        (error: unknown) => {
+          if (!timedOut) reject(error);
+        },
+      );
+    });
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function cookieOptions(isProduction: boolean, expires?: Date) {
   return {
     path: "/",
@@ -443,11 +650,49 @@ function resourceNotFoundError(requestId: string) {
 
 function applicationError(
   requestId: string,
-  code: string,
+  code: ErrorCode,
   message: string,
   retryable: boolean,
 ) {
   return { error: { code, message, requestId, retryable } };
+}
+
+function sendArkAvailabilityError(
+  category: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): boolean {
+  if (category === "rate_limited") {
+    reply
+      .code(429)
+      .send(
+        applicationError(
+          request.id,
+          "ARK_RATE_LIMITED",
+          "Ark rate limit exceeded",
+          true,
+        ),
+      );
+    return true;
+  }
+  if (
+    category === "unavailable" ||
+    category === "unknown_write_outcome" ||
+    category === "timeout"
+  ) {
+    reply
+      .code(503)
+      .send(
+        applicationError(
+          request.id,
+          "ARK_UNAVAILABLE",
+          "Ark service is unavailable",
+          category !== "unknown_write_outcome",
+        ),
+      );
+    return true;
+  }
+  return false;
 }
 
 function publicAgent(agent: PlatformAgentRecord) {
@@ -616,6 +861,7 @@ function sendAdminError(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
+  captureArkRequestId(error, request);
   if (
     error instanceof ResourceNotFoundError ||
     hasErrorName(error, "ResourceNotFoundError")
@@ -648,6 +894,36 @@ function sendAdminError(
           request.id,
           "QUOTA_EXCEEDED",
           "Personal Agent quota exceeded",
+          false,
+        ),
+      );
+  }
+  if (
+    error instanceof UserEmailConflictError ||
+    hasErrorName(error, "UserEmailConflictError")
+  ) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "USER_EMAIL_CONFLICT",
+          "A user with this email already exists",
+          false,
+        ),
+      );
+  }
+  if (
+    error instanceof InvalidUserInputError ||
+    hasErrorName(error, "InvalidUserInputError")
+  ) {
+    return reply
+      .code(400)
+      .send(
+        applicationError(
+          request.id,
+          "VALIDATION_FAILED",
+          "User details are invalid",
           false,
         ),
       );
@@ -702,34 +978,7 @@ function sendAdminError(
     typeof error === "object" && error !== null && "category" in error
       ? error.category
       : undefined;
-  if (category === "rate_limited") {
-    return reply
-      .code(429)
-      .send(
-        applicationError(
-          request.id,
-          "ARK_RATE_LIMITED",
-          "Ark rate limit exceeded",
-          true,
-        ),
-      );
-  }
-  if (
-    category === "unavailable" ||
-    category === "unknown_write_outcome" ||
-    category === "timeout"
-  ) {
-    return reply
-      .code(503)
-      .send(
-        applicationError(
-          request.id,
-          "ARK_UNAVAILABLE",
-          "Ark service is unavailable",
-          category !== "unknown_write_outcome",
-        ),
-      );
-  }
+  if (sendArkAvailabilityError(category, request, reply)) return reply;
   throw error;
 }
 
@@ -738,6 +987,7 @@ function sendSessionError(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
+  captureArkRequestId(error, request);
   if (
     error instanceof ResourceNotFoundError ||
     hasErrorName(error, "ResourceNotFoundError")
@@ -817,34 +1067,7 @@ function sendSessionError(
         ),
       );
   }
-  if (category === "rate_limited") {
-    return reply
-      .code(429)
-      .send(
-        applicationError(
-          request.id,
-          "ARK_RATE_LIMITED",
-          "Ark rate limit exceeded",
-          true,
-        ),
-      );
-  }
-  if (
-    category === "unavailable" ||
-    category === "unknown_write_outcome" ||
-    category === "timeout"
-  ) {
-    return reply
-      .code(503)
-      .send(
-        applicationError(
-          request.id,
-          "ARK_UNAVAILABLE",
-          "Ark service is unavailable",
-          category !== "unknown_write_outcome",
-        ),
-      );
-  }
+  if (sendArkAvailabilityError(category, request, reply)) return reply;
   throw error;
 }
 
@@ -853,6 +1076,7 @@ function sendArtifactError(
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
+  captureArkRequestId(error, request);
   if (
     error instanceof ResourceNotFoundError ||
     hasErrorName(error, "ResourceNotFoundError")
@@ -911,7 +1135,8 @@ function isAllowedAdminRoute(route: string): boolean {
     route === "/api/v1/admin/platform-agents/:id" ||
     route === "/api/v1/admin/users" ||
     route === "/api/v1/admin/users/:id/default-agent" ||
-    route === "/api/v1/admin/users/:id/quota"
+    route === "/api/v1/admin/users/:id/quota" ||
+    route === "/api/v1/admin/users/:id/password"
   );
 }
 
@@ -977,7 +1202,7 @@ export function requireUser(auth: ApiAuthService, isProduction = false) {
       return reply;
     }
     if (request.auth?.role !== "user") {
-      return reply.code(403).send(forbiddenError(request.id));
+      return reply.code(404).send(resourceNotFoundError(request.id));
     }
   };
 }
@@ -994,7 +1219,7 @@ export function requireTenantResource(
       return reply.code(401).send(authError(request.id));
     }
     if (request.auth.role !== "user") {
-      return reply.code(403).send(forbiddenError(request.id));
+      return reply.code(404).send(resourceNotFoundError(request.id));
     }
 
     try {
@@ -1016,11 +1241,8 @@ export function requireTenantResource(
 }
 
 const unavailableAuth: ApiAuthService = {
-  async requestEmailCode() {
-    throw new AuthVerificationError();
-  },
-  async verifyEmailCode() {
-    throw new AuthVerificationError();
+  async login() {
+    throw new AuthRequiredError();
   },
   async authenticate() {
     throw new AuthRequiredError();
@@ -1033,10 +1255,39 @@ const unavailableAuth: ApiAuthService = {
 
 export function buildApp(options: BuildAppOptions = {}) {
   const app = Fastify({
-    logger: options.logStream ? { stream: options.logStream } : true,
+    logger: {
+      redact: {
+        paths: logRedactionPaths,
+        censor: "[REDACTED]",
+      },
+      ...(options.logStream ? { stream: options.logStream } : {}),
+    },
+    logController: new LogController({ disableRequestLogging: true }),
     ajv: { customOptions: { removeAdditional: false } },
   });
   const isProduction = options.isProduction ?? false;
+  const appOrigin = new URL(options.appOrigin ?? "http://localhost:5173")
+    .origin;
+  const rateLimit = options.rateLimit ?? { max: 120, windowMs: 60_000 };
+  const maxRequestWindows = Math.max(1, rateLimit.maxEntries ?? 10_000);
+  const requestWindows = new Map<string, { count: number; resetAt: number }>();
+  const activeEventStreams = new Map<string, number>();
+  let nextRequestWindowSweep = 0;
+
+  const acquireEventStream = (userId: string, sessionId: string) => {
+    const key = `${userId}:${sessionId}`;
+    const active = activeEventStreams.get(key) ?? 0;
+    if (active >= rateLimit.max) return undefined;
+    activeEventStreams.set(key, active + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (activeEventStreams.get(key) ?? 1) - 1;
+      if (remaining <= 0) activeEventStreams.delete(key);
+      else activeEventStreams.set(key, remaining);
+    };
+  };
 
   void app.register(cookie);
   void app.register(multipart, {
@@ -1046,8 +1297,194 @@ export function buildApp(options: BuildAppOptions = {}) {
       fileSize: 20 * 1024 * 1024,
     },
   });
+  if (options.webRoot) {
+    void app.register(staticFiles, {
+      root: options.webRoot,
+      wildcard: false,
+    });
+    app.setNotFoundHandler((request, reply) => {
+      const pathname = request.url.split("?", 1)[0] ?? request.url;
+      const excludedNamespaces = [
+        "/api",
+        "/health",
+        "/assets",
+        "/@vite",
+        "/@id",
+        "/@fs",
+        "/@react-refresh",
+        "/__vite_ping",
+      ];
+      const excluded = excludedNamespaces.some(
+        (namespace) =>
+          pathname === namespace || pathname.startsWith(`${namespace}/`),
+      );
+      if (request.method === "GET" && !excluded && extname(pathname) === "") {
+        return reply.type("text/html").sendFile("index.html");
+      }
+      return reply.code(404).send(resourceNotFoundError(request.id));
+    });
+  }
+
+  app.addHook("onResponse", async (request, reply) => {
+    request.log.info(
+      {
+        event: "request.completed",
+        request_id: request.id,
+        ...(request.auth ? { user_id: request.auth.userId } : {}),
+        ...resourceContext(request),
+        result: reply.statusCode < 400 ? "success" : "error",
+        status_code: reply.statusCode,
+        ...(request.arkRequestId
+          ? { ark_request_id: request.arkRequestId }
+          : {}),
+      },
+      "Request completed",
+    );
+  });
+
+  app.setErrorHandler((error, request, reply) => {
+    const validation =
+      typeof error === "object" &&
+      error !== null &&
+      "validation" in error &&
+      error.validation !== undefined;
+    request.log.error(
+      {
+        event: "request.failed",
+        request_id: request.id,
+        ...(request.auth ? { user_id: request.auth.userId } : {}),
+        ...resourceContext(request),
+        result: "error",
+        status_code: validation ? 400 : 500,
+        error_code: validation ? "VALIDATION_FAILED" : "INTERNAL_ERROR",
+      },
+      "Request failed",
+    );
+    return reply
+      .code(validation ? 400 : 500)
+      .send(
+        applicationError(
+          request.id,
+          validation ? "VALIDATION_FAILED" : "INTERNAL_ERROR",
+          validation ? "Request validation failed" : "Internal server error",
+          false,
+        ),
+      );
+  });
+
+  app.addHook("onRequest", async (request, reply) => {
+    reply
+      .header("content-security-policy", contentSecurityPolicy)
+      .header("cross-origin-opener-policy", "same-origin")
+      .header("cross-origin-resource-policy", "same-origin")
+      .header("permissions-policy", "camera=(), microphone=(), geolocation=()")
+      .header("referrer-policy", "no-referrer")
+      .header("x-frame-options", "DENY")
+      .header("x-content-type-options", "nosniff");
+    if (isProduction) {
+      reply.header(
+        "strict-transport-security",
+        "max-age=31536000; includeSubDomains",
+      );
+    }
+
+    const origin = request.headers.origin;
+    if (origin !== undefined) {
+      if (origin !== appOrigin) {
+        return reply
+          .code(403)
+          .send(
+            applicationError(
+              request.id,
+              "ORIGIN_FORBIDDEN",
+              "Origin is not allowed",
+              false,
+            ),
+          );
+      }
+      reply
+        .header("access-control-allow-origin", appOrigin)
+        .header("access-control-allow-credentials", "true")
+        .header("vary", "Origin");
+      if (request.method === "OPTIONS") {
+        return reply
+          .header(
+            "access-control-allow-methods",
+            "GET, POST, PATCH, PUT, DELETE, OPTIONS",
+          )
+          .header("access-control-allow-headers", "Content-Type, Last-Event-ID")
+          .code(204)
+          .send();
+      }
+    }
+
+    const route = request.routeOptions.url ?? "";
+    if (!request.url.startsWith("/api/v1/")) {
+      return;
+    }
+
+    const now = Date.now();
+    if (
+      now >= nextRequestWindowSweep ||
+      requestWindows.size >= maxRequestWindows
+    ) {
+      for (const [key, value] of requestWindows) {
+        if (value.resetAt <= now) requestWindows.delete(key);
+      }
+      nextRequestWindowSweep = now + rateLimit.windowMs;
+    }
+    const rateLimitKey = `${request.ip}:${rateLimitBucket(request.method, route)}`;
+    let window = requestWindows.get(rateLimitKey);
+    if (!window || window.resetAt <= now) {
+      requestWindows.delete(rateLimitKey);
+      while (requestWindows.size >= maxRequestWindows) {
+        const oldestKey = requestWindows.keys().next().value as
+          string | undefined;
+        if (oldestKey === undefined) break;
+        requestWindows.delete(oldestKey);
+      }
+      window = { count: 0, resetAt: now + rateLimit.windowMs };
+      requestWindows.set(rateLimitKey, window);
+    }
+    window.count += 1;
+    if (window.count <= rateLimit.max) return;
+
+    const retryAfter = Math.max(1, Math.ceil((window.resetAt - now) / 1_000));
+    return reply
+      .header("retry-after", retryAfter)
+      .code(429)
+      .send(
+        applicationError(request.id, "RATE_LIMITED", "Too many requests", true),
+      );
+  });
 
   app.get("/health", async () => ({ status: "ok" }));
+  app.get("/health/live", async () => ({ status: "live" }));
+  app.get("/health/ready", async (_request, reply) => {
+    const readiness = options.readiness ?? {
+      configurationReady: true,
+      checkDatabase: async () => undefined,
+      timeoutMs: 1_000,
+    };
+    if (!readiness.configurationReady) {
+      return reply.code(503).send({
+        status: "not_ready",
+        checks: { configuration: "failed", database: "skipped" },
+      });
+    }
+    try {
+      await runBoundedProbe(readiness.checkDatabase, readiness.timeoutMs);
+      return reply.send({
+        status: "ready",
+        checks: { configuration: "ok", database: "ok" },
+      });
+    } catch {
+      return reply.code(503).send({
+        status: "not_ready",
+        checks: { configuration: "ok", database: "failed" },
+      });
+    }
+  });
 
   {
     const auth = options.auth ?? unavailableAuth;
@@ -1072,33 +1509,14 @@ export function buildApp(options: BuildAppOptions = {}) {
       return authorizeUser(request, reply);
     });
 
-    app.post<{ Body: { email: string } }>(
-      "/api/v1/auth/email-code",
-      { schema: { body: emailCodeBodySchema } },
+    app.post<{ Body: { email: string; password: string } }>(
+      "/api/v1/auth/login",
+      { schema: { body: credentialsBodySchema } },
       async (request, reply) => {
         try {
-          await auth.requestEmailCode(request.body.email.trim().toLowerCase());
-          return reply.code(202).send({ accepted: true });
-        } catch (error) {
-          if (
-            !(error instanceof AuthVerificationError) &&
-            !hasErrorName(error, "AuthVerificationError")
-          ) {
-            throw error;
-          }
-          return reply.code(401).send(authError(request.id));
-        }
-      },
-    );
-
-    app.post<{ Body: { email: string; code: string } }>(
-      "/api/v1/auth/verify",
-      { schema: { body: verifyBodySchema } },
-      async (request, reply) => {
-        try {
-          const session = await auth.verifyEmailCode(
+          const session = await auth.login(
             request.body.email.trim().toLowerCase(),
-            request.body.code,
+            request.body.password,
           );
           reply.setCookie(
             AUTH_COOKIE_NAME,
@@ -1108,8 +1526,6 @@ export function buildApp(options: BuildAppOptions = {}) {
           return reply.code(204).send();
         } catch (error) {
           if (
-            !(error instanceof AuthVerificationError) &&
-            !hasErrorName(error, "AuthVerificationError") &&
             !(error instanceof AuthRequiredError) &&
             !hasErrorName(error, "AuthRequiredError")
           ) {
@@ -1127,6 +1543,28 @@ export function buildApp(options: BuildAppOptions = {}) {
     });
 
     app.get("/api/v1/me", async (request) => ({ user: request.auth }));
+
+    app.get("/api/v1/capabilities", async () => ({
+      ...featureCapabilities,
+      personalAgentModels: [
+        ...(options.capabilities?.personalAgentModels ?? []),
+      ],
+    }));
+
+    if (options.quotaUsage) {
+      app.get("/api/v1/usage", async (request, reply) => {
+        const summary = await options.quotaUsage!.getSummary(
+          request.auth!.userId,
+        );
+        return reply.send({
+          ...summary,
+          period: {
+            startsAt: summary.period.startsAt.toISOString(),
+            endsAt: summary.period.endsAt.toISOString(),
+          },
+        });
+      });
+    }
 
     if (options.artifacts) {
       const artifacts = options.artifacts;
@@ -1444,58 +1882,93 @@ export function buildApp(options: BuildAppOptions = {}) {
         "/api/v1/sessions/:id/events",
         { schema: { params: uuidParamsSchema } },
         async (request, reply) => {
-          const controller = new AbortController();
-          const close = () => controller.abort();
-          reply.raw.once("close", close);
-          let opened: { events: AsyncIterable<UiEvent> };
-          try {
-            opened = await sessions.openEvents(
-              request.params.id,
-              context(request),
-              controller.signal,
-            );
-          } catch (error) {
-            controller.abort();
-            reply.raw.removeListener("close", close);
-            return sendSessionError(error, request, reply);
+          const releaseEventStream = acquireEventStream(
+            request.auth!.userId,
+            request.params.id,
+          );
+          if (!releaseEventStream) {
+            return reply
+              .header("retry-after", 1)
+              .code(429)
+              .send(
+                applicationError(
+                  request.id,
+                  "RATE_LIMITED",
+                  "Too many active event streams",
+                  true,
+                ),
+              );
           }
-
-          reply.hijack();
-          reply.raw.writeHead(200, {
-            "content-type": "text/event-stream; charset=utf-8",
-            "cache-control": "no-cache, no-transform",
-            connection: "keep-alive",
-          });
+          const controller = new AbortController();
+          const close = () => {
+            controller.abort();
+            releaseEventStream();
+          };
+          reply.raw.once("close", close);
           try {
-            if (
-              !(await writeSseChunk(
-                reply.raw,
-                ": ready\n\n",
+            let opened: {
+              session: SessionRecord;
+              events: AsyncIterable<UiEvent>;
+            };
+            try {
+              opened = await sessions.openEvents(
+                request.params.id,
+                context(request),
                 controller.signal,
-              ))
-            ) {
-              return reply;
+              );
+            } catch (error) {
+              controller.abort();
+              reply.raw.removeListener("close", close);
+              return sendSessionError(error, request, reply);
             }
-            for await (const event of opened.events) {
-              if (controller.signal.aborted || reply.raw.destroyed) break;
-              const id = event.id.replace(/[\r\n]/g, "");
-              const sourceType = event.sourceType.replace(/[\r\n]/g, "");
+            // Snapshot from the record openEvents already loaded. Replayed
+            // session.status_* events correct any lag in this state.
+            const ready = {
+              sessionId: opened.session.id,
+              status: opened.session.status,
+              agentName: opened.session.agentName,
+              agentVersion: opened.session.agentVersion,
+            };
+
+            reply.hijack();
+            reply.raw.writeHead(200, {
+              "content-type": "text/event-stream; charset=utf-8",
+              "cache-control": "no-cache, no-transform",
+              connection: "keep-alive",
+            });
+            try {
               if (
                 !(await writeSseChunk(
                   reply.raw,
-                  `id: ${id}\nevent: ${sourceType}\ndata: ${JSON.stringify(event)}\n\n`,
+                  `event: ready\ndata: ${JSON.stringify(ready)}\n\n`,
                   controller.signal,
                 ))
               ) {
-                break;
+                return reply;
+              }
+              for await (const event of opened.events) {
+                if (controller.signal.aborted || reply.raw.destroyed) break;
+                const id = event.id.replace(/[\r\n]/g, "");
+                const sourceType = event.sourceType.replace(/[\r\n]/g, "");
+                if (
+                  !(await writeSseChunk(
+                    reply.raw,
+                    `id: ${id}\nevent: ${sourceType}\ndata: ${JSON.stringify(event)}\n\n`,
+                    controller.signal,
+                  ))
+                ) {
+                  break;
+                }
+              }
+            } finally {
+              controller.abort();
+              reply.raw.removeListener("close", close);
+              if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+                reply.raw.end();
               }
             }
           } finally {
-            controller.abort();
-            reply.raw.removeListener("close", close);
-            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
-              reply.raw.end();
-            }
+            releaseEventStream();
           }
           return reply;
         },
@@ -1750,11 +2223,49 @@ export function buildApp(options: BuildAppOptions = {}) {
           users: users.map((user) => ({
             id: user.id,
             email: user.email,
+            role: user.role,
             status: user.status,
+            hasPassword: user.hasPassword,
             defaultAgentId: user.defaultAgentId,
+            quota: user.quota,
           })),
         });
       });
+
+      app.post<{
+        Body: { email: string; password: string; role?: "user" | "admin" };
+      }>(
+        "/api/v1/admin/users",
+        { schema: { body: createUserBodySchema } },
+        async (request, reply) => {
+          try {
+            const created = await admin.createUser(
+              request.body,
+              context(request),
+            );
+            return reply.code(201).send(created);
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{ Params: { id: string }; Body: { password: string } }>(
+        "/api/v1/admin/users/:id/password",
+        { schema: { params: uuidParamsSchema, body: resetPasswordBodySchema } },
+        async (request, reply) => {
+          try {
+            await admin.resetUserPassword(
+              request.params.id,
+              request.body.password,
+              context(request),
+            );
+            return reply.code(204).send();
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
 
       app.put<{
         Params: { id: string };

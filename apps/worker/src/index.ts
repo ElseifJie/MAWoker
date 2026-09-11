@@ -11,18 +11,30 @@ import {
 import { createTosArtifactStorage } from "@pwa/storage";
 import { ArtifactDeletionProcessor } from "./artifact-deletion.js";
 import { ArtifactObjectCleanupProcessor } from "./artifact-object-cleanup.js";
+import { startWorkerLivenessServer } from "./health.js";
+import { createWorkerLogger, logWorkerFailure } from "./logger.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
 import { runProductionWorkerPoll } from "./poll.js";
+import { QuotaInterruptProcessor } from "./quota-interrupt.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
 import { SessionDeletionProcessor } from "./session-deletion.js";
 import { UploadCleanupProcessor } from "./upload-cleanup.js";
+import { UsageReconciliationProcessor } from "./usage-reconciliation.js";
 
 const config = parseServerConfig(process.env);
+const logger = createWorkerLogger();
+const reportWorkerError = (_message: string, error: unknown) => {
+  logWorkerFailure(logger, "worker.operation.failed", error);
+};
 const database = createDatabase(config.databaseUrl);
 const repositories = createRepositories(database.db);
 const ark = new HttpArkGateway({
   baseUrl: config.ark.baseUrl,
   apiKey: config.ark.apiKey,
+  timeoutMs: config.ark.requestTimeoutMs,
+  maxAttempts: config.ark.maxAttempts,
+  baseDelayMs: config.ark.retryBaseDelayMs,
+  maxDelayMs: config.ark.retryMaxDelayMs,
 });
 const artifactStorage = createTosArtifactStorage(config.tos);
 const service = new UserAgentService({
@@ -53,6 +65,26 @@ const sessionDeletionProcessor = new SessionDeletionProcessor({
   ark,
   storage: artifactStorage,
   workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
+  alert: (event) =>
+    logger.error(
+      { event: "deletion.terminal", ...event },
+      "Terminal deletion failure",
+    ),
+});
+const usageProcessor = new UsageReconciliationProcessor({
+  repository: {
+    listReconcilable: repositories.usage.listReconcilable,
+    markReconciled: repositories.usage.markReconciled,
+    projectEvent: repositories.sessionLifecycle.projectEvent,
+  },
+  ark,
+  workerId: `usage-worker:${process.pid}:${randomUUID()}`,
+  reportError: reportWorkerError,
+});
+const quotaInterruptProcessor = new QuotaInterruptProcessor({
+  jobs: repositories.quotaInterrupts,
+  ark,
+  workerId: `quota-interrupt-worker:${process.pid}:${randomUUID()}`,
 });
 const uploadCleanupProcessor = new UploadCleanupProcessor({
   jobs: repositories.jobs,
@@ -72,6 +104,11 @@ const artifactDeletionProcessor = new ArtifactDeletionProcessor({
     createId: randomUUID,
   }),
   workerId: `artifact-deletion-worker:${process.pid}:${randomUUID()}`,
+  alert: (event) =>
+    logger.error(
+      { event: "deletion.terminal", ...event },
+      "Terminal deletion failure",
+    ),
 });
 const artifactObjectCleanupProcessor = new ArtifactObjectCleanupProcessor({
   jobs: repositories.jobs,
@@ -83,8 +120,12 @@ const artifactObjectCleanupProcessor = new ArtifactObjectCleanupProcessor({
   }),
   workerId: `artifact-object-cleanup-worker:${process.pid}:${randomUUID()}`,
 });
+const health = startWorkerLivenessServer({
+  host: config.worker.healthHost,
+  port: config.worker.healthPort,
+});
 
-console.info("Worker ready");
+logger.info({ event: "worker.ready", result: "success" }, "Worker ready");
 
 await new Promise<void>((resolve) => {
   let running = false;
@@ -92,28 +133,35 @@ await new Promise<void>((resolve) => {
     if (running) return;
     running = true;
     try {
-      await runProductionWorkerPoll({
-        personalAgent: personalAgentProcessor,
-        session: sessionProcessor,
-        sessionDeletion: sessionDeletionProcessor,
-        uploadCleanup: uploadCleanupProcessor,
-        artifactDeletion: artifactDeletionProcessor,
-        artifactCleanup: artifactObjectCleanupProcessor,
-      });
+      await runProductionWorkerPoll(
+        {
+          personalAgent: personalAgentProcessor,
+          session: sessionProcessor,
+          sessionDeletion: sessionDeletionProcessor,
+          usage: usageProcessor,
+          quotaInterrupt: quotaInterruptProcessor,
+          uploadCleanup: uploadCleanupProcessor,
+          artifactDeletion: artifactDeletionProcessor,
+          artifactCleanup: artifactObjectCleanupProcessor,
+        },
+        reportWorkerError,
+      );
     } finally {
       running = false;
     }
   };
-  const interval = setInterval(() => void poll(), 1_000);
+  const interval = setInterval(() => void poll(), config.worker.pollIntervalMs);
   void poll();
   const shutdown = async () => {
     clearInterval(interval);
-    process.off("SIGINT", shutdown);
-    process.off("SIGTERM", shutdown);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await health.close();
     await database.close();
     resolve();
   };
+  const onSignal = () => void shutdown();
 
-  process.once("SIGINT", () => void shutdown());
-  process.once("SIGTERM", () => void shutdown());
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
 });

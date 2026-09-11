@@ -1,26 +1,23 @@
 import {
   Bot,
   Database,
-  FileText,
   FolderOpen,
-  Paperclip,
+  KeyRound,
   Plus,
-  RotateCcw,
-  Send,
+  Puzzle,
+  Server,
   Settings as SettingsIcon,
-  X,
 } from "lucide-react";
 import {
-  type ChangeEvent,
   type ReactNode,
   type SyntheticEvent,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import {
-  Link,
   Navigate,
   NavLink,
   Route,
@@ -35,25 +32,32 @@ import {
   type CurrentUser,
   type SessionStatus,
   type SessionSummary,
-  type UploadedInput,
   type UsageSummary,
 } from "./api.js";
 import { AdminWorkspace } from "./AdminPage.js";
 import { AgentPage } from "./AgentPage.js";
+import { SessionIntro } from "./components/SessionIntro.js";
+import type { FirstMessageDelivery } from "./components/SessionComposer.js";
+import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { FilesPage } from "./FilesPage.js";
 import { SessionPage } from "./SessionPage.js";
+import {
+  isThemePreference,
+  useThemePreference,
+  type ThemeState,
+} from "./theme.js";
 import {
   Alert,
   AppShell,
   Button,
   EmptyState,
   Field,
-  IconButton,
   Input,
   PageHeader,
+  PasswordInput,
   Select,
   Spinner,
-  Textarea,
+  type NavigationItem,
 } from "./ui/index.js";
 
 type AuthState =
@@ -61,6 +65,13 @@ type AuthState =
   | { status: "error" }
   | { status: "unauthenticated" }
   | { status: "authenticated"; user: CurrentUser };
+
+/**
+ * How long a first message waits for the event stream to open before it is
+ * reported as failed. Long enough to cover a slow reconnect, short enough that
+ * the user is not left staring at "waiting" with no way to act.
+ */
+export const FIRST_MESSAGE_STREAM_TIMEOUT_MS = 15_000;
 
 function isAuthError(error: unknown): boolean {
   return error instanceof ApiClientError && error.isAuthRequired;
@@ -93,57 +104,34 @@ interface LoginProps {
   onAuthenticated: () => Promise<void>;
 }
 
+function loginErrorMessage(error: unknown): string {
+  if (error instanceof ApiClientError) {
+    if (error.code === "RATE_LIMITED") {
+      return "Too many sign-in attempts. Wait a moment and try again.";
+    }
+    if (error.isAuthRequired) {
+      return "Email or password is incorrect.";
+    }
+    return "Sign-in is temporarily unavailable. Try again in a moment.";
+  }
+  return "We could not reach the workspace. Check your connection and try again.";
+}
+
 function Login({ onAuthenticated }: LoginProps) {
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [step, setStep] = useState<"email" | "code">("email");
+  const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
-  const [message, setMessage] = useState<{
-    text: string;
-    tone: "success" | "danger";
-  } | null>(null);
-  const normalizedEmail = email.trim().toLowerCase();
+  const [error, setError] = useState<string | null>(null);
 
-  async function requestCode(
-    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
-  ) {
+  async function signIn(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     setPending(true);
-    setMessage(null);
+    setError(null);
     try {
-      await apiClient.requestEmailCode(normalizedEmail);
-      setEmail(normalizedEmail);
-      setStep("code");
-      setMessage({
-        text: `We sent a code to ${normalizedEmail}.`,
-        tone: "success",
-      });
-    } catch {
-      setMessage({
-        text: "We could not send a code. Check the email address and try again.",
-        tone: "danger",
-      });
-    } finally {
-      setPending(false);
-    }
-  }
-
-  async function verifyCode(
-    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
-  ) {
-    event.preventDefault();
-    setPending(true);
-    setMessage(null);
-    try {
-      await apiClient.verifyEmailCode(normalizedEmail, code.trim());
+      await apiClient.login(email.trim().toLowerCase(), password);
       await onAuthenticated();
-    } catch (error) {
-      setMessage({
-        text: isAuthError(error)
-          ? "The code is invalid or expired. Request a new code and try again."
-          : "Sign-in is temporarily unavailable. Try again.",
-        tone: "danger",
-      });
+    } catch (signInError) {
+      setError(loginErrorMessage(signInError));
     } finally {
       setPending(false);
     }
@@ -157,72 +145,45 @@ function Login({ onAuthenticated }: LoginProps) {
         </div>
         <p className="eyebrow">Personal Work Agent</p>
         <h1 id="login-heading">Sign in to your workspace</h1>
-
-        {step === "email" ? (
-          <form onSubmit={requestCode}>
-            <Field
-              label="Email"
-              hint="Use your work email. No password is required."
-            >
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="you@example.com"
-                required
-                disabled={pending}
-              />
-            </Field>
-            <Button type="submit" className="full-width" loading={pending}>
-              {pending ? <Spinner size={17} aria-hidden="true" /> : null}
-              Send code
-            </Button>
-          </form>
-        ) : (
-          <form onSubmit={verifyCode}>
-            <Field label="Verification code">
-              <Input
-                id="verification-code"
-                name="code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
-                placeholder="Enter the code"
-                required
-                disabled={pending}
-                aria-describedby={message ? "login-feedback" : undefined}
-                aria-invalid={message?.tone === "danger" || undefined}
-              />
-            </Field>
-            <Button type="submit" className="full-width" loading={pending}>
-              {pending ? <Spinner size={17} aria-hidden="true" /> : null}
-              Verify and sign in
-            </Button>
-            <Button
-              variant="text"
-              className="full-width"
-              onClick={() => {
-                setStep("email");
-                setCode("");
-                setMessage(null);
-              }}
+        <p className="login-panel__lede">
+          Use the email and password your administrator set up for you.
+        </p>
+        <form onSubmit={signIn}>
+          <Field label="Email">
+            <Input
+              id="email"
+              name="email"
+              type="email"
+              autoComplete="username"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+              required
               disabled={pending}
-            >
-              Use a different email
-            </Button>
-          </form>
-        )}
-        {message ? (
-          <Alert
-            id="login-feedback"
-            className="login-feedback"
-            tone={message.tone}
-          >
-            {message.text}
+            />
+          </Field>
+          <Field label="Password">
+            <PasswordInput
+              id="password"
+              name="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Enter your password"
+              required
+              disabled={pending}
+              aria-describedby={error ? "login-feedback" : undefined}
+              aria-invalid={error ? true : undefined}
+            />
+          </Field>
+          <Button type="submit" className="full-width" loading={pending}>
+            {pending ? <Spinner size={17} aria-hidden="true" /> : null}
+            Sign in
+          </Button>
+        </form>
+        {error ? (
+          <Alert id="login-feedback" className="login-feedback" tone="danger">
+            {error}
           </Alert>
         ) : null}
       </section>
@@ -240,17 +201,70 @@ interface WorkspaceData {
 
 interface WorkspaceProps {
   user: CurrentUser;
+  theme: ThemeState;
   onSignedOut: () => void;
   onAuthRequired: () => void;
 }
 
-const navigationItems = [
-  { to: "/", label: "New task", icon: Plus },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/files", label: "My files", icon: FolderOpen },
-  { to: "/context", label: "Context", icon: Database },
-  { to: "/settings", label: "Settings", icon: SettingsIcon },
+interface ReservedNavigation {
+  capability: "skills" | "mcpServers" | "vaults" | "memoryStores";
+  to: string;
+  label: string;
+  icon: NavigationItem["icon"];
+  hint: string;
+}
+
+const reservedNavigation: ReservedNavigation[] = [
+  {
+    capability: "memoryStores",
+    to: "/context",
+    label: "Context",
+    icon: Database,
+    hint: "Memory stores are not available in this release.",
+  },
+  {
+    capability: "skills",
+    to: "/settings/skills",
+    label: "Skills",
+    icon: Puzzle,
+    hint: "Custom Skills are not available in this release.",
+  },
+  {
+    capability: "mcpServers",
+    to: "/settings/mcp",
+    label: "MCP servers",
+    icon: Server,
+    hint: "MCP server management is not available in this release.",
+  },
+  {
+    capability: "vaults",
+    to: "/settings/vault",
+    label: "Vault",
+    icon: KeyRound,
+    hint: "Private credential storage is not available in this release.",
+  },
 ];
+
+/**
+ * Navigation follows the server's capability report. A reserved entry becomes a
+ * link only when the server says the feature exists, and that change must add
+ * the matching route; until then every reserved entry is disabled, so nothing
+ * can navigate to a route that is not there.
+ */
+function navigationFor(capabilities: ClientCapabilities): NavigationItem[] {
+  return [
+    { to: "/", label: "New task", icon: Plus },
+    { to: "/agents", label: "Agents", icon: Bot },
+    { to: "/files", label: "My files", icon: FolderOpen },
+    ...reservedNavigation.map(
+      ({ capability, hint, icon, label, to }): NavigationItem =>
+        capabilities[capability].available
+          ? { to, label, icon }
+          : { to, label, icon, disabled: true, hint },
+    ),
+    { to: "/settings", label: "Settings", icon: SettingsIcon },
+  ];
+}
 
 const statusLabels: Record<SessionStatus, string> = {
   idle: "Idle",
@@ -321,7 +335,12 @@ function SessionNavigation({
   );
 }
 
-function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
+function Workspace({
+  user,
+  theme,
+  onSignedOut,
+  onAuthRequired,
+}: WorkspaceProps) {
   const navigate = useNavigate();
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -330,6 +349,81 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
     Record<string, FirstMessageDelivery>
   >({});
   const waitingFirstMessages = useRef(new Map<string, string>());
+  const firstMessageTimers = useRef(new Map<string, number>());
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const themeResolved = theme.resolved;
+  const setThemePreference = theme.setPreference;
+
+  const commands = useMemo<Command[]>(() => {
+    const next = themeResolved === "dark" ? "light" : "dark";
+    const destinations: Command[] = [
+      {
+        id: "nav-new",
+        label: "New task",
+        group: "Go to",
+        run: () => navigate("/"),
+      },
+      {
+        id: "nav-agents",
+        label: "Agents",
+        group: "Go to",
+        run: () => navigate("/agents"),
+      },
+      {
+        id: "nav-files",
+        label: "My files",
+        group: "Go to",
+        run: () => navigate("/files"),
+      },
+      {
+        id: "nav-settings",
+        label: "Settings",
+        group: "Go to",
+        run: () => navigate("/settings"),
+      },
+      {
+        id: "theme-toggle",
+        label:
+          next === "dark"
+            ? "Switch to the dark theme"
+            : "Switch to the light theme",
+        group: "Appearance",
+        run: () => setThemePreference(next),
+      },
+    ];
+    if (!data) return destinations;
+    const sessionCommands = (
+      sessions: SessionSummary[],
+      group: string,
+      prefix: string,
+    ): Command[] =>
+      sessions.map((session) => ({
+        id: `${prefix}-${session.id}`,
+        label: session.title,
+        group,
+        run: () => navigate(`/sessions/${session.id}`),
+      }));
+    return [
+      ...destinations,
+      ...sessionCommands(data.sessions, "Open task", "session"),
+      ...sessionCommands(
+        data.archivedSessions,
+        "Open archived task",
+        "archived",
+      ),
+    ];
+  }, [data, navigate, setThemePreference, themeResolved]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -421,6 +515,22 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
         },
       }));
       waitingFirstMessages.current.set(session.id, content);
+      // Without this the message waits forever if the stream never opens, and
+      // the retry affordance only appears once the delivery has failed.
+      const timer = setTimeout(() => {
+        firstMessageTimers.current.delete(session.id);
+        if (!waitingFirstMessages.current.has(session.id)) return;
+        waitingFirstMessages.current.delete(session.id);
+        setFirstMessages((current) => {
+          const existing = current[session.id];
+          if (!existing || existing.status !== "waiting") return current;
+          return {
+            ...current,
+            [session.id]: { ...existing, status: "failed" },
+          };
+        });
+      }, FIRST_MESSAGE_STREAM_TIMEOUT_MS);
+      firstMessageTimers.current.set(session.id, timer);
       navigate(`/sessions/${session.id}`);
     },
     [navigate],
@@ -428,12 +538,27 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
 
   const handleSessionReady = useCallback(
     (sessionId: string) => {
+      const timer = firstMessageTimers.current.get(sessionId);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        firstMessageTimers.current.delete(sessionId);
+      }
       const content = waitingFirstMessages.current.get(sessionId);
       if (content === undefined) return;
       waitingFirstMessages.current.delete(sessionId);
       void deliverFirstMessage(sessionId, content);
     },
     [deliverFirstMessage],
+  );
+
+  useEffect(
+    () => () => {
+      for (const timer of firstMessageTimers.current.values()) {
+        clearTimeout(timer);
+      }
+      firstMessageTimers.current.clear();
+    },
+    [],
   );
 
   const handleSessionChanged = useCallback((session: SessionSummary) => {
@@ -486,7 +611,7 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
     <AppShell
       brand="Work Agent"
       navigationLabel="Workspace"
-      navigation={navigationItems}
+      navigation={navigationFor(data.capabilities)}
       navigationExtra={
         <SessionNavigation
           sessions={data.sessions}
@@ -500,7 +625,7 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
         <Route
           path="/"
           element={
-            <NewTask
+            <SessionIntro
               agents={data.agents}
               usage={data.usage}
               onAuthRequired={onAuthRequired}
@@ -538,39 +663,12 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
           }
         />
         <Route
-          path="/context"
+          path="/settings"
           element={
-            <UnavailablePage
-              title="Context"
-              description="Context management is planned for a later release."
-            />
-          }
-        />
-        <Route path="/settings" element={<SettingsPage user={user} />} />
-        <Route
-          path="/settings/skills"
-          element={
-            <UnavailablePage
-              title="Skills"
-              description="Custom Skills are planned for a later release."
-            />
-          }
-        />
-        <Route
-          path="/settings/mcp"
-          element={
-            <UnavailablePage
-              title="MCP"
-              description="MCP server management is planned for a later release."
-            />
-          }
-        />
-        <Route
-          path="/settings/vault"
-          element={
-            <UnavailablePage
-              title="Vault"
-              description="Private credential management is planned for a later release."
+            <SettingsPage
+              user={user}
+              theme={theme}
+              capabilities={data.capabilities}
             />
           }
         />
@@ -590,6 +688,11 @@ function Workspace({ user, onSignedOut, onAuthRequired }: WorkspaceProps) {
         />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      <CommandPalette
+        open={paletteOpen}
+        commands={commands}
+        onClose={() => setPaletteOpen(false)}
+      />
     </AppShell>
   );
 }
@@ -611,349 +714,76 @@ function PageFrame({
   );
 }
 
-function UnavailablePage({
-  title,
-  description,
+function SettingsPage({
+  user,
+  theme,
+  capabilities,
 }: {
-  title: string;
-  description: string;
+  user: CurrentUser;
+  theme: ThemeState;
+  capabilities: ClientCapabilities;
 }) {
-  return (
-    <PageFrame title={title} description={description}>
-      <Alert className="availability-note" tone="info">
-        <div>
-          <strong>Not available yet</strong>
-          <p>{description}</p>
-        </div>
-      </Alert>
-    </PageFrame>
-  );
-}
-
-function SettingsPage({ user }: { user: CurrentUser }) {
-  const capabilities = [
-    { label: "Skills", to: "/settings/skills" },
-    { label: "MCP servers", to: "/settings/mcp" },
-    { label: "Vault", to: "/settings/vault" },
-  ];
   return (
     <PageFrame
       title="Settings"
-      description="Account details and workspace capabilities."
+      description="Account details, appearance, and workspace capabilities."
     >
       <dl className="settings-list">
         <div>
           <dt>Account</dt>
           <dd>{user.authSubject}</dd>
         </div>
-        {capabilities.map((capability) => (
-          <div key={capability.label}>
-            <dt>
-              <Link to={capability.to}>{capability.label}</Link>
-            </dt>
-            <dd>Not available yet</dd>
-          </div>
-        ))}
       </dl>
-    </PageFrame>
-  );
-}
 
-type FirstMessageDelivery = {
-  sessionId: string;
-  content: string;
-  status: "waiting" | "sending" | "failed" | "sent";
-};
-
-type UploadState =
-  | { key: number; file: File; status: "uploading" }
-  | { key: number; file: File; status: "ready"; upload: UploadedInput }
-  | { key: number; file: File; status: "failed" };
-
-function quotaBlocker(usage: UsageSummary): string | null {
-  if (usage.exhausted.monthlyTokens) {
-    return "Monthly token quota is exhausted. Existing work remains available.";
-  }
-  if (usage.exhausted.dailySessions) {
-    return "Daily Session quota is exhausted. Try again tomorrow.";
-  }
-  if (usage.exhausted.concurrentSessions) {
-    return "Concurrent Session quota is exhausted. Wait for a running task to finish.";
-  }
-  return null;
-}
-
-function NewTask({
-  agents,
-  usage,
-  onAuthRequired,
-  onSessionCreated,
-}: {
-  agents: AgentList;
-  usage: UsageSummary;
-  onAuthRequired: () => void;
-  onSessionCreated: (session: SessionSummary, content: string) => void;
-}) {
-  const nextUploadKey = useRef(0);
-  const fileInput = useRef<HTMLInputElement>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState(
-    agents.selection?.agentId ?? "",
-  );
-  const [message, setMessage] = useState("");
-  const [uploads, setUploads] = useState<UploadState[]>([]);
-  const [submissionStatus, setSubmissionStatus] = useState<string>("");
-  const [submissionError, setSubmissionError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  const agentBlocker = agents.blocker
-    ? "No default Agent is available. Contact an administrator to continue."
-    : null;
-  const blocker = agentBlocker ?? quotaBlocker(usage);
-  const hasUnreadyUploads = uploads.some((upload) => upload.status !== "ready");
-
-  async function uploadFile(item: UploadState) {
-    setUploads((current) =>
-      current.map((upload) =>
-        upload.key === item.key
-          ? { key: item.key, file: item.file, status: "uploading" }
-          : upload,
-      ),
-    );
-    try {
-      const uploaded = await apiClient.upload(item.file);
-      setUploads((current) =>
-        current.map((upload) =>
-          upload.key === item.key
-            ? {
-                key: item.key,
-                file: item.file,
-                status: "ready",
-                upload: uploaded,
-              }
-            : upload,
-        ),
-      );
-    } catch (error) {
-      if (isAuthError(error)) {
-        onAuthRequired();
-        return;
-      }
-      setUploads((current) =>
-        current.map((upload) =>
-          upload.key === item.key
-            ? { key: item.key, file: item.file, status: "failed" }
-            : upload,
-        ),
-      );
-    }
-  }
-
-  function addFiles(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []);
-    const remaining = Math.max(0, 20 - uploads.length);
-    const items: UploadState[] = files.slice(0, remaining).map((file) => ({
-      key: nextUploadKey.current++,
-      file,
-      status: "uploading",
-    }));
-    if (items.length > 0) {
-      setUploads((current) => [...current, ...items]);
-      for (const item of items) void uploadFile(item);
-    }
-    event.target.value = "";
-  }
-
-  async function submitTask(
-    event: SyntheticEvent<HTMLFormElement, SubmitEvent>,
-  ) {
-    event.preventDefault();
-    const content = message.trim();
-    if (
-      submitting ||
-      blocker ||
-      hasUnreadyUploads ||
-      !selectedAgentId ||
-      !content
-    ) {
-      return;
-    }
-
-    setSubmitting(true);
-    setSubmissionError(null);
-    setSubmissionStatus("Creating Session…");
-    try {
-      const session = await apiClient.createSession({
-        agentId: selectedAgentId,
-        uploadIds: uploads.flatMap((upload) =>
-          upload.status === "ready" ? [upload.upload.id] : [],
-        ),
-        title: content.slice(0, 120),
-      });
-      onSessionCreated(session, content);
-    } catch (error) {
-      if (isAuthError(error)) {
-        onAuthRequired();
-        return;
-      }
-      const quotaError =
-        error instanceof ApiClientError &&
-        (error.code === "QUOTA_EXCEEDED" ||
-          error.code === "CONCURRENCY_LIMITED");
-      setSubmissionError(
-        quotaError
-          ? "Task execution quota is exhausted. Existing work remains available."
-          : "The task could not be started. Try again.",
-      );
-      setSubmissionStatus("");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <PageFrame
-      title="New task"
-      description="Start focused work with an available Agent."
-    >
-      <form className="composer" onSubmit={submitTask}>
-        <div className="composer-toolbar">
-          <Field label="Agent">
-            <Select
-              className="agent-picker"
-              value={selectedAgentId}
-              onChange={(event) => setSelectedAgentId(event.target.value)}
-              disabled={submitting || agents.agents.length === 0}
-            >
-              {agents.agents.length === 0 ? (
-                <option value="">No Agent available</option>
-              ) : null}
-              {agents.agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name}
-                  {agent.kind === "platform" ? " · Platform" : ""}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <IconButton
-            className="attachment-button"
-            label="Attach files"
-            size="small"
-            onClick={() => fileInput.current?.click()}
-            disabled={submitting || uploads.length >= 20}
+      <section
+        className="settings-section"
+        aria-labelledby="appearance-heading"
+      >
+        <h2 id="appearance-heading">Appearance</h2>
+        <Field
+          label="Theme"
+          hint="Applies immediately and is remembered on this device."
+        >
+          <Select
+            id="appearance"
+            value={theme.preference}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (isThemePreference(next)) theme.setPreference(next);
+            }}
           >
-            <Paperclip size={18} aria-hidden="true" />
-          </IconButton>
-          <input
-            ref={fileInput}
-            className="file-input"
-            type="file"
-            multiple
-            aria-label="File picker"
-            onChange={addFiles}
-            disabled={submitting || uploads.length >= 20}
-            tabIndex={-1}
-          />
-        </div>
-
-        {uploads.length > 0 ? (
-          <ul className="upload-list" aria-label="Attachments">
-            {uploads.map((upload) => (
-              <li key={upload.key}>
-                <FileText size={16} aria-hidden="true" />
-                <span className="upload-name">{upload.file.name}</span>
-                {upload.status === "uploading" ? (
-                  <span className="upload-state">
-                    <Spinner size={14} aria-hidden="true" />
-                    Uploading
-                  </span>
-                ) : null}
-                {upload.status === "ready" ? (
-                  <span className="upload-state ready">Ready</span>
-                ) : null}
-                {upload.status === "failed" ? (
-                  <>
-                    <span className="upload-error">
-                      {upload.file.name} could not be uploaded.
-                    </span>
-                    <Button
-                      variant="text"
-                      size="compact"
-                      onClick={() => void uploadFile(upload)}
-                    >
-                      <RotateCcw size={14} aria-hidden="true" />
-                      Retry upload
-                    </Button>
-                  </>
-                ) : null}
-                <IconButton
-                  className="small-control"
-                  label={`Remove ${upload.file.name}`}
-                  size="small"
-                  onClick={() =>
-                    setUploads((current) =>
-                      current.filter((item) => item.key !== upload.key),
-                    )
-                  }
-                  disabled={submitting}
-                >
-                  <X size={15} aria-hidden="true" />
-                </IconButton>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-
-        <Field label="Task message">
-          <Textarea
-            id="task-message"
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Describe what you need done…"
-            rows={6}
-            disabled={submitting}
-          />
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="system">Match system</option>
+          </Select>
         </Field>
+      </section>
 
-        <div className="composer-footer">
-          <div className="composer-feedback" aria-live="polite">
-            {blocker ? (
-              <Alert tone="danger">{blocker}</Alert>
-            ) : submissionError ? (
-              <Alert tone="danger">{submissionError}</Alert>
-            ) : submissionStatus ? (
-              <span>
-                <Spinner size={15} aria-hidden="true" />
-                {submissionStatus}
-              </span>
-            ) : (
-              <span className="muted">
-                Enter to add a line. Use Send to run.
-              </span>
-            )}
-          </div>
-          <IconButton
-            type="submit"
-            className="send-button"
-            label="Send task"
-            disabled={
-              submitting ||
-              Boolean(blocker) ||
-              hasUnreadyUploads ||
-              !selectedAgentId ||
-              message.trim().length === 0
-            }
-          >
-            <Send size={18} aria-hidden="true" />
-          </IconButton>
-        </div>
-      </form>
+      <section
+        className="settings-section"
+        aria-labelledby="capabilities-heading"
+      >
+        <h2 id="capabilities-heading">Workspace capabilities</h2>
+        <dl className="settings-list">
+          {reservedNavigation.map(({ capability, label }) => (
+            <div key={capability}>
+              <dt>{label}</dt>
+              <dd>
+                {capabilities[capability].available
+                  ? "Available"
+                  : "Not available in this release"}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
     </PageFrame>
   );
 }
 
 export function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
+  const theme = useThemePreference();
 
   const loadCurrentUser = useCallback(async () => {
     setAuth({ status: "loading" });
@@ -991,6 +821,7 @@ export function App() {
   return (
     <Workspace
       user={auth.user}
+      theme={theme}
       onSignedOut={() => setAuth({ status: "unauthenticated" })}
       onAuthRequired={() => setAuth({ status: "unauthenticated" })}
     />

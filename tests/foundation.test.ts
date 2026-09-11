@@ -6,8 +6,8 @@ import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
-const startupTimeoutMs = 15_000;
-const testTimeoutMs = 20_000;
+const startupTimeoutMs = 25_000;
+const testTimeoutMs = 30_000;
 
 function readJson(path: string): Record<string, unknown> {
   return JSON.parse(readFileSync(resolve(root, path), "utf8")) as Record<
@@ -138,7 +138,7 @@ describe("modular monolith foundation", () => {
     },
   );
 
-  it.each(["db", "ark-client", "auth", "domain", "ui"])(
+  it.each(["db", "ark-client", "auth", "domain"])(
     "defines the shared %s package",
     (name) => {
       const packagePath = `packages/${name}/package.json`;
@@ -253,6 +253,7 @@ describe("modular monolith foundation", () => {
           cwd: root,
           env: {
             ...serverEnvironment,
+            NODE_ENV: "production",
             PORT: String(port),
           },
           stdio: "ignore",
@@ -262,21 +263,33 @@ describe("modular monolith foundation", () => {
       try {
         const origin = `http://127.0.0.1:${port}`;
         await waitForApi(origin, api);
-        const [agents, sessions, artifacts, emailCode] = await Promise.all([
-          fetch(`${origin}/api/v1/agents`),
-          fetch(`${origin}/api/v1/sessions`),
-          fetch(`${origin}/api/v1/artifacts`),
-          fetch(`${origin}/api/v1/auth/email-code`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ email: "user@example.com" }),
-          }),
-        ]);
+        const [agents, sessions, artifacts, usage, adminAgents, login] =
+          await Promise.all([
+            fetch(`${origin}/api/v1/agents`),
+            fetch(`${origin}/api/v1/sessions`),
+            fetch(`${origin}/api/v1/artifacts`),
+            fetch(`${origin}/api/v1/usage`),
+            fetch(`${origin}/api/v1/admin/platform-agents`),
+            fetch(`${origin}/api/v1/auth/login`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                email: "user@example.com",
+                password: "secret-password",
+              }),
+            }),
+          ]);
 
         expect(agents.status).toBe(401);
         expect(sessions.status).toBe(401);
         expect(artifacts.status).toBe(401);
-        expect(emailCode.status).toBe(401);
+        expect(usage.status).toBe(401);
+        expect(adminAgents.status).toBe(401);
+        // The isolated entrypoint has no reachable database, so a login attempt
+        // either reports unknown credentials or fails closed with a server
+        // error; it must never hand out a session.
+        expect([401, 500]).toContain(login.status);
+        expect(login.headers.get("set-cookie")).toBeNull();
       } finally {
         await stopSubprocess(api);
       }

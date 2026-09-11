@@ -49,6 +49,9 @@ export interface StubArtifactInput {
 export interface StubEventInput {
   type: string;
   data: Record<string, unknown>;
+  // Real tool_use events use their own id as the call id that tool_result back-references.
+  id?: string;
+  createdAt?: string;
 }
 
 const safeOperations = new Set<ArkOperation>([
@@ -449,9 +452,9 @@ export class InMemoryArkGateway implements ArkGateway {
 
   private appendEvent(sessionId: string, input: StubEventInput): ArkEvent {
     const event: ArkEvent = {
-      id: `event-${++this.counters.event}`,
+      id: input.id ?? `event-${++this.counters.event}`,
       type: input.type,
-      createdAt: this.now().toISOString(),
+      createdAt: input.createdAt ?? this.now().toISOString(),
       data: structuredClone(input.data),
     };
     this.events.get(sessionId)?.push(event);

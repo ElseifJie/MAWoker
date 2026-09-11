@@ -6,8 +6,8 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc -b",
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "start": "node --env-file=../../.env dist/index.js",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
@@ -15,7 +15,8 @@
     "@pwa/config": "0.1.0",
     "@pwa/db": "0.1.0",
     "@pwa/domain": "0.1.0",
-    "@pwa/storage": "0.1.0"
+    "@pwa/storage": "0.1.0",
+    "pino": "^10.3.1"
   },
   "devDependencies": {
     "tsx": "^4.23.13"

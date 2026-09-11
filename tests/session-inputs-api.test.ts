@@ -11,8 +11,7 @@ const uploadId = "00000000-0000-4000-8000-000000000002";
 
 function auth(): ApiAuthService {
   return {
-    async requestEmailCode() {},
-    async verifyEmailCode() {
+    async login() {
       return { token: "token", expiresAt: new Date(Date.now() + 60_000) };
     },
     async authenticate(token) {

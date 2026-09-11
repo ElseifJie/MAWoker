@@ -414,6 +414,95 @@ describe("HttpArkGateway", () => {
     });
   });
 
+  it("serializes session creation fields using the Ark snake_case contract", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          agent: "agent-1",
+          environment_id: "environment-1",
+          resources: [
+            {
+              type: "file",
+              file_id: "file-1",
+              mount_path: "/input/file.txt",
+            },
+          ],
+        });
+        return Response.json({
+          id: "session-1",
+          type: "session",
+          status: "idle",
+          environment_id: "environment-1",
+          agent: { id: "agent-1", version: 1, name: "Research" },
+          created_at: "2026-09-07T00:00:00Z",
+          updated_at: "2026-09-07T00:00:00Z",
+          resources: [],
+          vault_ids: null,
+          environment: {},
+        });
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(
+      gateway.createSession({
+        agentId: "agent-1",
+        agentVersion: 1,
+        environmentId: "environment-1",
+        resources: [{ fileId: "file-1", mountPath: "/input/file.txt" }],
+      }),
+    ).resolves.toEqual({
+      id: "session-1",
+      agentId: "agent-1",
+      agentVersion: 1,
+      environmentId: "environment-1",
+      status: "idle",
+    });
+  });
+
+  it("wraps user messages in the Ark events contract", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          events: [
+            {
+              type: "user.message",
+              content: [{ type: "text", text: "hello" }],
+            },
+          ],
+        });
+        return Response.json({
+          data: [
+            {
+              id: "event-1",
+              type: "user.message",
+              content: [{ type: "text", text: "hello" }],
+            },
+          ],
+        });
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(
+      gateway.submitEvent("session-1", {
+        type: "user.message",
+        data: { content: "hello" },
+      }),
+    ).resolves.toMatchObject({
+      id: "event-1",
+      type: "user.message",
+    });
+  });
+
   it("deletes files through the typed Files API", async () => {
     const fetch = vi
       .fn()
@@ -886,6 +975,269 @@ describe("HttpArkGateway", () => {
         data: { content: "hello" },
       },
     ]);
+  });
+
+  it("preserves the Ark timestamp carried by an SSE event", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          'id: evt-usage\nevent: span.model_request_end\ndata: {"createdAt":"2026-08-31T23:59:59.999Z","model_usage":{"input_tokens":2,"output_tokens":3}}\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      now: () => new Date("2030-01-01T00:00:00.000Z"),
+    });
+
+    const events = [];
+    for await (const event of await gateway.streamEvents("session-1")) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        id: "evt-usage",
+        type: "span.model_request_end",
+        createdAt: "2026-08-31T23:59:59.999Z",
+        data: { model_usage: { input_tokens: 2, output_tokens: 3 } },
+      },
+    ]);
+  });
+
+  it("strictly normalizes the persisted Ark SSE envelope", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          'data: {"id":"evt-real","type":"session.status_running","processed_at":"2026-09-01T08:00:00.123456789+08:00"}\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    const events = [];
+    for await (const event of await gateway.streamEvents("session-1")) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        id: "evt-real",
+        type: "session.status_running",
+        createdAt: "2026-09-01T00:00:00.123Z",
+        data: {},
+      },
+    ]);
+  });
+
+  it("uses the persisted body type when Ark transports it as an SSE message", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          'id: evt-real\nevent: message\ndata: {"id":"evt-real","type":"session.status_running","processed_at":"2026-09-01T00:00:00.123Z","detail":"started"}\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    const events = [];
+    for await (const event of await gateway.streamEvents("session-1")) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        id: "evt-real",
+        type: "session.status_running",
+        createdAt: "2026-09-01T00:00:00.123Z",
+        data: { detail: "started" },
+      },
+    ]);
+  });
+
+  it("normalizes paged Ark history for background reconciliation", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        data: [
+          {
+            id: "evt-history",
+            type: "span.model_request_end",
+            processed_at: "2026-09-01T08:00:00.123456789+08:00",
+            model_usage: { input_tokens: 2, output_tokens: 3 },
+            is_error: false,
+            model_request_start_id: "evt-start",
+          },
+        ],
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    await expect(gateway.listEvents("session-1")).resolves.toEqual([
+      {
+        id: "evt-history",
+        type: "span.model_request_end",
+        createdAt: "2026-09-01T00:00:00.123Z",
+        data: {
+          model_usage: { input_tokens: 2, output_tokens: 3 },
+          is_error: false,
+          model_request_start_id: "evt-start",
+        },
+      },
+    ]);
+  });
+
+  it("normalizes Ark message content blocks for the UI", async () => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch: vi.fn().mockResolvedValue(
+        Response.json({
+          data: [
+            {
+              id: "evt-message",
+              type: "agent.message",
+              processed_at: "2026-09-01T08:00:00.123456789+08:00",
+              content: [
+                { type: "text", text: "hello " },
+                { type: "text", text: "world" },
+              ],
+            },
+          ],
+        }),
+      ),
+    });
+
+    await expect(gateway.listEvents("session-1")).resolves.toEqual([
+      {
+        id: "evt-message",
+        type: "agent.message",
+        createdAt: "2026-09-01T00:00:00.123Z",
+        data: { content: "hello world" },
+      },
+    ]);
+  });
+
+  it("follows next_page and safely retries each Ark history page", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          data: [
+            {
+              id: "evt-page-1",
+              type: "session.status_running",
+              processed_at: "2026-09-01T00:00:00.000Z",
+            },
+          ],
+          next_page: "cursor + /",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({}, { status: 503 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          data: [
+            {
+              id: "evt-page-2",
+              type: "session.status_idle",
+              processed_at: "2026-09-01T00:00:01.000Z",
+            },
+          ],
+          next_page: null,
+        }),
+      );
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      sleep,
+      maxAttempts: 2,
+      random: () => 0,
+    });
+
+    await expect(gateway.listEvents("session-1")).resolves.toEqual([
+      {
+        id: "evt-page-1",
+        type: "session.status_running",
+        createdAt: "2026-09-01T00:00:00.000Z",
+        data: {},
+      },
+      {
+        id: "evt-page-2",
+        type: "session.status_idle",
+        createdAt: "2026-09-01T00:00:01.000Z",
+        data: {},
+      },
+    ]);
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      "https://ark.example.com/api/v3/sessions/session-1/events",
+      "https://ark.example.com/api/v3/sessions/session-1/events?page=cursor%20%2B%20%2F",
+      "https://ark.example.com/api/v3/sessions/session-1/events?page=cursor%20%2B%20%2F",
+    ]);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an invalid Ark history next_page contract", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        data: [],
+        next_page: 2,
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    await expect(gateway.listEvents("session-1")).rejects.toMatchObject({
+      category: "invalid_response",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops Ark history pagination when the caller cancels", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn(async () => {
+      controller.abort();
+      return Response.json({
+        data: [
+          {
+            id: "evt-page-1",
+            type: "session.status_running",
+            processed_at: "2026-09-01T00:00:00.000Z",
+          },
+        ],
+        next_page: "cursor-2",
+      });
+    });
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    await expect(
+      gateway.listEvents("session-1", { signal: controller.signal }),
+    ).rejects.toMatchObject({ category: "cancelled" });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("preserves invalid-response classification for malformed SSE", async () => {

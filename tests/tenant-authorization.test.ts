@@ -97,8 +97,7 @@ function createRepositories() {
 
 function createAuthService(role: "user" | "admin" = "user"): ApiAuthService {
   return {
-    async requestEmailCode() {},
-    async verifyEmailCode() {
+    async login() {
       return { token: "token", expiresAt: new Date(Date.now() + 60_000) };
     },
     async authenticate() {
@@ -256,7 +255,7 @@ describe("tenant route guard", () => {
       });
 
       // Then authorization stops before repository or downstream access.
-      expect(response.statusCode).toBe(403);
+      expect(response.statusCode).toBe(404);
       expect(downstream).not.toHaveBeenCalled();
       expect(repositories.personalAgents.findOwned).not.toHaveBeenCalled();
       expect(

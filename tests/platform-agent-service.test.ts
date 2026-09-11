@@ -128,6 +128,9 @@ function createService(
       ark,
       modelAllowlist: ["model-a"],
       createId: () => agentId,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
     }),
   };
 }
@@ -331,6 +334,37 @@ describe("PlatformAgentService", () => {
         resourceType: "user_quota",
         resourceId: userId,
         ownerUserId: userId,
+      }),
+    );
+  });
+
+  it("validates quota updates before persistence and audits failures", async () => {
+    const state = createRepository();
+    const update = vi.spyOn(state.repository, "updateUserQuota");
+    const { service } = createService(state.repository);
+
+    await expect(
+      service.updateUserQuota(
+        userId,
+        {
+          personalAgentLimit: -1,
+          concurrentSessionLimit: 1,
+          dailySessionLimit: 5,
+          monthlyTokenLimit: 500,
+        },
+        { adminId, requestId },
+      ),
+    ).rejects.toMatchObject({ name: "ZodError" });
+
+    expect(update).not.toHaveBeenCalled();
+    expect(state.audits).toContainEqual(
+      expect.objectContaining({
+        action: "user_quota.update",
+        resourceType: "user_quota",
+        resourceId: userId,
+        ownerUserId: userId,
+        result: "failed",
+        errorCode: "VALIDATION_FAILED",
       }),
     );
   });

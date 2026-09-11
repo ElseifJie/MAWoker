@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
 import type {
   AuthSessionRecord,
   AuthStore,
   AuthUser,
-  TrustedIdentity,
+  AuthUserWithPassword,
 } from "@pwa/auth";
 import { sql, type SQL } from "drizzle-orm";
 
@@ -29,24 +28,22 @@ export function createAuthStore(database: unknown): AuthStore {
   const db = database as DatabaseClient;
 
   return {
-    async findOrCreateUser(identity: TrustedIdentity): Promise<AuthUser> {
-      const user = await first<AuthUser & Row>(
+    async findUserByEmail(
+      email: string,
+    ): Promise<AuthUserWithPassword | undefined> {
+      const user = await first<AuthUserWithPassword & Row>(
         db,
-        sql`insert into users (id, auth_subject, email)
-            values (${randomUUID()}, ${identity.subject}, ${identity.email})
-            on conflict (auth_subject) do update
-              set email = excluded.email,
-                  updated_at = now()
-            returning id,
-                      auth_subject as "authSubject",
-                      email,
-                      role,
-                      status`,
+        sql`select id,
+                   auth_subject as "authSubject",
+                   email,
+                   password_hash as "passwordHash",
+                   role,
+                   status
+              from users
+             where email = ${email}
+             limit 1`,
       );
-      if (!user) {
-        throw new Error("Unable to provision authenticated user");
-      }
-      return user;
+      return user ?? undefined;
     },
 
     async createSession(session: AuthSessionRecord): Promise<void> {

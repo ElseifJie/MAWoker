@@ -20,6 +20,8 @@ export function runProductionWorkerPoll(
     personalAgent: WorkerProcessor;
     session: WorkerProcessor;
     sessionDeletion: WorkerProcessor;
+    usage: WorkerProcessor;
+    quotaInterrupt: WorkerProcessor;
     uploadCleanup: WorkerProcessor;
     artifactDeletion: WorkerProcessor;
     artifactCleanup: WorkerProcessor;
@@ -31,6 +33,8 @@ export function runProductionWorkerPoll(
       processors.personalAgent,
       processors.session,
       processors.sessionDeletion,
+      processors.usage,
+      processors.quotaInterrupt,
       processors.uploadCleanup,
       processors.artifactDeletion,
       processors.artifactCleanup,

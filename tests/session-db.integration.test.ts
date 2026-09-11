@@ -283,6 +283,357 @@ describe("Session database integration", () => {
     await database.close();
   });
 
+  it("atomically deduplicates multi-metric usage and closes runtime intervals at Ark timestamps", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-usage",
+      arkAgentId: "ark-agent-1",
+      agentVersion: "7",
+      status: "idle",
+    });
+    const running = {
+      eventId: "event-running",
+      observedAt: new Date("2026-08-31T23:59:58.000Z"),
+      metrics: [],
+      status: "running" as const,
+      errorCode: null,
+      errorRecoverable: null,
+    };
+    const model = {
+      eventId: "event-model",
+      observedAt: new Date("2026-08-31T23:59:59.999Z"),
+      metrics: [
+        { metricType: "input_tokens" as const, quantity: 11 },
+        { metricType: "output_tokens" as const, quantity: 7 },
+      ],
+    };
+
+    await repositories.sessionLifecycle.projectEvent(
+      userId,
+      intent.id,
+      running,
+    );
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, model);
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, model);
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+      eventId: "event-tool",
+      observedAt: new Date("2026-09-01T00:00:00.000Z"),
+      metrics: [{ metricType: "tool_calls", quantity: 1 }],
+      status: "running",
+      errorCode: null,
+      errorRecoverable: null,
+    });
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+      eventId: "event-idle",
+      observedAt: new Date("2026-09-01T00:00:02.000Z"),
+      metrics: [],
+      status: "idle",
+      errorCode: null,
+      errorRecoverable: null,
+    });
+
+    const ledger = await database.client.query<{
+      ark_event_id: string;
+      metric_type: string;
+      quantity: number;
+      recorded_at: Date;
+    }>(
+      `select ark_event_id, metric_type, quantity, recorded_at
+         from usage_ledger
+        where user_id = $1
+        order by ark_event_id, metric_type`,
+      [userId],
+    );
+    expect(
+      ledger.rows.map((row) => ({
+        ...row,
+        recorded_at: row.recorded_at.toISOString(),
+      })),
+    ).toEqual([
+      {
+        ark_event_id: "event-idle",
+        metric_type: "runtime_ms",
+        quantity: 4000,
+        recorded_at: "2026-09-01T00:00:02.000Z",
+      },
+      {
+        ark_event_id: "event-model",
+        metric_type: "input_tokens",
+        quantity: 11,
+        recorded_at: "2026-08-31T23:59:59.999Z",
+      },
+      {
+        ark_event_id: "event-model",
+        metric_type: "output_tokens",
+        quantity: 7,
+        recorded_at: "2026-08-31T23:59:59.999Z",
+      },
+      {
+        ark_event_id: "event-tool",
+        metric_type: "tool_calls",
+        quantity: 1,
+        recorded_at: "2026-09-01T00:00:00.000Z",
+      },
+    ]);
+    await expect(
+      repositories.usage.monthlyTokens(
+        userId,
+        new Date("2026-08-15T12:00:00.000-07:00"),
+      ),
+    ).resolves.toBe(18);
+    await expect(
+      repositories.usage.monthlyTokens(
+        userId,
+        new Date("2026-09-15T12:00:00.000+09:00"),
+      ),
+    ).resolves.toBe(0);
+    await expect(
+      repositories.usage.summary(
+        userId,
+        new Date("2026-09-15T12:00:00.000+09:00"),
+      ),
+    ).resolves.toMatchObject({
+      period: {
+        startsAt: new Date("2026-09-01T00:00:00.000Z"),
+        endsAt: new Date("2026-10-01T00:00:00.000Z"),
+      },
+      quota: { monthlyTokenLimit: 1000 },
+      usage: {
+        personalAgents: 1,
+        concurrentSessions: 0,
+        dailySessions: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        tokens: 0,
+        runtimeMs: 4000,
+        toolCalls: 1,
+      },
+      exhausted: { monthlyTokens: false },
+    });
+    await database.close();
+  });
+
+  it("closes runtime at rescheduled and reopens it on the next running event", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-runtime",
+      arkAgentId: "ark-agent-1",
+      agentVersion: "7",
+      status: "idle",
+    });
+
+    for (const [eventId, observedAt, status] of [
+      ["event-running-1", "2026-09-01T00:00:00.000Z", "running"],
+      ["event-rescheduled", "2026-09-01T00:00:02.000Z", "rescheduled"],
+      ["event-running-2", "2026-09-01T00:00:03.000Z", "running"],
+      ["event-idle", "2026-09-01T00:00:07.000Z", "idle"],
+    ] as const) {
+      await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+        eventId,
+        observedAt: new Date(observedAt),
+        metrics: [],
+        status,
+        errorCode: null,
+        errorRecoverable: null,
+      });
+    }
+
+    const runtime = await database.client.query<{
+      ark_event_id: string;
+      quantity: number;
+    }>(
+      `select ark_event_id, quantity
+         from usage_ledger
+        where user_id = $1 and metric_type = 'runtime_ms'
+        order by recorded_at`,
+      [userId],
+    );
+    expect(runtime.rows).toEqual([
+      { ark_event_id: "event-rescheduled", quantity: 2000 },
+      { ark_event_id: "event-idle", quantity: 4000 },
+    ]);
+    const cursor = await database.client.query<{ running_since: Date | null }>(
+      `select running_since
+         from session_event_cursors
+        where session_id = $1`,
+      [intent.id],
+    );
+    expect(cursor.rows[0]?.running_since).toBeNull();
+    await database.close();
+  });
+
+  it("persistently advances usage reconciliation without cross-tenant marking", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intents = Array.from({ length: 3 }, () =>
+      createIntent(userId, agentId),
+    );
+    for (const intent of intents) {
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+        arkSessionId: `ark-${intent.id}`,
+        arkAgentId: "ark-agent-1",
+        agentVersion: "7",
+        status: "idle",
+      });
+    }
+    const selection = {
+      cutoff: new Date("2026-09-01T00:00:00.000Z"),
+      limit: 2,
+    };
+    const firstBatch = await repositories.usage.listReconcilable(selection);
+    const remaining = intents.find(
+      (intent) =>
+        !firstBatch.some((session) => session.sessionId === intent.id),
+    );
+
+    await repositories.usage.markReconciled(
+      id(),
+      firstBatch[0]!.sessionId,
+      new Date("2026-09-06T00:00:00.000Z"),
+    );
+    const foreignMark = await database.client.query<{ count: number }>(
+      `select count(*)::integer as count
+         from session_event_cursors
+        where session_id = $1`,
+      [firstBatch[0]!.sessionId],
+    );
+    expect(foreignMark.rows[0]?.count).toBe(0);
+
+    for (const session of firstBatch) {
+      await repositories.usage.markReconciled(
+        userId,
+        session.sessionId,
+        new Date("2026-09-06T00:00:00.000Z"),
+      );
+    }
+
+    const secondBatch = await repositories.usage.listReconcilable(selection);
+    expect(secondBatch[0]?.sessionId).toBe(remaining?.id);
+    const persisted = await database.client.query<{
+      session_id: string;
+      last_reconciled_at: Date;
+    }>(
+      `select session_id, last_reconciled_at
+         from session_event_cursors
+        order by session_id`,
+    );
+    expect(persisted.rows).toHaveLength(2);
+    expect(
+      persisted.rows.map(({ last_reconciled_at }) =>
+        last_reconciled_at.toISOString(),
+      ),
+    ).toEqual(["2026-09-06T00:00:00.000Z", "2026-09-06T00:00:00.000Z"]);
+    await database.close();
+  });
+
+  it("atomically enqueues one leased quota interrupt per running Session and UTC month", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    await database.client.query(
+      `update quota_policies set monthly_token_limit = 10
+        where key = 'default'`,
+    );
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-exhausted",
+      arkAgentId: "ark-agent-1",
+      agentVersion: "7",
+      status: "running",
+    });
+    const projection = {
+      eventId: "event-exhausted",
+      observedAt: new Date("2026-09-30T23:59:59.999Z"),
+      metrics: [
+        { metricType: "input_tokens" as const, quantity: 6 },
+        { metricType: "output_tokens" as const, quantity: 4 },
+      ],
+    };
+
+    await repositories.sessionLifecycle.projectEvent(
+      userId,
+      intent.id,
+      projection,
+    );
+    await repositories.sessionLifecycle.projectEvent(
+      userId,
+      intent.id,
+      projection,
+    );
+
+    const stored = await database.client.query<{
+      user_id: string;
+      session_id: string;
+      month_start: Date;
+      status: string;
+    }>(
+      `select user_id, session_id, month_start, status
+         from quota_interrupt_jobs`,
+    );
+    expect(stored.rows).toHaveLength(1);
+    expect(stored.rows[0]).toMatchObject({
+      user_id: userId,
+      session_id: intent.id,
+      status: "pending",
+    });
+    expect(stored.rows[0]!.month_start.toISOString()).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+
+    const now = new Date("2026-10-01T00:00:01.000Z");
+    const [claimed] = await repositories.quotaInterrupts.claim({
+      workerId: "quota-worker-1",
+      limit: 1,
+      now,
+    });
+    expect(claimed).toMatchObject({
+      userId,
+      sessionId: intent.id,
+      arkSessionId: "ark-session-exhausted",
+      attempts: 1,
+    });
+    await expect(
+      repositories.quotaInterrupts.claim({
+        workerId: "quota-worker-2",
+        limit: 1,
+        now,
+      }),
+    ).resolves.toEqual([]);
+    await repositories.quotaInterrupts.retry(
+      claimed!.id,
+      "quota-worker-1",
+      "QUOTA_INTERRUPT_FAILED",
+      false,
+      now,
+    );
+    const [retried] = await repositories.quotaInterrupts.claim({
+      workerId: "quota-worker-2",
+      limit: 1,
+      now: new Date("2026-10-01T00:01:01.000Z"),
+    });
+    expect(retried).toMatchObject({ id: claimed!.id, attempts: 2 });
+    await repositories.quotaInterrupts.succeed(retried!.id, "quota-worker-2");
+    await expect(
+      repositories.quotaInterrupts.claim({
+        workerId: "quota-worker-3",
+        limit: 1,
+        now: new Date("2026-10-01T00:10:00.000Z"),
+      }),
+    ).resolves.toEqual([]);
+    await database.close();
+  });
+
   it("releases definite failures but preserves unknown outcomes for reconciliation", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
@@ -400,6 +751,59 @@ describe("Session database integration", () => {
         deletionState: "deletion_failed",
       }),
     ]);
+    await database.close();
+  });
+
+  it("converts an exhausted pending create into a retryable deletion job", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.preserveCreateOutcome(
+      intent.id,
+      userId,
+    );
+    await database.client.query(
+      `update background_jobs
+          set status = 'failed', attempts = max_attempts,
+              last_error = 'Ark write outcome is unknown'
+        where id = $1`,
+      [intent.id],
+    );
+    await database.client.query(
+      `update sessions
+          set status = 'terminated', deletion_state = 'deletion_failed'
+        where id = $1`,
+      [intent.id],
+    );
+
+    await expect(
+      repositories.sessionLifecycle.beginDelete(userId, intent.id),
+    ).resolves.toMatchObject({
+      id: intent.id,
+      arkSessionId: `pending:${intent.id}`,
+      deletionState: "pending",
+    });
+    const deletion = await database.client.query<{
+      type: string;
+      status: string;
+      attempts: number;
+      last_error: string | null;
+      payload: Record<string, unknown>;
+    }>(
+      `select type, status, attempts, last_error, payload
+         from background_jobs
+        where id = $1`,
+      [intent.id],
+    );
+    expect(deletion.rows[0]).toEqual({
+      type: "delete_session",
+      status: "pending",
+      attempts: 0,
+      last_error: null,
+      payload: { sessionId: intent.id, completed: {} },
+    });
     await database.close();
   });
 

@@ -1,4 +1,5 @@
 import type { ArkGateway } from "@pwa/ark-client";
+import { arkErrorCode } from "./ark-errors.js";
 
 export interface SessionInputRecord {
   id: string;
@@ -86,17 +87,6 @@ function sanitizeFilename(name: string): string {
     throw new InvalidUploadNameError();
   }
   return sanitized;
-}
-
-function arkErrorCode(error: unknown): string {
-  const category =
-    typeof error === "object" &&
-    error !== null &&
-    "category" in error &&
-    typeof error.category === "string"
-      ? error.category
-      : "unavailable";
-  return `ARK_${category.toUpperCase()}`;
 }
 
 export class SessionInputService {

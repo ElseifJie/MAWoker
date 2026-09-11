@@ -26,6 +26,21 @@ interface DefaultAgentRecord extends Row {
   assignedAt: Date;
 }
 
+interface AdminUserRecord extends Row {
+  id: string;
+  email: string;
+  role: "user" | "admin";
+  status: "active" | "disabled";
+  hasPassword: boolean;
+  defaultAgentId: string | null;
+  quota: {
+    personalAgentLimit: number;
+    concurrentSessionLimit: number;
+    dailySessionLimit: number;
+    monthlyTokenLimit: number;
+  };
+}
+
 interface PlatformAgentRecord extends Row {
   id: string;
   arkAgentId: string;
@@ -170,6 +185,9 @@ interface EffectiveQuota extends Row {
   monthlyTokenLimit: number;
 }
 
+type UsageMetricType =
+  "input_tokens" | "output_tokens" | "runtime_ms" | "tool_calls";
+
 interface JobRecord extends Row {
   id: string;
   ownerUserId: string | null;
@@ -189,6 +207,16 @@ interface JobRecord extends Row {
   lockedAt: Date;
   lockedBy: string;
   createdAt: Date;
+}
+
+interface QuotaInterruptJobRecord extends Row {
+  id: string;
+  userId: string;
+  sessionId: string;
+  arkSessionId: string;
+  monthStart: Date;
+  attempts: number;
+  maxAttempts: number;
 }
 
 const JOB_LEASE_DURATION_MS = 5 * 60 * 1_000;
@@ -300,7 +328,50 @@ async function effectiveQuota(
   if (!quota) {
     throw new Error("Default quota policy is not configured");
   }
-  return quota;
+  return {
+    personalAgentLimit: Number(quota.personalAgentLimit),
+    concurrentSessionLimit: Number(quota.concurrentSessionLimit),
+    dailySessionLimit: Number(quota.dailySessionLimit),
+    monthlyTokenLimit: Number(quota.monthlyTokenLimit),
+  };
+}
+
+function utcMonthWindow(now: Date): { start: Date; end: Date } {
+  return {
+    start: new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0, 0),
+    ),
+    end: new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0),
+    ),
+  };
+}
+
+async function enqueueQuotaInterrupts(
+  database: DatabaseClient,
+  userId: string,
+  monthStart: Date,
+  now: Date,
+): Promise<void> {
+  const active = await rows<{ sessionId: string }>(
+    database,
+    sql`select id as "sessionId"
+          from sessions
+         where owner_user_id = ${userId}
+           and status in ('running', 'rescheduled')
+           and deletion_state = 'none'
+         for update`,
+  );
+  for (const session of active) {
+    await database.execute(
+      sql`insert into quota_interrupt_jobs
+            (id, user_id, session_id, month_start, status, attempts, run_after)
+          values
+            (${randomUUID()}, ${userId}, ${session.sessionId}, ${monthStart},
+             'pending', 0, ${now})
+          on conflict (user_id, session_id, month_start) do nothing`,
+    );
+  }
 }
 
 async function enqueuePersonalAgentReconciliation(
@@ -575,20 +646,104 @@ export function createRepositories(database: unknown) {
         });
       },
       listUsers() {
-        return rows<{
-          id: string;
-          email: string;
-          status: "active" | "disabled";
-          defaultAgentId: string | null;
-        }>(
+        return rows<AdminUserRecord>(
           db,
-          sql`select u.id, u.email, u.status,
-                     uda.platform_agent_id as "defaultAgentId"
+          sql`select u.id, u.email, u.role, u.status,
+                     (u.password_hash is not null) as "hasPassword",
+                     uda.platform_agent_id as "defaultAgentId",
+                     jsonb_build_object(
+                       'personalAgentLimit',
+                         coalesce(
+                           override.personal_agent_limit,
+                           policy.personal_agent_limit
+                         ),
+                       'concurrentSessionLimit',
+                         coalesce(
+                           override.concurrent_session_limit,
+                           policy.concurrent_session_limit
+                         ),
+                       'dailySessionLimit',
+                         coalesce(
+                           override.daily_session_limit,
+                           policy.daily_session_limit
+                         ),
+                       'monthlyTokenLimit',
+                         coalesce(
+                           override.monthly_token_limit,
+                           policy.monthly_token_limit
+                         )
+                     ) as quota
                 from users u
+                join quota_policies policy on policy.key = 'default'
                 left join user_default_agents uda on uda.user_id = u.id
-               where u.role = 'user'
+                left join user_quota_overrides override
+                  on override.user_id = u.id
                order by u.created_at asc, u.id asc`,
         );
+      },
+      createUser(input: {
+        id: string;
+        authSubject: string;
+        email: string;
+        passwordHash: string;
+        role: "user" | "admin";
+        createdBy: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const administrator = await first<{ id: string }>(
+            transaction,
+            sql`select id
+                  from users
+                 where id = ${input.createdBy}
+                   and role = 'admin'
+                   and status = 'active'
+                 for update`,
+          );
+          if (!administrator) return undefined;
+          const created = await first<{ id: string }>(
+            transaction,
+            sql`insert into users
+                  (id, auth_subject, email, password_hash, role)
+                values
+                  (${input.id}, ${input.authSubject}, ${input.email},
+                   ${input.passwordHash}, ${input.role})
+                on conflict (email) do nothing
+                returning id`,
+          );
+          return created ? { id: created.id } : undefined;
+        });
+      },
+      resetUserPassword(input: {
+        userId: string;
+        passwordHash: string;
+        updatedBy: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const eligible = await first<{ id: string }>(
+            transaction,
+            sql`select target.id
+                  from users target
+                  join users administrator on administrator.id = ${input.updatedBy}
+                 where target.id = ${input.userId}
+                   and administrator.role = 'admin'
+                   and administrator.status = 'active'
+                 for update of target`,
+          );
+          if (!eligible) return false;
+          await transaction.execute(
+            sql`update users
+                   set password_hash = ${input.passwordHash},
+                       updated_at = now()
+                 where id = ${input.userId}`,
+          );
+          await transaction.execute(
+            sql`update auth_sessions
+                   set revoked_at = now()
+                 where user_id = ${input.userId}
+                   and revoked_at is null`,
+          );
+          return true;
+        });
       },
       updateUserQuota(input: {
         userId: string;
@@ -611,7 +766,7 @@ export function createRepositories(database: unknown) {
                  for update of target`,
           );
           if (!eligible) return undefined;
-          return first<{
+          const updated = await first<{
             userId: string;
             personalAgentLimit: number;
             concurrentSessionLimit: number;
@@ -639,6 +794,27 @@ export function createRepositories(database: unknown) {
                           daily_session_limit as "dailySessionLimit",
                           monthly_token_limit::bigint as "monthlyTokenLimit"`,
           );
+          if (!updated) return undefined;
+          const now = new Date();
+          const window = utcMonthWindow(now);
+          const usage = await first<{ total: number }>(
+            transaction,
+            sql`select coalesce(sum(quantity), 0)::bigint as total
+                  from usage_ledger
+                 where user_id = ${input.userId}
+                   and metric_type in ('input_tokens', 'output_tokens')
+                   and recorded_at >= ${window.start}
+                   and recorded_at < ${window.end}`,
+          );
+          if (Number(usage?.total ?? 0) >= input.monthlyTokenLimit) {
+            await enqueueQuotaInterrupts(
+              transaction,
+              input.userId,
+              window.start,
+              now,
+            );
+          }
+          return updated;
         });
       },
       async audit(input: {
@@ -1264,6 +1440,7 @@ export function createRepositories(database: unknown) {
           }
 
           const quota = await effectiveQuota(transaction, input.ownerUserId);
+          const month = utcMonthWindow(input.createdAt);
           const counters = await first<{
             dailyCreateIntents: number;
             monthlyTokens: number;
@@ -1295,10 +1472,8 @@ export function createRepositories(database: unknown) {
                      from usage_ledger
                     where user_id = ${input.ownerUserId}
                       and metric_type in ('input_tokens', 'output_tokens')
-                      and recorded_at >= date_trunc(
-                        'month',
-                        ${input.createdAt}::timestamptz
-                      ))
+                      and recorded_at >= ${month.start}
+                      and recorded_at < ${month.end})
                     as "monthlyTokens"`,
           );
           if (!counters) throw new Error("Unable to read quota counters");
@@ -1567,7 +1742,10 @@ export function createRepositories(database: unknown) {
                   from sessions
                  where id = ${id}
                   and owner_user_id = ${userId}
-                  and ark_session_id not like 'pending:%'
+                  and (
+                    ark_session_id not like 'pending:%'
+                    or deletion_state = 'deletion_failed'
+                  )
                   and deletion_state <> 'deleted'
                  for update`,
           );
@@ -1695,6 +1873,7 @@ export function createRepositories(database: unknown) {
           }
 
           const quota = await effectiveQuota(transaction, userId);
+          const month = utcMonthWindow(new Date());
           const usage = await first<{
             concurrentSessions: number;
             monthlyTokens: number;
@@ -1711,7 +1890,8 @@ export function createRepositories(database: unknown) {
                      from usage_ledger
                     where user_id = ${userId}
                       and metric_type in ('input_tokens', 'output_tokens')
-                      and recorded_at >= date_trunc('month', now()))
+                      and recorded_at >= ${month.start}
+                      and recorded_at < ${month.end})
                     as "monthlyTokens"`,
           );
           if (!usage) throw new Error("Unable to read message quota");
@@ -1805,9 +1985,20 @@ export function createRepositories(database: unknown) {
           status?: SessionRecord["status"];
           errorCode?: string | null;
           errorRecoverable?: boolean | null;
+          metrics?: Array<{
+            metricType: UsageMetricType;
+            quantity: number;
+          }>;
         },
       ) {
         await db.transaction(async (transaction) => {
+          const owner = await first(
+            transaction,
+            sql`select id from users
+                 where id = ${userId}
+                 for update`,
+          );
+          if (!owner) return;
           await transaction.execute(
             sql`insert into session_event_cursors
                   (session_id, recent_event_ids)
@@ -1816,8 +2007,107 @@ export function createRepositories(database: unknown) {
                  where id = ${id} and owner_user_id = ${userId}
                 on conflict (session_id) do nothing`,
           );
-          const accepted = await first<{ sessionId: string }>(
+          const cursor = await first<{
+            lastObservedAt: Date | null;
+            runningSince: Date | null;
+            recentEventIds: string[];
+          }>(
             transaction,
+            sql`select cursor.last_observed_at as "lastObservedAt",
+                       cursor.running_since as "runningSince",
+                       cursor.recent_event_ids as "recentEventIds"
+                  from session_event_cursors cursor
+                  join sessions session on session.id = cursor.session_id
+                 where cursor.session_id = ${id}
+                   and session.owner_user_id = ${userId}
+                 for update of cursor`,
+          );
+          if (!cursor || cursor.recentEventIds.includes(projection.eventId)) {
+            return;
+          }
+
+          const lastObservedAt =
+            cursor.lastObservedAt === null
+              ? null
+              : new Date(cursor.lastObservedAt);
+          const runningSince =
+            cursor.runningSince === null ? null : new Date(cursor.runningSince);
+          const chronological =
+            lastObservedAt === null || lastObservedAt <= projection.observedAt;
+          const activeStatus = projection.status === "running";
+          const closesRuntime =
+            chronological &&
+            projection.status !== undefined &&
+            !activeStatus &&
+            runningSince !== null &&
+            runningSince <= projection.observedAt;
+          const metrics = [
+            ...(projection.metrics ?? []),
+            ...(closesRuntime
+              ? [
+                  {
+                    metricType: "runtime_ms" as const,
+                    quantity:
+                      projection.observedAt.getTime() - runningSince!.getTime(),
+                  },
+                ]
+              : []),
+          ];
+          let tokenUsageInserted = false;
+          for (const metric of metrics) {
+            const inserted = await rows(
+              transaction,
+              sql`insert into usage_ledger
+                    (id, user_id, ark_session_id, ark_event_id, metric_type,
+                     quantity, recorded_at)
+                  select ${randomUUID()}, ${userId}, session.ark_session_id,
+                         ${projection.eventId}, ${metric.metricType},
+                         ${metric.quantity}, ${projection.observedAt}
+                    from sessions session
+                   where session.id = ${id}
+                     and session.owner_user_id = ${userId}
+                  on conflict
+                    (user_id, ark_session_id, ark_event_id, metric_type)
+                  do nothing
+                  returning id`,
+            );
+            if (
+              inserted.length === 1 &&
+              (metric.metricType === "input_tokens" ||
+                metric.metricType === "output_tokens")
+            ) {
+              tokenUsageInserted = true;
+            }
+          }
+          if (tokenUsageInserted) {
+            const window = utcMonthWindow(projection.observedAt);
+            const quota = await effectiveQuota(transaction, userId);
+            const usage = await first<{ total: number }>(
+              transaction,
+              sql`select coalesce(sum(quantity), 0)::bigint as total
+                    from usage_ledger
+                   where user_id = ${userId}
+                     and metric_type in ('input_tokens', 'output_tokens')
+                     and recorded_at >= ${window.start}
+                     and recorded_at < ${window.end}`,
+            );
+            if (Number(usage?.total ?? 0) >= quota.monthlyTokenLimit) {
+              await enqueueQuotaInterrupts(
+                transaction,
+                userId,
+                window.start,
+                projection.observedAt,
+              );
+            }
+          }
+
+          const nextRunningSince =
+            chronological && projection.status !== undefined
+              ? activeStatus
+                ? (runningSince ?? projection.observedAt)
+                : null
+              : runningSince;
+          await transaction.execute(
             sql`update session_event_cursors
                   set recent_event_ids = case
                         when jsonb_array_length(recent_event_ids) >= 256
@@ -1830,19 +2120,10 @@ export function createRepositories(database: unknown) {
                         coalesce(last_observed_at, ${projection.observedAt}),
                         ${projection.observedAt}
                       ),
+                      running_since = ${nextRunningSince},
                       updated_at = now()
-                where session_id = ${id}
-                  and exists (
-                    select 1
-                      from sessions
-                     where sessions.id = ${id}
-                       and sessions.owner_user_id = ${userId}
-                  )
-                  and not recent_event_ids @>
-                    ${JSON.stringify([projection.eventId])}::jsonb
-                returning session_id as "sessionId"`,
+                where session_id = ${id}`,
           );
-          if (!accepted) return;
 
           const applies =
             projection.status !== undefined ||
@@ -1888,6 +2169,33 @@ export function createRepositories(database: unknown) {
                 where id = ${id} and owner_user_id = ${userId}`,
           );
         });
+      },
+      listRunningForQuota(userId: string) {
+        return rows<SessionRecord>(
+          db,
+          sql`select ${sessionSelection}
+                from sessions
+               where owner_user_id = ${userId}
+                 and status in ('running', 'rescheduled')
+                 and deletion_state = 'none'
+               order by updated_at, id`,
+        );
+      },
+      async syncQuotaStatus(
+        userId: string,
+        id: string,
+        status: SessionRecord["status"],
+        observedAt: Date,
+      ) {
+        await db.execute(
+          sql`update sessions
+                set status = ${status},
+                    updated_at = ${observedAt}
+              where id = ${id}
+                and owner_user_id = ${userId}
+                and status in ('running', 'rescheduled')
+                and deletion_state = 'none'`,
+        );
       },
       async audit(input: {
         actorUserId: string;
@@ -2497,6 +2805,7 @@ export function createRepositories(database: unknown) {
           }
 
           const quota = await effectiveQuota(transaction, input.userId);
+          const month = utcMonthWindow(now);
           const counters = await first<{
             activeReservations: number;
             concurrentSessions: number;
@@ -2524,7 +2833,8 @@ export function createRepositories(database: unknown) {
                      from usage_ledger
                     where user_id = ${input.userId}
                       and metric_type in ('input_tokens', 'output_tokens')
-                      and recorded_at >= date_trunc('month', ${now}::timestamptz))
+                      and recorded_at >= ${month.start}
+                      and recorded_at < ${month.end})
                     as "monthlyTokens"`,
           );
           if (!counters) {
@@ -2587,36 +2897,145 @@ export function createRepositories(database: unknown) {
           status: SessionRecord["status"];
         }>(
           db,
-          sql`select id as "sessionId", owner_user_id as "ownerUserId",
-                     ark_session_id as "arkSessionId", status
-                from sessions
-               where ark_session_id not like 'pending:%'
-                 and deletion_state not in ('pending', 'deleted')
+          sql`select session.id as "sessionId",
+                     session.owner_user_id as "ownerUserId",
+                     session.ark_session_id as "arkSessionId", session.status
+                from sessions session
+                left join session_event_cursors cursor
+                  on cursor.session_id = session.id
+               where session.ark_session_id not like 'pending:%'
+                 and session.deletion_state not in ('pending', 'deleted')
                  and (
-                   status in ('running', 'rescheduled')
-                   or updated_at >= ${input.cutoff}
+                   session.status in ('running', 'rescheduled')
+                   or session.updated_at >= ${input.cutoff}
                  )
-               order by updated_at
+               order by cursor.last_reconciled_at asc nulls first,
+                        session.updated_at, session.id
                limit ${input.limit}`,
         );
       },
+      async markReconciled(
+        userId: string,
+        sessionId: string,
+        reconciledAt: Date,
+      ) {
+        await db.execute(
+          sql`insert into session_event_cursors
+                (session_id, last_reconciled_at)
+              select id, ${reconciledAt}
+                from sessions
+               where id = ${sessionId}
+                 and owner_user_id = ${userId}
+              on conflict (session_id) do update
+                set last_reconciled_at = greatest(
+                      coalesce(
+                        session_event_cursors.last_reconciled_at,
+                        excluded.last_reconciled_at
+                      ),
+                      excluded.last_reconciled_at
+                    ),
+                    updated_at = now()`,
+        );
+      },
       monthlyTokens(userId: string, now: Date) {
+        const window = utcMonthWindow(now);
         return first<{ total: number }>(
           db,
           sql`select coalesce(sum(quantity), 0)::bigint as total
                 from usage_ledger
                where user_id = ${userId}
                  and metric_type in ('input_tokens', 'output_tokens')
-                 and recorded_at >= date_trunc('month', ${now}::timestamptz)`,
+                 and recorded_at >= ${window.start}
+                 and recorded_at < ${window.end}`,
         ).then((row) => Number(row?.total ?? 0));
+      },
+      async summary(userId: string, now: Date) {
+        const month = utcMonthWindow(now);
+        const dayStart = new Date(
+          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+        );
+        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+        const [quota, counters] = await Promise.all([
+          effectiveQuota(db, userId),
+          first<{
+            personalAgents: number;
+            concurrentSessions: number;
+            dailySessions: number;
+            inputTokens: number;
+            outputTokens: number;
+            runtimeMs: number;
+            toolCalls: number;
+          }>(
+            db,
+            sql`select
+                  (select count(*)::integer
+                     from personal_agents
+                    where owner_user_id = ${userId}
+                      and not (
+                        status = 'failed'
+                        and ark_version = '0'
+                        and ark_agent_id like 'pending:%'
+                      )) as "personalAgents",
+                  (select count(*)::integer
+                     from sessions
+                    where owner_user_id = ${userId}
+                      and status in ('running', 'rescheduled')
+                      and deletion_state <> 'deleted')
+                    as "concurrentSessions",
+                  (select count(*)::integer
+                     from sessions
+                    where owner_user_id = ${userId}
+                      and created_at >= ${dayStart}
+                      and created_at < ${dayEnd})
+                    as "dailySessions",
+                  coalesce(sum(quantity) filter (
+                    where metric_type = 'input_tokens'
+                  ), 0)::bigint as "inputTokens",
+                  coalesce(sum(quantity) filter (
+                    where metric_type = 'output_tokens'
+                  ), 0)::bigint as "outputTokens",
+                  coalesce(sum(quantity) filter (
+                    where metric_type = 'runtime_ms'
+                  ), 0)::bigint as "runtimeMs",
+                  coalesce(sum(quantity) filter (
+                    where metric_type = 'tool_calls'
+                  ), 0)::bigint as "toolCalls"
+                from usage_ledger
+               where user_id = ${userId}
+                 and recorded_at >= ${month.start}
+                 and recorded_at < ${month.end}`,
+          ),
+        ]);
+        if (!counters) throw new Error("Unable to read quota usage");
+        const usage = {
+          personalAgents: Number(counters.personalAgents),
+          concurrentSessions: Number(counters.concurrentSessions),
+          dailySessions: Number(counters.dailySessions),
+          inputTokens: Number(counters.inputTokens),
+          outputTokens: Number(counters.outputTokens),
+          tokens: Number(counters.inputTokens) + Number(counters.outputTokens),
+          runtimeMs: Number(counters.runtimeMs),
+          toolCalls: Number(counters.toolCalls),
+        };
+        return {
+          period: { startsAt: month.start, endsAt: month.end },
+          quota,
+          usage,
+          exhausted: {
+            personalAgents: usage.personalAgents >= quota.personalAgentLimit,
+            concurrentSessions:
+              usage.concurrentSessions >= quota.concurrentSessionLimit,
+            dailySessions: usage.dailySessions >= quota.dailySessionLimit,
+            monthlyTokens: usage.tokens >= quota.monthlyTokenLimit,
+          },
+        };
       },
       async record(input: {
         id: string;
         userId: string;
         arkSessionId: string;
         arkEventId: string;
-        metricType:
-          "input_tokens" | "output_tokens" | "runtime_ms" | "tool_calls";
+        metricType: UsageMetricType;
         quantity: number;
         recordedAt?: Date;
       }) {
@@ -2635,6 +3054,99 @@ export function createRepositories(database: unknown) {
               returning id`,
         );
         return inserted.length === 1;
+      },
+    },
+
+    quotaInterrupts: {
+      claim(input: { workerId: string; limit: number; now?: Date }) {
+        const now = input.now ?? new Date();
+        const leaseExpiredAt = new Date(now.getTime() - JOB_LEASE_DURATION_MS);
+        return db.transaction(async (transaction) => {
+          await transaction.execute(
+            sql`update quota_interrupt_jobs
+                  set status = 'failed',
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = 'QUOTA_INTERRUPT_LEASE_EXPIRED',
+                      updated_at = ${now}
+                where status = 'running'
+                  and locked_at <= ${leaseExpiredAt}
+                  and attempts >= max_attempts`,
+          );
+          const claimed = await rows<QuotaInterruptJobRecord>(
+            transaction,
+            sql`with claimable as (
+                  select id
+                    from quota_interrupt_jobs
+                   where (
+                         (status = 'pending' and run_after <= ${now})
+                         or
+                         (status = 'running' and locked_at <= ${leaseExpiredAt})
+                       )
+                     and attempts < max_attempts
+                   order by run_after, created_at, id
+                   for update skip locked
+                   limit ${input.limit}
+                )
+                update quota_interrupt_jobs job
+                   set status = 'running',
+                       attempts = job.attempts + 1,
+                       locked_at = ${now},
+                       locked_by = ${input.workerId},
+                       updated_at = ${now}
+                  from claimable
+                 where job.id = claimable.id
+                returning job.id, job.user_id as "userId",
+                          job.session_id as "sessionId",
+                          (select ark_session_id from sessions
+                            where sessions.id = job.session_id
+                              and sessions.owner_user_id = job.user_id)
+                            as "arkSessionId",
+                          job.month_start as "monthStart",
+                          job.attempts,
+                          job.max_attempts as "maxAttempts"`,
+          );
+          return claimed.map((job) => ({
+            ...job,
+            monthStart: new Date(job.monthStart),
+          }));
+        });
+      },
+      async succeed(id: string, workerId: string) {
+        await db.execute(
+          sql`update quota_interrupt_jobs
+                set status = 'succeeded',
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = null,
+                    updated_at = now()
+              where id = ${id}
+                and status = 'running'
+                and locked_by = ${workerId}`,
+        );
+      },
+      async retry(
+        id: string,
+        workerId: string,
+        error: string,
+        final: boolean,
+        now = new Date(),
+      ) {
+        await db.execute(
+          sql`update quota_interrupt_jobs
+                set status = ${final ? "failed" : "pending"}::background_job_status,
+                    run_after = case
+                      when ${final} then run_after
+                      else ${new Date(now.getTime() + 30_000)}
+                    end,
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = ${error},
+                    updated_at = ${now}
+              where id = ${id}
+                and status = 'running'
+                and locked_by = ${workerId}`,
+        );
       },
     },
 

@@ -18,8 +18,7 @@ const platformId = "00000000-0000-4000-8000-000000000003";
 
 function auth(): ApiAuthService {
   return {
-    async requestEmailCode() {},
-    async verifyEmailCode() {
+    async login() {
       return { token: "user-token", expiresAt: new Date(Date.now() + 60_000) };
     },
     async authenticate(token) {
@@ -287,7 +286,7 @@ describe("user Agent API", () => {
         cookies,
         ...(payload ? { payload } : {}),
       });
-      expect(response.statusCode).toBe(403);
+      expect(response.statusCode).toBe(404);
     }
     expect(
       Object.values(service).every((call) => call.mock.calls.length === 0),

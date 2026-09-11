@@ -6,32 +6,27 @@ import {
   requireUser,
   type ApiAuthService,
 } from "../apps/api/src/app.js";
-import {
-  AuthRequiredError,
-  AuthVerificationError,
-} from "../packages/auth/src/index.js";
+import { AuthRequiredError } from "../packages/auth/src/index.js";
 
 const userContext = {
   userId: "00000000-0000-4000-8000-000000000001",
-  authSubject: "managed:user@example.com",
+  authSubject: "local:user@example.com",
   role: "user" as const,
 };
 const adminContext = {
   userId: "00000000-0000-4000-8000-000000000002",
-  authSubject: "managed:admin@example.com",
+  authSubject: "local:admin@example.com",
   role: "admin" as const,
 };
 
 function createAuthService(): ApiAuthService & {
-  requestEmailCode: ReturnType<typeof vi.fn>;
-  verifyEmailCode: ReturnType<typeof vi.fn>;
+  login: ReturnType<typeof vi.fn>;
   authenticate: ReturnType<typeof vi.fn>;
   renew: ReturnType<typeof vi.fn>;
   logout: ReturnType<typeof vi.fn>;
 } {
   return {
-    requestEmailCode: vi.fn(async () => undefined),
-    verifyEmailCode: vi.fn(async () => ({
+    login: vi.fn(async () => ({
       token: "opaque-token",
       expiresAt: new Date("2026-09-07T00:00:00.000Z"),
     })),
@@ -48,80 +43,34 @@ function createAuthService(): ApiAuthService & {
 }
 
 describe("Fastify authentication routes", () => {
-  it("fails closed when no managed identity integration is configured", async () => {
+  it("fails closed when no authentication service is configured", async () => {
     const app = buildApp();
 
     const response = await app.inject({
-      method: "GET",
-      url: "/api/v1/me",
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "user@example.com", password: "secret-password" },
     });
 
     expect(response.statusCode).toBe(401);
     await app.close();
   });
 
-  it("requests an email code without disclosing identity state", async () => {
-    const auth = createAuthService();
-    const app = buildApp({ auth });
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/email-code",
-      payload: { email: " User@Example.COM " },
-    });
-
-    expect(response.statusCode).toBe(202);
-    expect(response.json()).toEqual({ accepted: true });
-    expect(auth.requestEmailCode).toHaveBeenCalledWith("user@example.com");
-    await app.close();
-  });
-
-  it("normalizes request and verification failures", async () => {
-    const auth = createAuthService();
-    auth.requestEmailCode.mockRejectedValueOnce(new AuthVerificationError());
-    auth.verifyEmailCode.mockRejectedValueOnce(new AuthVerificationError());
-    const app = buildApp({ auth });
-
-    const requestFailure = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/email-code",
-      payload: { email: "user@example.com" },
-    });
-    const verifyFailure = await app.inject({
-      method: "POST",
-      url: "/api/v1/auth/verify",
-      payload: { email: "user@example.com", code: "bad-code" },
-    });
-
-    expect(requestFailure.statusCode).toBe(401);
-    expect(verifyFailure.statusCode).toBe(401);
-    expect(requestFailure.json().error).toMatchObject({
-      code: "AUTH_REQUIRED",
-      message: "Authentication required",
-      retryable: false,
-    });
-    expect(verifyFailure.json().error).toMatchObject({
-      code: "AUTH_REQUIRED",
-      message: "Authentication required",
-      retryable: false,
-    });
-    expect(verifyFailure.json().error.requestId).not.toBe(
-      requestFailure.json().error.requestId,
-    );
-    await app.close();
-  });
-
-  it("sets an opaque HttpOnly SameSite=Lax cookie after verification", async () => {
+  it("signs in with a normalized email and sets an opaque HttpOnly cookie", async () => {
     const auth = createAuthService();
     const app = buildApp({ auth, isProduction: true });
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/auth/verify",
-      payload: { email: "user@example.com", code: "123456" },
+      url: "/api/v1/auth/login",
+      payload: { email: " User@Example.COM ", password: "secret-password" },
     });
 
     expect(response.statusCode).toBe(204);
+    expect(auth.login).toHaveBeenCalledWith(
+      "user@example.com",
+      "secret-password",
+    );
     expect(response.headers["set-cookie"]).toContain(
       `${AUTH_COOKIE_NAME}=opaque-token`,
     );
@@ -132,23 +81,70 @@ describe("Fastify authentication routes", () => {
     await app.close();
   });
 
-  it("rejects client role and owner authority in verification payloads", async () => {
+  it("reports every credential failure with the same error payload", async () => {
+    const auth = createAuthService();
+    auth.login.mockRejectedValue(new AuthRequiredError());
+    const app = buildApp({ auth });
+
+    const unknownEmail = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "unknown@example.com", password: "secret-password" },
+    });
+    const wrongPassword = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "user@example.com", password: "wrong-password" },
+    });
+
+    expect(unknownEmail.statusCode).toBe(401);
+    expect(wrongPassword.statusCode).toBe(401);
+    expect(unknownEmail.json().error).toMatchObject({
+      code: "AUTH_REQUIRED",
+      message: "Authentication required",
+      retryable: false,
+    });
+    expect(wrongPassword.json().error).toMatchObject({
+      code: "AUTH_REQUIRED",
+      message: "Authentication required",
+      retryable: false,
+    });
+    expect(wrongPassword.headers["set-cookie"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("rejects client role and owner authority in login payloads", async () => {
     const auth = createAuthService();
     const app = buildApp({ auth });
 
     const response = await app.inject({
       method: "POST",
-      url: "/api/v1/auth/verify",
+      url: "/api/v1/auth/login",
       payload: {
         email: "user@example.com",
-        code: "123456",
+        password: "secret-password",
         role: "admin",
         ownerId: adminContext.userId,
       },
     });
 
     expect(response.statusCode).toBe(400);
-    expect(auth.verifyEmailCode).not.toHaveBeenCalled();
+    expect(auth.login).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("requires a password of at least one character in the payload", async () => {
+    const auth = createAuthService();
+    const app = buildApp({ auth });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { email: "user@example.com", password: "" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(auth.login).not.toHaveBeenCalled();
     await app.close();
   });
 
@@ -168,6 +164,55 @@ describe("Fastify authentication routes", () => {
     expect(response.headers["set-cookie"]).toContain(
       `${AUTH_COOKIE_NAME}=user-token`,
     );
+    await app.close();
+  });
+
+  it("serves the server model allowlist only through authenticated capabilities", async () => {
+    const auth = createAuthService();
+    const app = buildApp({
+      auth,
+      capabilities: { personalAgentModels: ["model-b", "model-a"] },
+    });
+
+    const unauthenticated = await app.inject({
+      method: "GET",
+      url: "/api/v1/capabilities",
+    });
+    const authenticated = await app.inject({
+      method: "GET",
+      url: "/api/v1/capabilities",
+      cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+    });
+
+    expect(unauthenticated.statusCode).toBe(401);
+    expect(authenticated.statusCode).toBe(200);
+    expect(authenticated.json()).toEqual({
+      skills: { available: false },
+      mcpServers: { available: false },
+      vaults: { available: false },
+      memoryStores: { available: false },
+      personalAgentModels: ["model-b", "model-a"],
+    });
+    await app.close();
+  });
+
+  it("still reports unavailable features when no allowlist is configured", async () => {
+    const app = buildApp({ auth: createAuthService() });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/capabilities",
+      cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      skills: { available: false },
+      mcpServers: { available: false },
+      vaults: { available: false },
+      memoryStores: { available: false },
+      personalAgentModels: [],
+    });
     await app.close();
   });
 
@@ -264,7 +309,7 @@ describe("route authorization helpers", () => {
 
     expect(unauthenticated.statusCode).toBe(401);
     expect(userAdminRequest.statusCode).toBe(403);
-    expect(adminContentRequest.statusCode).toBe(403);
+    expect(adminContentRequest.statusCode).toBe(404);
     expect(adminRequest.statusCode).toBe(200);
     expect(forbiddenAdminContent.map(({ statusCode }) => statusCode)).toEqual([
       404, 404, 404,

@@ -32,7 +32,7 @@ const agentSchema = z
   })
   .strict();
 
-const sessionSchema = z
+const normalizedSessionSchema = z
   .object({
     id: z.string().min(1),
     agentId: z.string().min(1),
@@ -42,6 +42,30 @@ const sessionSchema = z
   })
   .strict();
 
+const sessionSchema = z.union([
+  normalizedSessionSchema,
+  z
+    .object({
+      id: z.string().min(1),
+      agent: z
+        .object({
+          id: z.string().min(1),
+          version: z.number().int().positive(),
+        })
+        .passthrough(),
+      environment_id: z.string().min(1),
+      status: z.enum(["idle", "running", "rescheduled", "terminated"]),
+    })
+    .passthrough()
+    .transform(({ id, agent, environment_id, status }) => ({
+      id,
+      agentId: agent.id,
+      agentVersion: agent.version,
+      environmentId: environment_id,
+      status,
+    })),
+]);
+
 const eventSchema = z
   .object({
     id: z.string().min(1),
@@ -50,6 +74,63 @@ const eventSchema = z
     data: z.record(z.string(), z.unknown()),
   })
   .strict();
+
+const arkTimestampSchema = z
+  .string()
+  .refine((value) => !Number.isNaN(Date.parse(value)))
+  .transform((value) => new Date(value).toISOString());
+
+function normalizeEventData(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(data.content)) return data;
+  const text = data.content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        typeof block === "object" &&
+        block !== null &&
+        "type" in block &&
+        block.type === "text" &&
+        "text" in block &&
+        typeof block.text === "string",
+    )
+    .map((block) => block.text)
+    .join("");
+  return { ...data, content: text };
+}
+
+const persistedEventSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    processed_at: arkTimestampSchema,
+  })
+  .passthrough()
+  .transform(({ id, type, processed_at, ...data }) => ({
+    id,
+    type,
+    createdAt: processed_at,
+    data: normalizeEventData(data),
+  }));
+
+const eventPageDataSchema = z.union([
+  z.array(eventSchema),
+  z.array(persistedEventSchema),
+]);
+
+const eventPageSchema = z.union([
+  eventPageDataSchema.transform((data) => ({ data, nextPage: null })),
+  z
+    .object({
+      data: z.array(persistedEventSchema),
+      next_page: z.string().nullable().optional(),
+    })
+    .passthrough()
+    .transform(({ data, next_page }) => ({
+      data,
+      nextPage: next_page || null,
+    })),
+]);
 
 const fileSchema = z
   .object({
@@ -241,7 +322,15 @@ export class HttpArkGateway implements ArkGateway {
       method: "POST",
       path: "/api/v3/sessions",
       safe: false,
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        agent: input.agentId,
+        environment_id: input.environmentId,
+        resources: input.resources.map((resource) => ({
+          type: "file",
+          file_id: resource.fileId,
+          mount_path: resource.mountPath,
+        })),
+      }),
       contentType: "application/json",
       schema: sessionSchema,
       options,
@@ -281,28 +370,80 @@ export class HttpArkGateway implements ArkGateway {
     event: ArkEventInput,
     options?: ArkRequestOptions,
   ): Promise<ArkEvent> {
+    const submitted =
+      event.type === "user.message"
+        ? {
+            type: event.type,
+            content: [
+              {
+                type: "text",
+                text:
+                  typeof event.data.content === "string"
+                    ? event.data.content
+                    : "",
+              },
+            ],
+          }
+        : { type: event.type };
     return this.jsonRequest({
       method: "POST",
       path: `/api/v3/sessions/${encodeURIComponent(sessionId)}/events`,
       safe: false,
-      body: JSON.stringify(event),
+      body: JSON.stringify({ events: [submitted] }),
       contentType: "application/json",
-      schema: eventSchema,
+      schema: z.union([
+        eventSchema,
+        z
+          .array(
+            z
+              .object({
+                id: z.string().min(1),
+                type: z.string().min(1),
+              })
+              .passthrough(),
+          )
+          .min(1)
+          .transform((events) => {
+            const { id, type, ...data } = events[0]!;
+            return {
+              id,
+              type,
+              createdAt: this.now().toISOString(),
+              data: normalizeEventData(data),
+            };
+          }),
+      ]),
       options,
     });
   }
 
-  listEvents(
+  async listEvents(
     sessionId: string,
     options?: ArkRequestOptions,
   ): Promise<ArkEvent[]> {
-    return this.jsonRequest({
-      method: "GET",
-      path: `/api/v3/sessions/${encodeURIComponent(sessionId)}/events`,
-      safe: true,
-      schema: z.array(eventSchema),
-      options,
-    });
+    const path = `/api/v3/sessions/${encodeURIComponent(sessionId)}/events`;
+    const events: ArkEvent[] = [];
+    const seenPages = new Set<string>();
+    let page: string | null = null;
+
+    do {
+      const result: { data: ArkEvent[]; nextPage: string | null } =
+        await this.jsonRequest({
+          method: "GET",
+          path: page ? `${path}?page=${encodeURIComponent(page)}` : path,
+          safe: true,
+          schema: eventPageSchema,
+          options,
+        });
+      events.push(...result.data);
+      page = result.nextPage;
+      if (page && seenPages.has(page)) {
+        throw new ArkGatewayError("invalid_response");
+      }
+      if (page) seenPages.add(page);
+    } while (page);
+
+    return events;
   }
 
   async streamEvents(
@@ -718,7 +859,7 @@ export class HttpArkGateway implements ArkGateway {
 
   private parseSseBlock(block: string): ArkEvent {
     let id = "";
-    let type = "message";
+    let type = "";
     const dataLines: string[] = [];
     for (const line of block.split(/\r?\n/)) {
       if (line.startsWith("id:")) id = line.slice(3).trim();
@@ -731,11 +872,51 @@ export class HttpArkGateway implements ArkGateway {
     } catch {
       throw new ArkGatewayError("invalid_response");
     }
+    const eventData =
+      typeof data === "object" && data !== null && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : undefined;
+    const bodyId = eventData?.id;
+    const bodyType = eventData?.type;
+    const processedAt = eventData?.processed_at;
+    const bodyCreatedAt = eventData?.createdAt;
+    if (
+      (bodyId !== undefined && typeof bodyId !== "string") ||
+      (bodyType !== undefined && typeof bodyType !== "string") ||
+      (processedAt !== undefined && typeof processedAt !== "string") ||
+      (bodyCreatedAt !== undefined && typeof bodyCreatedAt !== "string") ||
+      (id && typeof bodyId === "string" && id !== bodyId)
+    ) {
+      throw new ArkGatewayError("invalid_response");
+    }
+    const arkCreatedAt =
+      typeof processedAt === "string" ? processedAt : bodyCreatedAt;
+    const normalizedCreatedAt =
+      typeof arkCreatedAt === "string" &&
+      !Number.isNaN(Date.parse(arkCreatedAt))
+        ? new Date(arkCreatedAt).toISOString()
+        : undefined;
+    const payload =
+      eventData && typeof arkCreatedAt === "string"
+        ? Object.fromEntries(
+            Object.entries(eventData).filter(
+              ([key]) =>
+                key !== "id" &&
+                key !== "type" &&
+                key !== "processed_at" &&
+                key !== "createdAt",
+            ),
+          )
+        : data;
+    const normalizedPayload =
+      typeof payload === "object" && payload !== null && !Array.isArray(payload)
+        ? normalizeEventData(payload as Record<string, unknown>)
+        : payload;
     const parsed = eventSchema.safeParse({
-      id,
-      type,
-      createdAt: this.now().toISOString(),
-      data,
+      id: typeof bodyId === "string" ? bodyId : id,
+      type: typeof bodyType === "string" ? bodyType : type || "message",
+      createdAt: normalizedCreatedAt ?? this.now().toISOString(),
+      data: normalizedPayload,
     });
     if (!parsed.success) {
       throw new ArkGatewayError("invalid_response");

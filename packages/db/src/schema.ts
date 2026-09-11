@@ -87,11 +87,12 @@ export const users = pgTable(
     id: uuid("id").primaryKey(),
     authSubject: text("auth_subject").notNull().unique(),
     email: text("email").notNull(),
+    passwordHash: text("password_hash"),
     role: userRole("role").default("user").notNull(),
     status: userStatus("status").default("active").notNull(),
     ...timestamps,
   },
-  (table) => [index("users_email_idx").on(table.email)],
+  (table) => [uniqueIndex("users_email_unique").on(table.email)],
 );
 
 export const authSessions = pgTable(
@@ -251,6 +252,8 @@ export const sessionEventCursors = pgTable("session_event_cursors", {
     .primaryKey()
     .references(() => sessions.id, { onDelete: "cascade" }),
   lastObservedAt: timestamp("last_observed_at", { withTimezone: true }),
+  runningSince: timestamp("running_since", { withTimezone: true }),
+  lastReconciledAt: timestamp("last_reconciled_at", { withTimezone: true }),
   recentEventIds: jsonb("recent_event_ids")
     .$type<string[]>()
     .default(sql`'[]'::jsonb`)
@@ -475,6 +478,45 @@ export const backgroundJobs = pgTable(
       table.runAfter,
       table.priority,
     ),
+  ],
+);
+
+export const quotaInterruptJobs = pgTable(
+  "quota_interrupt_jobs",
+  {
+    id: uuid("id").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    sessionId: uuid("session_id").notNull(),
+    monthStart: timestamp("month_start", { withTimezone: true }).notNull(),
+    status: backgroundJobStatus("status").default("pending").notNull(),
+    attempts: integer("attempts").default(0).notNull(),
+    maxAttempts: integer("max_attempts").default(10).notNull(),
+    runAfter: timestamp("run_after", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    lockedBy: text("locked_by"),
+    lastError: text("last_error"),
+    ...timestamps,
+  },
+  (table) => [
+    foreignKey({
+      name: "quota_interrupt_jobs_session_owner_fk",
+      columns: [table.userId, table.sessionId],
+      foreignColumns: [sessions.ownerUserId, sessions.id],
+    }).onDelete("cascade"),
+    uniqueIndex("quota_interrupt_jobs_user_session_month_unique").on(
+      table.userId,
+      table.sessionId,
+      table.monthStart,
+    ),
+    check(
+      "quota_interrupt_jobs_attempts_check",
+      sql`${table.attempts} >= 0 and ${table.maxAttempts} > 0`,
+    ),
+    index("quota_interrupt_jobs_claim_idx").on(table.status, table.runAfter),
   ],
 );
 

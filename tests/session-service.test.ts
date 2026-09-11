@@ -214,6 +214,8 @@ function setup() {
       }
     },
     async projectEvent() {},
+    listRunningForQuota: vi.fn(async () => []),
+    syncQuotaStatus: vi.fn(),
     async audit(entry: Parameters<SessionRepository["audit"]>[0]) {
       audits.push(entry);
     },
@@ -267,6 +269,48 @@ function setup() {
 }
 
 describe("SessionService", () => {
+  it("reconciles Ark Session state before rejecting at the concurrent threshold", async () => {
+    const state = setup();
+    const stale = session({ status: "running" });
+    state.repository.beginMessage = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Concurrent quota exceeded"), {
+          name: "QuotaExceededError",
+          dimension: "concurrent_sessions",
+        }),
+      )
+      .mockResolvedValueOnce({
+        kind: "accepted",
+        session: session({ status: "running" }),
+        started: true,
+      });
+    state.repository.listRunningForQuota = vi.fn(async () => [stale]);
+    state.repository.syncQuotaStatus = vi.fn();
+    state.ark.getSession = vi.fn(async () => ({
+      id: stale.arkSessionId,
+      agentId: stale.arkAgentId,
+      agentVersion: Number(stale.agentVersion),
+      environmentId: stale.environmentId,
+      status: "idle",
+    }));
+
+    await expect(
+      state.service.sendMessage(
+        sessionId,
+        { content: "Start after reconcile" },
+        { userId, requestId: "request-threshold" },
+      ),
+    ).resolves.toEqual({ eventId: "event-1", delivery: "accepted" });
+    expect(state.repository.syncQuotaStatus).toHaveBeenCalledWith(
+      userId,
+      stale.id,
+      "idle",
+      now,
+    );
+    expect(state.repository.beginMessage).toHaveBeenCalledTimes(2);
+  });
+
   it("archives and restores only the owned Session without Ark calls", async () => {
     const state = setup();
     state.records.set(sessionId, session());

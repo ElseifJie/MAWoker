@@ -191,13 +191,26 @@ export function createTask18BrowserBackend() {
       editable: false,
     },
   ];
-  const adminUser = {
-    id: userId,
-    email: "user-a@example.com",
-    status: "active" as const,
-    defaultAgentId: platformAgentId as string | null,
-    quota,
-  };
+  const adminUsers: Array<{
+    id: string;
+    email: string;
+    role: "user" | "admin";
+    status: "active";
+    hasPassword: boolean;
+    defaultAgentId: string | null;
+    quota: Quota;
+  }> = [
+    {
+      id: userId,
+      email: "user-a@example.com",
+      role: "user",
+      status: "active",
+      hasPassword: true,
+      defaultAgentId: platformAgentId as string | null,
+      quota,
+    },
+  ];
+  const adminUser = adminUsers[0]!;
 
   async function fetch(
     input: RequestInfo | URL,
@@ -209,22 +222,21 @@ export function createTask18BrowserBackend() {
     const body = parseBody(init);
     calls.push({ method, path, body });
 
-    if (path === "/api/v1/auth/email-code" && method === "POST") {
-      return json({ accepted: true }, 202);
-    }
-    if (path === "/api/v1/auth/verify" && method === "POST") {
-      if (body.code !== "123456") return apiError("AUTH_REQUIRED", 401);
+    if (path === "/api/v1/auth/login" && method === "POST") {
+      if (body.password === "wrong-password") {
+        return apiError("AUTH_REQUIRED", 401);
+      }
       const email = String(body.email);
       identity =
         email === "admin@example.com"
           ? {
               userId: adminId,
-              authSubject: `managed:${email}`,
+              authSubject: `local:${email}`,
               role: "admin",
             }
           : {
               userId,
-              authSubject: `managed:${email}`,
+              authSubject: `local:${email}`,
               role: "user",
             };
       return noContent();
@@ -285,7 +297,39 @@ export function createTask18BrowserBackend() {
       return noContent();
     }
     if (path === "/api/v1/admin/users" && method === "GET") {
-      return json({ users: [{ ...adminUser, quota }] });
+      return json({ users: adminUsers.map((entry) => ({ ...entry, quota })) });
+    }
+    if (path === "/api/v1/admin/users" && method === "POST") {
+      const email = String(body.email).trim().toLowerCase();
+      if (adminUsers.some((entry) => entry.email === email)) {
+        return apiError("USER_EMAIL_CONFLICT", 409);
+      }
+      const created = {
+        id: `00000000-0000-4000-8000-0000000009${adminUsers.length}`,
+        email,
+        role: (body.role === "admin" ? "admin" : "user") as "user" | "admin",
+        status: "active" as const,
+        hasPassword: true,
+        defaultAgentId: null,
+        quota,
+      };
+      adminUsers.push(created);
+      return json(
+        {
+          id: created.id,
+          email: created.email,
+          role: created.role,
+          status: created.status,
+        },
+        201,
+      );
+    }
+    if (path.endsWith("/password") && method === "POST") {
+      const id = path.split("/").at(-2);
+      const target = adminUsers.find((entry) => entry.id === id);
+      if (!target) return apiError("RESOURCE_NOT_FOUND", 404);
+      target.hasPassword = true;
+      return noContent();
     }
     if (path.endsWith("/default-agent") && method === "PUT") {
       adminUser.defaultAgentId = String(body.platformAgentId);
@@ -345,7 +389,13 @@ export function createTask18BrowserBackend() {
       return noContent();
     }
     if (path === "/api/v1/capabilities") {
-      return json({ personalAgentModels: ["model-a"] });
+      return json({
+        skills: { available: false },
+        mcpServers: { available: false },
+        vaults: { available: false },
+        memoryStores: { available: false },
+        personalAgentModels: ["model-a"],
+      });
     }
     if (path === "/api/v1/usage") {
       return json({

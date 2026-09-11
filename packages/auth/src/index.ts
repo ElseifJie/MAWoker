@@ -3,19 +3,12 @@ import {
   randomBytes as cryptoRandomBytes,
   randomUUID,
 } from "node:crypto";
+import { hashPassword, verifyPassword } from "./password.js";
+
+export * from "./password.js";
 
 export type UserRole = "user" | "admin";
 export type UserStatus = "active" | "disabled";
-
-export interface TrustedIdentity {
-  subject: string;
-  email: string;
-}
-
-export interface ManagedIdentityAdapter {
-  requestEmailCode(email: string): Promise<void>;
-  verifyEmailCode(email: string, code: string): Promise<TrustedIdentity>;
-}
 
 export interface AuthUser {
   id: string;
@@ -40,8 +33,12 @@ export interface AuthContext {
   role: UserRole;
 }
 
+export interface AuthUserWithPassword extends AuthUser {
+  passwordHash: string | null;
+}
+
 export interface AuthStore {
-  findOrCreateUser(identity: TrustedIdentity): Promise<AuthUser>;
+  findUserByEmail(email: string): Promise<AuthUserWithPassword | undefined>;
   createSession(session: AuthSessionRecord): Promise<void>;
   findSessionByTokenHash(
     tokenHash: string,
@@ -55,13 +52,6 @@ export interface AuthStore {
   revokeSessionByTokenHash(tokenHash: string, revokedAt: Date): Promise<void>;
 }
 
-export class AuthVerificationError extends Error {
-  constructor(message = "Unable to verify email code") {
-    super(message);
-    this.name = "AuthVerificationError";
-  }
-}
-
 export class AuthRequiredError extends Error {
   constructor() {
     super("Authentication required");
@@ -69,104 +59,11 @@ export class AuthRequiredError extends Error {
   }
 }
 
-interface CodeState {
-  attempts: number;
-  issuedAt: number;
-}
-
-interface RequestWindow {
-  count: number;
-  startedAt: number;
-}
-
-export interface DeterministicManagedIdentityStubOptions {
-  code?: string;
-  codeTtlMs?: number;
-  maxAttempts?: number;
-  requestLimit?: number;
-  requestWindowMs?: number;
-  now?: () => Date;
-}
-
-function normalizeEmail(email: string): string {
+export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function isEmail(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
-
-export class DeterministicManagedIdentityStub implements ManagedIdentityAdapter {
-  private readonly code: string;
-  private readonly codeTtlMs: number;
-  private readonly maxAttempts: number;
-  private readonly requestLimit: number;
-  private readonly requestWindowMs: number;
-  private readonly now: () => Date;
-  private readonly codes = new Map<string, CodeState>();
-  private readonly requests = new Map<string, RequestWindow>();
-
-  constructor(options: DeterministicManagedIdentityStubOptions = {}) {
-    this.code = options.code ?? "123456";
-    this.codeTtlMs = options.codeTtlMs ?? 5 * 60_000;
-    this.maxAttempts = options.maxAttempts ?? 5;
-    this.requestLimit = options.requestLimit ?? 5;
-    this.requestWindowMs = options.requestWindowMs ?? 60_000;
-    this.now = options.now ?? (() => new Date());
-  }
-
-  async requestEmailCode(input: string): Promise<void> {
-    const email = normalizeEmail(input);
-    const now = this.now().getTime();
-    if (!isEmail(email)) {
-      throw new AuthVerificationError();
-    }
-
-    const previous = this.requests.get(email);
-    const requestWindow =
-      previous && now - previous.startedAt < this.requestWindowMs
-        ? previous
-        : { count: 0, startedAt: now };
-    if (requestWindow.count >= this.requestLimit) {
-      throw new AuthVerificationError();
-    }
-
-    requestWindow.count += 1;
-    this.requests.set(email, requestWindow);
-    this.codes.set(email, { attempts: 0, issuedAt: now });
-  }
-
-  async verifyEmailCode(
-    input: string,
-    candidate: string,
-  ): Promise<TrustedIdentity> {
-    const email = normalizeEmail(input);
-    const state = this.codes.get(email);
-    const now = this.now().getTime();
-    if (
-      !isEmail(email) ||
-      !state ||
-      state.attempts >= this.maxAttempts ||
-      now - state.issuedAt >= this.codeTtlMs
-    ) {
-      throw new AuthVerificationError();
-    }
-
-    if (candidate !== this.code) {
-      state.attempts += 1;
-      throw new AuthVerificationError();
-    }
-
-    this.codes.delete(email);
-    return {
-      subject: `managed:${email}`,
-      email,
-    };
-  }
-}
-
 export interface ApplicationSessionServiceOptions {
-  identity: ManagedIdentityAdapter;
   store: AuthStore;
   sessionTtlMs?: number;
   now?: () => Date;
@@ -180,15 +77,14 @@ function hashToken(token: string): string {
 }
 
 export class ApplicationSessionService {
-  private readonly identity: ManagedIdentityAdapter;
   private readonly store: AuthStore;
   private readonly sessionTtlMs: number;
   private readonly now: () => Date;
   private readonly createToken: () => string;
   private readonly randomId: () => string;
+  private decoyHash: Promise<string> | undefined;
 
   constructor(options: ApplicationSessionServiceOptions) {
-    this.identity = options.identity;
     this.store = options.store;
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60_000;
     this.now = options.now ?? (() => new Date());
@@ -199,19 +95,23 @@ export class ApplicationSessionService {
     this.randomId = options.randomId ?? randomUUID;
   }
 
-  requestEmailCode(email: string): Promise<void> {
-    return this.identity.requestEmailCode(normalizeEmail(email));
+  // Unknown accounts are compared against a throwaway hash so that the response
+  // time does not reveal whether the email exists.
+  private timingDecoy(): Promise<string> {
+    this.decoyHash ??= hashPassword("unmatched-password-placeholder");
+    return this.decoyHash;
   }
 
-  async verifyEmailCode(
+  async login(
     email: string,
-    code: string,
+    password: string,
   ): Promise<{ token: string; expiresAt: Date }> {
-    const identity = await this.identity.verifyEmailCode(
-      normalizeEmail(email),
-      code,
-    );
-    const user = await this.store.findOrCreateUser(identity);
+    const user = await this.store.findUserByEmail(normalizeEmail(email));
+    const stored = user?.passwordHash ?? (await this.timingDecoy());
+    const matches = await verifyPassword(password, stored);
+    if (!user || !user.passwordHash || !matches) {
+      throw new AuthRequiredError();
+    }
     if (user.status !== "active") {
       throw new AuthRequiredError();
     }

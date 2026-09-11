@@ -40,13 +40,20 @@ app.get("/api/v1/sessions/:id/events", async (request, reply) => {
     "cache-control": "no-cache, no-transform",
     connection: "keep-alive",
   });
-  reply.raw.write(": ready\n\nretry: 100\n\n");
+  reply.raw.write(
+    `event: ready\ndata: ${JSON.stringify({
+      sessionId: request.params.id,
+      status: "running",
+      agentName: "Acceptance Agent",
+      agentVersion: "1",
+    })}\n\nretry: 100\n\n`,
+  );
 
   const events = [
     {
       id: "event-user",
       sourceType: "user.message",
-      type: "unknown",
+      type: "message",
       createdAt: "2026-09-07T08:00:00.000Z",
       payload: { content: "Prepare an acceptance report" },
     },
@@ -55,14 +62,29 @@ app.get("/api/v1/sessions/:id/events", async (request, reply) => {
       sourceType: "agent.thinking",
       type: "thinking",
       createdAt: "2026-09-07T08:00:01.000Z",
-      payload: { content: "must remain private" },
+      payload: {},
     },
     {
-      id: "event-tool",
-      sourceType: "tool.call",
-      type: "tool",
+      id: "call_write_1",
+      sourceType: "agent.tool_use",
+      type: "tool_use",
       createdAt: "2026-09-07T08:00:02.000Z",
-      payload: { name: "files", status: "completed" },
+      payload: {
+        callId: "call_write_1",
+        name: "write",
+        argsSummary: "/workspace/acceptance-report.md",
+      },
+    },
+    {
+      id: "event-tool-result",
+      sourceType: "agent.tool_result",
+      type: "tool_result",
+      createdAt: "2026-09-07T08:00:02.500Z",
+      payload: {
+        callId: "call_write_1",
+        status: "ok",
+        preview: "Wrote /workspace/acceptance-report.md",
+      },
     },
     {
       id: "event-agent",
@@ -126,7 +148,7 @@ app.all("/api/v1/*", async (request, reply) => {
 
   reply.code(response.status);
   response.headers.forEach((value, name) => reply.header(name, value));
-  if (pathname === "/api/v1/auth/verify" && response.status === 204) {
+  if (pathname === "/api/v1/auth/login" && response.status === 204) {
     reply.setCookie("pwa_session", "task-18-e2e-session", {
       path: "/",
       httpOnly: true,

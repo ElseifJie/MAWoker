@@ -168,6 +168,42 @@
   opacity: 0.65;
 }
 
+.ui-password {
+  position: relative;
+  display: block;
+}
+
+.ui-password__input {
+  padding-inline-end: calc(var(--ui-space-3) + 28px);
+}
+
+.ui-password__toggle {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: var(--ui-space-2);
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  translate: 0 -50%;
+  place-items: center;
+  border: 0;
+  border-radius: var(--ui-radius-medium);
+  color: var(--ui-color-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ui-password__toggle:hover {
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface-subtle);
+}
+
+.ui-password__toggle:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: 1px;
+}
+
 .ui-field__hint,
 .ui-field__error {
   margin: 0;
@@ -205,6 +241,12 @@
   border-color: var(--ui-color-border);
   color: var(--ui-color-text-muted);
   background: var(--ui-color-surface-subtle);
+}
+
+.ui-badge--info {
+  border-color: color-mix(in srgb, var(--ui-color-accent) 28%, transparent);
+  color: var(--ui-color-accent);
+  background: var(--ui-color-accent-subtle);
 }
 
 .ui-badge--success {
@@ -323,7 +365,7 @@
   display: grid;
   padding: var(--ui-space-5);
   place-items: center;
-  background: rgb(18 29 31 / 42%);
+  background: var(--ui-color-overlay);
 }
 
 .ui-dialog {
@@ -334,7 +376,7 @@
   border-radius: var(--ui-radius-large);
   color: var(--ui-color-text);
   background: var(--ui-color-surface);
-  box-shadow: 0 20px 70px rgb(22 38 39 / 20%);
+  box-shadow: var(--ui-shadow-overlay);
 }
 
 .ui-dialog__header {

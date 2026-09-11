@@ -1,3 +1,5 @@
+import type { FeatureCapabilities } from "@pwa/contracts";
+
 export type UserRole = "user" | "admin";
 export type SessionStatus = "idle" | "running" | "rescheduled" | "terminated";
 
@@ -35,7 +37,7 @@ export interface AgentList {
   } | null;
 }
 
-export interface ClientCapabilities {
+export interface ClientCapabilities extends FeatureCapabilities {
   personalAgentModels: string[];
 }
 
@@ -69,13 +71,7 @@ export interface SessionDetail extends SessionSummary {
   inputs: SessionInput[];
 }
 
-export interface UiEvent {
-  id: string;
-  sourceType: string;
-  type: "message" | "thinking" | "tool" | "status" | "error" | "unknown";
-  createdAt: string;
-  payload: Record<string, unknown>;
-}
+export type { UiEvent, UiEventType } from "@pwa/contracts";
 
 export interface ArtifactSummary {
   id: string;
@@ -135,12 +131,23 @@ export interface AdminQuota {
   monthlyTokenLimit: number;
 }
 
+export type AdminUserRole = "user" | "admin";
+
 export interface AdminUserSummary {
   id: string;
   email: string;
+  role: AdminUserRole;
   status: "active" | "disabled";
+  hasPassword: boolean;
   defaultAgentId: string | null;
   quota: AdminQuota;
+}
+
+export interface AdminUserCreated {
+  id: string;
+  email: string;
+  role: AdminUserRole;
+  status: "active" | "disabled";
 }
 
 export interface UploadedInput {
@@ -218,15 +225,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const apiClient = {
   getMe: () => request<{ user: CurrentUser }>("/me"),
-  requestEmailCode: (email: string) =>
-    request<{ accepted: true }>("/auth/email-code", {
+  login: (email: string, password: string) =>
+    request<void>("/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email }),
-    }),
-  verifyEmailCode: (email: string, code: string) =>
-    request<void>("/auth/verify", {
-      method: "POST",
-      body: JSON.stringify({ email, code }),
+      body: JSON.stringify({ email, password }),
     }),
   logout: () => request<void>("/auth/logout", { method: "POST" }),
   listAdminPlatformAgents: () =>
@@ -265,6 +267,20 @@ export const apiClient = {
       method: "DELETE",
     }),
   listAdminUsers: () => request<{ users: AdminUserSummary[] }>("/admin/users"),
+  createAdminUser: (input: {
+    email: string;
+    password: string;
+    role: AdminUserRole;
+  }) =>
+    request<AdminUserCreated>("/admin/users", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  resetAdminUserPassword: (userId: string, password: string) =>
+    request<void>(`/admin/users/${encodeURIComponent(userId)}/password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
   assignAdminDefaultAgent: (userId: string, platformAgentId: string) =>
     request<{
       userId: string;
@@ -366,6 +382,11 @@ export const apiClient = {
         method: "DELETE",
         body: JSON.stringify({ confirmation: "DELETE" }),
       },
+    ),
+  syncArtifacts: (sessionId: string) =>
+    request<{ artifacts: ArtifactSummary[] }>(
+      `/sessions/${encodeURIComponent(sessionId)}/artifacts/sync`,
+      { method: "POST", body: JSON.stringify({}) },
     ),
   listArtifacts: (sessionId?: string) =>
     request<{ artifacts: ArtifactSummary[] }>(

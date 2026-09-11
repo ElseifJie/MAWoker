@@ -31,8 +31,7 @@ const agent = {
 
 function auth(): ApiAuthService {
   return {
-    async requestEmailCode() {},
-    async verifyEmailCode() {
+    async login() {
       return { token: "admin-token", expiresAt: new Date(Date.now() + 60_000) };
     },
     async authenticate(token) {
@@ -58,11 +57,26 @@ function adminService() {
       {
         id: userId,
         email: "user@example.com",
+        role: "user" as const,
         status: "active" as const,
+        hasPassword: true,
         authSubject: "must-not-leak",
         defaultAgentId: agentId,
+        quota: {
+          personalAgentLimit: 10,
+          concurrentSessionLimit: 2,
+          dailySessionLimit: 20,
+          monthlyTokenLimit: 1000,
+        },
       },
     ]),
+    createUser: vi.fn(async () => ({
+      id: userId,
+      email: "user@example.com",
+      role: "user" as const,
+      status: "active" as const,
+    })),
+    resetUserPassword: vi.fn(async () => undefined),
     assignDefaultAgent: vi.fn(async () => ({
       userId,
       platformAgentId: agentId,
@@ -285,11 +299,22 @@ describe("admin platform Agent API", () => {
         {
           id: userId,
           email: "user@example.com",
+          role: "user",
           status: "active",
+          hasPassword: true,
           defaultAgentId: agentId,
+          quota: {
+            personalAgentLimit: 10,
+            concurrentSessionLimit: 2,
+            dailySessionLimit: 20,
+            monthlyTokenLimit: 1000,
+          },
         },
       ],
     });
+    expect(users.body).not.toContain("authSubject");
+    expect(users.body).not.toContain("sessions");
+    expect(users.body).not.toContain("artifacts");
     expect(assignment.json()).toEqual({
       userId,
       platformAgentId: agentId,

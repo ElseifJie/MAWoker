@@ -22,10 +22,12 @@ export {
 export {
   Field,
   Input,
+  PasswordInput,
   Select,
   Textarea,
   type FieldProps,
   type InputProps,
+  type PasswordInputProps,
   type SelectProps,
   type TextareaProps,
 } from "./FormControls.js";

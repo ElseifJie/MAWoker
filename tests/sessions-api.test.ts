@@ -22,8 +22,7 @@ const timestamp = new Date("2026-09-06T00:00:00.000Z");
 
 function auth(): ApiAuthService {
   return {
-    async requestEmailCode() {},
-    async verifyEmailCode() {
+    async login() {
       return { token: "user-token", expiresAt: new Date(Date.now() + 60_000) };
     },
     async authenticate(token) {
@@ -97,6 +96,7 @@ function sessionService() {
       delivery: "accepted" as const,
     })),
     openEvents: vi.fn<SessionApiService["openEvents"]>(async () => ({
+      session: record,
       events: {
         async *[Symbol.asyncIterator]() {
           yield {
@@ -470,7 +470,7 @@ describe("Session API", () => {
         cookies,
         ...(payload ? { payload } : {}),
       });
-      expect(response.statusCode).toBe(403);
+      expect(response.statusCode).toBe(404);
     }
     expect(
       Object.values(sessions).every((call) => call.mock.calls.length === 0),
@@ -478,7 +478,7 @@ describe("Session API", () => {
     await app.close();
   });
 
-  it("streams raw Ark identity with normalized UI events after upstream readiness", async () => {
+  it("streams an authoritative ready frame with normalized UI events after upstream readiness", async () => {
     const sessions = sessionService();
     const app = buildApp({ auth: auth(), sessions });
 
@@ -492,7 +492,13 @@ describe("Session API", () => {
     expect(response.headers["content-type"]).toContain("text/event-stream");
     expect(response.body).toBe(
       [
-        ": ready",
+        "event: ready",
+        `data: ${JSON.stringify({
+          sessionId,
+          status: "idle",
+          agentName: "Snapshot Name",
+          agentVersion: "7",
+        })}`,
         "",
         "id: event-3",
         "event: agent.message",
@@ -507,6 +513,11 @@ describe("Session API", () => {
         "",
       ].join("\n"),
     );
+    // The ready frame is state, not a replayable event: no id line, and only the
+    // whitelisted fields — never the Ark or environment identifiers.
+    expect(response.body).not.toContain("ark-session-secret");
+    expect(response.body).not.toContain("ark-agent-secret");
+    expect(response.body).not.toContain("environment-secret");
     expect(sessions.openEvents).toHaveBeenCalledWith(
       sessionId,
       expect.objectContaining({ userId }),
@@ -565,6 +576,7 @@ describe("Session API", () => {
       started = resolve;
     });
     sessions.openEvents.mockImplementationOnce(async () => ({
+      session: record,
       events: {
         async *[Symbol.asyncIterator]() {
           try {

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import type { HTMLAttributes, ReactNode } from "react";
 
-export type BadgeTone = "neutral" | "success" | "warning" | "danger";
+export type BadgeTone = "neutral" | "info" | "success" | "warning" | "danger";
 export type AlertTone = "info" | "success" | "warning" | "danger";
 
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
@@ -35,6 +35,7 @@ export interface EmptyStateProps {
 
 const badgeIcons: Record<BadgeTone, LucideIcon> = {
   neutral: Circle,
+  info: Info,
   success: CircleCheck,
   warning: TriangleAlert,
   danger: CircleAlert,

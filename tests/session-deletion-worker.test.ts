@@ -309,4 +309,59 @@ describe("SessionDeletionProcessor", () => {
       true,
     );
   });
+
+  it("emits a structured alert on terminal deletion failure", async () => {
+    const alert = vi.fn();
+    const state = setup({
+      payload: {
+        sessionId,
+        completed: {
+          nonRunningObserved: true,
+          arkDeleted: true,
+          artifactsDeleted: true,
+        },
+      },
+      localRemoval: "cleanup_failed",
+    });
+    state.jobs.claim.mockResolvedValueOnce([
+      job({
+        attempts: 10,
+        payload: {
+          sessionId,
+          completed: {
+            nonRunningObserved: true,
+            arkDeleted: true,
+            artifactsDeleted: true,
+          },
+        },
+      }),
+    ]);
+
+    const processor = new SessionDeletionProcessor({
+      jobs: state.jobs,
+      repository: state.repository,
+      ark: state.ark,
+      storage: state.storage,
+      workerId: "worker-1",
+      alert,
+    });
+
+    await processor.runOnce();
+
+    expect(state.jobs.retry).toHaveBeenCalledWith(
+      sessionId,
+      "worker-1",
+      "SESSION_DELETE_FAILED",
+      true,
+    );
+    expect(alert).toHaveBeenCalledWith({
+      jobType: "delete_session",
+      jobId: sessionId,
+      userId: ownerUserId,
+      sessionId,
+      attempts: 11,
+      maxAttempts: 10,
+      errorCode: "SESSION_DELETE_FAILED",
+    });
+  });
 });

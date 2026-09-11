@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+.superpowers
+coverage
+node_modules
+playwright-report
+test-results
+**/dist
+*.tsbuildinfo

@@ -1,38 +1,37 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import { HttpArkGateway } from "@pwa/ark-client";
-import { ApplicationSessionService, AuthVerificationError } from "@pwa/auth";
+import { ApplicationSessionService, hashPassword } from "@pwa/auth";
 import { parseServerConfig } from "@pwa/config";
 import { createAuthStore, createDatabase, createRepositories } from "@pwa/db";
 import {
   ArtifactService,
+  PlatformAgentService,
+  QuotaUsageService,
   SessionInputService,
   SessionService,
   UserAgentService,
+  type PlatformAgentRepository,
 } from "@pwa/domain";
 import { createTosArtifactStorage } from "@pwa/storage";
 
 const config = parseServerConfig(process.env);
 const { buildApp } = await import("./app.js");
-const database = createDatabase(config.databaseUrl);
+const database = createDatabase(config.databaseUrl, {
+  probeTimeoutMs: config.health.databaseTimeoutMs,
+});
 const repositories = createRepositories(database.db);
 const ark = new HttpArkGateway({
   baseUrl: config.ark.baseUrl,
   apiKey: config.ark.apiKey,
+  timeoutMs: config.ark.requestTimeoutMs,
+  maxAttempts: config.ark.maxAttempts,
+  baseDelayMs: config.ark.retryBaseDelayMs,
+  maxDelayMs: config.ark.retryMaxDelayMs,
 });
 const artifactStorage = createTosArtifactStorage(config.tos);
+const isProduction = config.nodeEnv === "production";
 const auth = new ApplicationSessionService({
-  identity: {
-    async requestEmailCode() {
-      throw new AuthVerificationError(
-        "Managed identity integration is not configured",
-      );
-    },
-    async verifyEmailCode() {
-      throw new AuthVerificationError(
-        "Managed identity integration is not configured",
-      );
-    },
-  },
   store: createAuthStore(database.db),
 });
 const userAgents = new UserAgentService({
@@ -40,6 +39,16 @@ const userAgents = new UserAgentService({
   ark,
   modelAllowlist: config.modelAllowlist,
   createId: randomUUID,
+});
+const admin = new PlatformAgentService({
+  repository: repositories.platformAgents as unknown as PlatformAgentRepository,
+  ark,
+  modelAllowlist: config.modelAllowlist,
+  createId: randomUUID,
+  passwordHasher: { hash: hashPassword },
+});
+const quotaUsage = new QuotaUsageService({
+  repository: repositories.usage,
 });
 const sessions = new SessionService({
   repository: repositories.sessionLifecycle,
@@ -61,20 +70,32 @@ const artifacts = new ArtifactService({
 });
 const app = buildApp({
   auth,
+  admin,
   userAgents,
   sessions,
   inputs,
   artifacts,
-  isProduction: config.nodeEnv === "production",
+  quotaUsage,
+  capabilities: { personalAgentModels: config.modelAllowlist },
+  isProduction,
+  appOrigin: config.appOrigin,
+  rateLimit: config.apiRateLimit,
+  readiness: {
+    configurationReady: true,
+    checkDatabase: (signal) => database.probe(signal),
+    timeoutMs: config.health.databaseTimeoutMs,
+  },
+  webRoot: resolve(import.meta.dirname, "../../web/dist"),
 });
 
 await app.listen({ host: "0.0.0.0", port: config.port });
 
 const shutdown = async () => {
-  process.off("SIGINT", shutdown);
-  process.off("SIGTERM", shutdown);
+  process.off("SIGINT", onSignal);
+  process.off("SIGTERM", onSignal);
   await app.close();
   await database.close();
 };
-process.once("SIGINT", () => void shutdown());
-process.once("SIGTERM", () => void shutdown());
+const onSignal = () => void shutdown();
+process.once("SIGINT", onSignal);
+process.once("SIGTERM", onSignal);

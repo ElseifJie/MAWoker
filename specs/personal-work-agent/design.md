@@ -39,9 +39,9 @@ flowchart LR
     U[普通用户浏览器] --> W[React SPA]
     A[管理员浏览器] --> W
     W -->|HttpOnly Session Cookie| API[Fastify API]
-    API --> AUTH[托管 OIDC 身份服务]
+    API --> AUTH[邮箱密码认证与会话]
     API --> DB[(PostgreSQL)]
-    API --> ARK[Ark Gateway]
+    API --> ARK[ark-client]
     ARK --> MA[Managed Agents API]
     MA --> TOS[(平台 TOS)]
     WORKER[Worker Process] --> DB
@@ -54,25 +54,26 @@ flowchart LR
 | 单元 | 职责 | 依赖 |
 | --- | --- | --- |
 | `web` | 工作台、Agent 管理、Session 时间线、文件列表、管理员页面 | API |
-| `api` | 认证、授权、配额、业务编排、SSE 代理、静态资源托管 | PostgreSQL、OIDC、Ark Gateway |
-| `worker` | 删除重试、孤立资源清理、状态与用量对账 | PostgreSQL、Ark Gateway、TOS |
-| `ark-gateway` | 封装 Agent、Session、Events、Files API 和错误映射 | `ARK_API_KEY` |
+| `api` | 认证、授权、配额、业务编排、SSE 代理、静态资源托管 | PostgreSQL、ark-client |
+| `worker` | 删除重试、孤立资源清理、状态与用量对账 | PostgreSQL、ark-client、TOS |
+| `ark-client` | 封装 Agent、Session、Events、Files API 和错误映射 | `ARK_API_KEY` |
 | `db` | 身份映射、资源归属、状态投影、配额、作业与审计 | PostgreSQL |
 
 ### 3.2 代码组织
 
 ```text
 apps/
-  web/                 React + Vite SPA
+  web/                 React + Vite SPA（共享 UI 组件位于 apps/web/src/ui/）
   api/                 Fastify HTTP/SSE 服务
   worker/              后台作业入口
 packages/
-  contracts/           API DTO、事件类型和校验 Schema
+  contracts/           API DTO、事件类型、校验 Schema 与脱敏规则
+  config/              类型化环境配置与启动校验
   db/                  Drizzle Schema、迁移与 Repository
   ark-client/          Managed Agents API 客户端
-  auth/                OIDC 与角色解析
+  auth/                密码哈希、密码登录与应用会话服务
   domain/              Agent、Session、File、Quota 业务规则
-  ui/                  共享 UI 组件
+  storage/             TOS 产物存储客户端
 ```
 
 生产镜像包含 SPA 构建产物、API 和 worker 入口。API 进程提供静态 SPA 与 `/api`；worker 使用同一镜像和不同启动命令。
@@ -81,7 +82,13 @@ packages/
 
 ### 4.1 身份认证
 
-托管身份服务负责邮箱验证码流程，并通过标准 OIDC 返回身份。Fastify 完成 OIDC 回调后创建应用会话，将随机会话令牌放入 `HttpOnly`、`Secure`、`SameSite=Lax` Cookie；数据库仅保存令牌哈希。
+用户账号由管理员创建，一期不提供自助注册，也不集成任何外部 IdP。密码以 Node 内置 `scrypt` 加盐哈希保存在 `users.password_hash`（格式 `scrypt$N$r$p$salt$digest`，校验使用 `timingSafeEqual`），系统不保存也无法还原明文密码；`OIDC_ISSUER`、`OIDC_CLIENT_ID`、`OIDC_CLIENT_SECRET` 仍在 `packages/config` 中解析并校验，但运行时没有消费方，属于未来接入 IdP 的预留配置缝。
+
+登录入口是 `POST /api/v1/auth/login`（`packages/auth` 的 `ApplicationSessionService.login`）：按邮箱查询用户并校验密码，邮箱不存在、未设置密码、密码错误、账号被禁用这四种情况都抛出同一个 `AuthRequiredError`，HTTP 层统一返回 `401 AUTH_REQUIRED`。为避免通过响应耗时推断账户是否存在，未知邮箱也会针对一个占位哈希执行一次密码校验。
+
+管理员在用户账号管理中创建账号、重置密码：创建时邮箱必须唯一，重复邮箱返回 `409 USER_EMAIL_CONFLICT`；重置密码时同时吊销该用户的全部既有会话（写 `auth_sessions.revoked_at`）。接口只返回"是否已设置密码"，不返回密码明文或哈希。
+
+登录成功后由应用会话服务创建应用会话，将随机会话令牌放入 `HttpOnly` Cookie（生产环境附加 `Secure`，`SameSite=Lax`）；数据库仅保存令牌哈希。
 
 所有业务请求从服务端会话解析：
 
@@ -101,10 +108,10 @@ AuthContext {
 - 资源不存在与资源不属于当前用户均返回 `404 RESOURCE_NOT_FOUND`。
 - 平台 Agent 只有在处于启用状态且已分配给当前用户时才可用于新建 Session。
 - 普通用户不能更新或删除平台 Agent。
-- 管理员路由只允许管理平台 Agent、用户默认 Agent 分配和配额。
+- 管理员路由只允许管理平台 Agent、用户账号与密码、用户默认 Agent 分配和配额。
 - 管理员路由不提供 Session 正文、输入附件内容或产物下载能力。
 
-授权在 Domain Service 调用 Ark Gateway 之前完成。Ark Gateway 不接受来自 HTTP 请求的任意资源 ID，只接受已由 Repository 解析出的内部资源记录。
+授权在 Domain Service 调用 ark-client 之前完成。ark-client 不接受来自 HTTP 请求的任意资源 ID，只接受已由 Repository 解析出的内部资源记录。
 
 ## 5. 数据模型
 
@@ -169,9 +176,13 @@ AuthContext {
 | `agent_kind` | `platform` 或 `personal` |
 | `platform_agent_id` / `personal_agent_id` | 二选一 |
 | `ark_agent_id`, `agent_version` | 创建时固定快照 |
+| `agent_name` | 创建时 Agent 名称快照 |
 | `environment_id` | 平台 Environment ID |
 | `title` | 会话标题 |
 | `status` | 方舟状态投影 |
+| `last_error_code`, `error_recoverable` | 最近一次 `session.error` 的错误码与是否可自动恢复 |
+| `message_in_flight_count` | 在途用户消息计数，带非负检查约束 |
+| `message_start_pending` | 消息启动待处理标记 |
 | `archived_at` | 归档时间 |
 | `deletion_state` | `none`、`pending`、`deletion_failed`、`deleted` |
 | `last_event_at` | 最近事件时间 |
@@ -181,7 +192,7 @@ AuthContext {
 
 #### `session_event_cursors`
 
-仅保存 `session_id`、最后观察时间和最近事件 ID 集合的短期去重信息，不保存完整对话正文。完整事件历史以方舟为权威来源。
+保存 `session_id`、最后观察时间、当前运行区间起点 `running_since`（用于运行时长计量）、最近对账时间 `last_reconciled_at` 和最近事件 ID 集合的短期去重信息，不保存完整对话正文。完整事件历史以方舟为权威来源。
 
 ### 5.4 文件与产物
 
@@ -203,13 +214,21 @@ AuthContext {
 
 按用户覆盖具体配额；空字段继承系统默认值。
 
+#### `quota_reservations`
+
+按用户记录 Session 创建配额预占，未决预占同时计入并发与每日新建配额判定；状态为 `active`、`consumed` 或 `released`，携带过期时间与解决时间，创建结果确认后标记为消费或释放。
+
 #### `usage_ledger`
 
 按 `user_id + ark_session_id + ark_event_id + metric_type` 唯一记录 Token、运行时长和工具调用增量，避免重放事件导致重复计量。
 
 #### `background_jobs`
 
-保存 `delete_session`、`delete_artifact`、`cleanup_upload`、`reconcile_session` 作业。包含状态、重试次数、下次执行时间和最后错误；worker 使用 `FOR UPDATE SKIP LOCKED` 领取作业。
+保存 `delete_session`、`delete_artifact`、`cleanup_artifact_object`、`cleanup_upload`、`reconcile_session`、`reconcile_personal_agent` 作业。包含状态、重试次数、下次执行时间和最后错误；worker 使用 `FOR UPDATE SKIP LOCKED` 领取作业。
+
+#### `quota_interrupt_jobs`
+
+记录月度 Token 额度越限后待中断的 Session，按 `user_id + session_id + month_start` 唯一去重；包含状态、重试次数和下次执行时间，由 worker 领取并发送中断。
 
 #### `audit_logs`
 
@@ -223,10 +242,12 @@ AuthContext {
 
 | 方法与路径 | 用途 |
 | --- | --- |
-| `POST /auth/email-code` | 请求托管身份服务发送验证码 |
-| `POST /auth/verify` | 验证回调或验证码并建立应用会话 |
+| `POST /auth/login` | 用邮箱与密码登录并建立应用会话 |
 | `POST /auth/logout` | 撤销应用会话 |
-| `GET /me` | 返回当前用户、角色、配额摘要和默认 Agent 状态 |
+| `GET /me` | 返回当前用户身份 `{ user }`（用户 ID、`authSubject` 与角色） |
+| `GET /usage` | 返回当前用户配额与用量摘要及月度窗口 |
+
+配额摘要不包含在 `GET /me` 中；默认 Agent 状态由 `GET /agents` 列表返回。
 
 ### 6.2 普通用户 Agent
 
@@ -248,7 +269,9 @@ AuthContext {
 | `POST /admin/platform-agents` | 创建平台 Agent |
 | `PATCH /admin/platform-agents/:id` | 更新、启用或停用 |
 | `DELETE /admin/platform-agents/:id` | 删除无引用的平台 Agent |
-| `GET /admin/users` | 查询用户及默认 Agent 分配状态，不返回用户内容 |
+| `GET /admin/users` | 查询所有账号的邮箱、角色、状态、是否已设置密码及默认 Agent，不返回用户内容 |
+| `POST /admin/users` | 用邮箱、初始密码和角色创建账号，重复邮箱返回 409 |
+| `POST /admin/users/:id/password` | 重置密码并吊销该账号既有会话 |
 | `PUT /admin/users/:id/default-agent` | 指定默认平台 Agent |
 | `PUT /admin/users/:id/quota` | 调整用户配额 |
 
@@ -271,10 +294,12 @@ AuthContext {
 | 方法与路径 | 用途 |
 | --- | --- |
 | `POST /uploads` | 上传一期 Session 输入文件 |
-| `DELETE /uploads/:id` | 删除尚未绑定的输入文件 |
+| `POST /sessions/:id/artifacts/sync` | 同步该 Session 的产物索引并返回产物列表 |
 | `GET /artifacts` | 查询当前用户产物 |
 | `GET /artifacts/:id/download` | 授权后获取或代理下载 |
 | `DELETE /artifacts/:id` | 创建产物删除作业 |
+
+一期未提供输入文件的用户侧删除接口；过期未绑定上传由 worker 清理。
 
 ### 6.6 预留模块
 
@@ -319,10 +344,11 @@ sequenceDiagram
 API 建立上游 SSE 后再返回下游流。重连过程如下：
 
 1. 建立新的方舟 SSE 流并暂存实时事件。
-2. 拉取该 Session 的完整事件历史。
-3. 向浏览器发送历史事件。
-4. 按 `event.id` 丢弃暂存流中已存在于历史的事件。
-5. 按到达顺序继续转发实时事件。
+2. 下发 `ready` 事件，载荷为 `{sessionId, status, agentName, agentVersion}`，取自建立流时已加载的本地 Session 投影，不额外调用方舟接口。该帧不带 `id:` 行，因此不参与 Last-Event-ID 续传语义；其后回放的历史事件会自行纠正任何滞后状态。
+3. 拉取该 Session 的完整事件历史。
+4. 向浏览器发送历史事件。
+5. 按 `event.id` 丢弃暂存流中已存在于历史的事件。
+6. 按到达顺序继续转发实时事件。
 
 浏览器也按 `event.id` 维护去重集合。事件渲染器将方舟事件转换为稳定的 UI 类型，但保留原始 `type` 和 `id` 供诊断。
 
@@ -364,12 +390,18 @@ API 建立上游 SSE 后再返回下游流。重连过程如下：
 
 ### 8.2 Session 页面
 
-- 顶部显示标题、状态、Agent 名称和只读版本。
+- 三栏：侧边导航 · 主区 · 会话侧栏。窄屏下会话侧栏改为右侧抽屉，不挤压转录区。
+- 顶部显示标题、状态、Agent 名称和只读版本，并提供会话侧栏开合按钮；收起时按钮带上任务计数。
 - 主区按事件时间展示用户消息、Agent 回复和折叠式工具活动。
-- `thinking` 只显示状态，不展示推理文本。
+- 转录按 turn 分组：一个 turn 是两个断点（用户消息或提示条）之间的极大 Agent 活动段。分组头部显示「运行中 · N 步」与一条活体文案，运行中默认展开，turn 结束后折叠。
+- turn 尾部被判定为答案的消息弹出为独立气泡，其余作为叙述留在分组内；分类依据是 turn 是否已闭合，未闭合时才用文本量做临时判定，且叙述始终可见（活体行），不吞文本。
+- 工具行合并调用与结果为同一行，显示 humanize 文案与由配对事件时间戳推算的耗时；展开后显示服务端已白名单化并脱敏的工具名、参数摘要与结果预览。
+- `thinking` 只显示状态，不展示推理文本；连续多条合并为一个指示器。方舟无 token 级增量事件，因此不做打字机动画——那会谎报输出的到达方式。
 - `rescheduled` 显示自动恢复提示，不要求用户操作。
 - 运行状态提供中断按钮。
 - 归档与永久删除位于会话菜单，永久删除使用确认对话框。
+- 会话侧栏展示 Agent 通过 `todo_write` 报告的任务清单，以及该 Session 的产物；产物在写入类工具成功后与 turn 状态变化时刷新。
+- 当前预览的产物由 `?artifact=<id>` 查询参数承载，因此可分享、可在刷新后恢复，且不需要跨组件事件总线。
 
 ### 8.3 Agent 页面
 
@@ -430,13 +462,15 @@ API 返回稳定错误结构：
 
 错误类别包括：
 
-- `AUTH_REQUIRED`、`FORBIDDEN`。
-- `RESOURCE_NOT_FOUND`。
-- `VALIDATION_FAILED`。
-- `QUOTA_EXCEEDED`、`CONCURRENCY_LIMITED`。
+- `AUTH_REQUIRED`、`FORBIDDEN`、`ORIGIN_FORBIDDEN`。
+- `RESOURCE_NOT_FOUND`、`VALIDATION_FAILED`。
+- `INVALID_MULTIPART`、`INVALID_UPLOAD_NAME`。
+- `QUOTA_EXCEEDED`、`CONCURRENCY_LIMITED`、`RATE_LIMITED`、`AGENT_BUSY`。
 - `ARK_RATE_LIMITED`、`ARK_UNAVAILABLE`、`ARK_CONFLICT`。
+- `ARTIFACT_STORAGE_UNAVAILABLE`、`ARTIFACT_SOURCE_UNAVAILABLE`。
 - `SESSION_TERMINATED`、`SESSION_BUSY`。
 - `DELETION_PENDING`、`DELETION_FAILED`。
+- `INTERNAL_ERROR`。
 
 ### 10.2 重试
 
@@ -458,7 +492,12 @@ worker 定期对账本地状态与方舟状态，但不自动把无法归属的�
 
 - `ARK_API_KEY` 只通过服务端 Secret 注入，不进入数据库、前端包或日志。
 - OIDC Client Secret、SMTP 或身份服务密钥采用部署平台 Secret 管理。
-- 所有输入使用 Schema 白名单校验，禁止透传未声明的方舟字段。
+- 所有输入使用 Schema 白名单校验，禁止透传未声明的方舟字段。未列入白名单的方舟事件类型下发空载荷，不回退为原始 `data`。
+- 工具参数与结果向浏览器暴露前经过白名单提取、脱敏与截断：参数摘要上限 120 字符，结果预览上限 500 字符，仅 Session 所有者可见。
+- 脱敏擦除凭据形状字符串（`sk-`/`ark-`/`ak-`/`AKIA`）、对象存储键、签名 URL 的查询串与 `Authorization`/`Cookie` 等头部赋值。
+- 路径按实测沙箱布局处理：保留 `/workspace/`（Agent 工作目录，标识产物）与 `/mnt/session/`（输入与产物挂载），擦除 `/mnt/skills/`（暴露平台 Skill 内部结构），其余绝对路径仅保留 basename。
+- 消息正文同样擦除凭据：方舟会把 Skill 调用信封与预签名附件 URL 注入 `user.message`，其查询串带有访问密钥派生的凭据和长达 30 天的有效期。正文不改写路径，因为用户正在读回自己的消息。
+- `agent.thinking` 的载荷恒为空对象，推理正文不进入传输层。
 - Session、文件和 Agent 路由使用统一 Tenant Guard。
 - 管理员写操作使用 Role Guard 并写审计日志。
 - 上传文件名进行规范化，`mount_path` 由服务端生成，拒绝路径穿越。
@@ -493,7 +532,7 @@ worker 定期对账本地状态与方舟状态，但不自动把无法归属的�
 
 ### 12.4 端到端测试
 
-- 邮箱验证码登录到默认平台 Agent 首次任务。
+- 邮箱密码登录到默认平台 Agent 首次任务。
 - 创建、编辑和删除个人 Agent。
 - 上传附件、运行任务、查看并下载产物。
 - 多轮消息、中断、归档、恢复和永久删除。
@@ -506,7 +545,7 @@ worker 定期对账本地状态与方舟状态，但不自动把无法归属的�
 - API 与 worker 使用独立进程和独立健康检查。
 - PostgreSQL 使用托管实例并启用自动备份。
 - TOS Bucket 默认私有，生命周期规则由平台管理。
-- `/health/live` 仅检查进程存活；`/health/ready` 检查数据库和必要配置，不在每次探针中调用方舟付费接口。
+- `/health/live` 仅检查进程存活；`/health/ready` 仅探测数据库连通性，`configuration` 检查项在启动装配时固定为通过（配置有效性由进程启动时的配置解析隐式保证），探针不调用方舟接口，也不检测方舟连通性。
 - 日志使用结构化 JSON，包含 `request_id`、`user_id`、资源类型、资源 ID、结果和 Ark Request ID。
 - 告警覆盖登录失败异常、方舟错误率、SSE 异常断开、删除作业积压、配额拒绝率和对账差异。
 
@@ -519,7 +558,7 @@ worker 定期对账本地状态与方舟状态，但不自动把无法归属的�
 - Vault：每个用户独立 Vault，创建 Session 时注入 `vault_ids`。
 - Memory Store：作为只读 Session Resource 挂载，由独立管理流程写入。
 
-这些模块不得绕过现有 Tenant Guard、Ark Gateway、配额、审计和 Session 版本快照。
+这些模块不得绕过现有 Tenant Guard、ark-client、配额、审计和 Session 版本快照。
 
 ## 15. 需求追踪
 
@@ -531,7 +570,7 @@ worker 定期对账本地状态与方舟状态，但不自动把无法归属的�
 | 4 | 5.2、6.2、7.1 | Agent CRUD 测试 |
 | 5 | 5.2、7.1、7.5 | 版本冲突与固定版本测试 |
 | 6 | 5.3、6.4、7.2 | Session 生命周期测试 |
-| 7 | 5.3、7.3、12.3 | SSE 契约测试 |
+| 7 | 5.3、7.3、11、12.3 | SSE 契约与脱敏测试 |
 | 8 | 5.4、6.5、7.2 | 上传与挂载集成测试 |
 | 9 | 5.4、6.5、7.4 | 产物授权与删除测试 |
 | 10 | 5.3、7.4、10 | 删除 Saga 测试 |

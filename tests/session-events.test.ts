@@ -101,6 +101,56 @@ async function collect(events: AsyncIterable<unknown>) {
 }
 
 describe("Session event recovery", () => {
+  it("projects internal usage spans without exposing them to the browser", async () => {
+    const repository = baseRepository();
+    const service = createService(repository, {
+      async streamEvents() {
+        return {
+          async *[Symbol.asyncIterator]() {
+            yield event("event-message", "agent.message", {
+              content: "visible",
+            });
+          },
+        };
+      },
+      async listEvents() {
+        return [
+          {
+            id: "event-usage",
+            type: "span.model_request_end",
+            createdAt: "2026-08-31T23:59:59.999Z",
+            data: {
+              model_usage: { input_tokens: 11, output_tokens: 7 },
+              internal: "must not leak",
+            },
+          },
+        ];
+      },
+    });
+
+    const opened = await service.openEvents(sessionId, {
+      userId,
+      requestId: "request-usage",
+    });
+
+    await expect(collect(opened.events)).resolves.toEqual([
+      expect.objectContaining({ id: "event-message" }),
+    ]);
+    expect(repository.projectEvent).toHaveBeenNthCalledWith(
+      1,
+      userId,
+      sessionId,
+      {
+        eventId: "event-usage",
+        observedAt: new Date("2026-08-31T23:59:59.999Z"),
+        metrics: [
+          { metricType: "input_tokens", quantity: 11 },
+          { metricType: "output_tokens", quantity: 7 },
+        ],
+      },
+    );
+  });
+
   it("opens and consumes live events before history, then emits an ordered deduplicated stream", async () => {
     const order: string[] = [];
     const history = [
@@ -304,10 +354,14 @@ describe("Session event recovery", () => {
             yield event("event-1", "agent.thinking", {
               content: "private reasoning",
             });
-            yield event("event-2", "tool.call", {
-              name: "search",
-              arguments: { secret: true },
-              status: "running",
+            yield event("event-2", "agent.tool_use", {
+              name: "bash",
+              input: {
+                command:
+                  "curl -H 'Authorization: Bearer abc.def.ghi' https://api.example.com/prices",
+                description: "抓取价格快照",
+              },
+              evaluated_permission: "allow",
             });
             yield event("event-3", "session.error", {
               code: "TEMPORARY",
@@ -336,10 +390,11 @@ describe("Session event recovery", () => {
     expect(events[0]).toMatchObject({ type: "thinking", payload: {} });
     expect(JSON.stringify(events)).not.toContain("private reasoning");
     expect(events[1]).toMatchObject({
-      type: "tool",
-      payload: { name: "search", status: "running" },
+      type: "tool_use",
+      payload: { callId: "event-2", name: "bash", argsSummary: "抓取价格快照" },
     });
-    expect(JSON.stringify(events[1])).not.toContain("secret");
+    expect(JSON.stringify(events[1])).not.toContain("abc.def.ghi");
+    expect(JSON.stringify(events[1])).not.toContain("evaluated_permission");
     expect(repository.projectEvent).toHaveBeenNthCalledWith(
       3,
       userId,

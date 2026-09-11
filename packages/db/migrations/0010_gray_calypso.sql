@@ -1,0 +1,1 @@
+ALTER TABLE "session_event_cursors" ADD COLUMN "last_reconciled_at" timestamp with time zone;

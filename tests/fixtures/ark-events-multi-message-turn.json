@@ -1,0 +1,1764 @@
+{
+  "_fixture": {
+    "captured": "2026-09-08",
+    "source_session": "sesn-fixture-00000000000000-00000",
+    "note": "Synthetic fixture derived from Ark Managed Agents event shapes. All identifiers, URLs, credentials and message text are fabricated; credential-shaped strings (X-Tos-*, x-signature, lk3s, /mnt/skills/ paths) are retained as redaction test bait.",
+    "turns": 1,
+    "agent_message_count": 12,
+    "tool_use_count": 31,
+    "covers": [
+      "multiple agent.message inside a single turn -> narration vs final answer",
+      "long turn with many tool calls -> TurnGroup 'N steps'"
+    ]
+  },
+  "events": [
+    {
+      "id": "sevt-20260904061939-dttq4",
+      "type": "session.thread_status_running",
+      "agent_name": "fixture-agent",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "processed_at": "2026-09-04T14:19:39.232151663+08:00"
+    },
+    {
+      "id": "sevt-20260904061939-chvb6",
+      "type": "user.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        {
+          "type": "text",
+          "text": "一一一一一一一一一一一一一aa一一aaa"
+        },
+        {
+          "type": "text",
+          "text": "https://example-bucket.tos-cn-beijing.volces.com/synthetic/object?X-Tos-Algorithm=TOS4-HMAC-SHA256&X-Tos-Credential=AKLTSYNTHETICFIXTUREKEY0000000000000000%2F20260101%2Fcn-beijing%2Ftos%2Frequest&X-Tos-Date=20260101T000000Z&X-Tos-Expires=2592000&X-Tos-Signature=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef&X-Tos-SignedHeaders=host"
+        }
+      ],
+      "processed_at": "2026-09-04T14:19:39.232160616+08:00"
+    },
+    {
+      "id": "sevt-20260904061939-ikjz3",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:19:39.289859306+08:00"
+    },
+    {
+      "id": "sevt-20260904061939-2d0yt",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaaa aaaaa aa aa aaaaaa a aaaaaaa aaa aaaa a aaaaaaaa aaaaaa aaaaaaaaaa aa a aaaa aaa aa aaaaa aaaa aaa aaaaaaaaaa aaaaa aaaaa aa aaaaaaa aaa aaaaa aaa aaaa aaaaaaaa aaa aaaaaaaaaaa\n\naaa aa aaaaa aa aaaaaaa aaa aaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:19:45.442014182+08:00"
+    },
+    {
+      "id": "sevt-20260904061945-w2shp",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904061939-ikjz3",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 6205,
+        "output_tokens": 61
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:19:47.997656587+08:00"
+    },
+    {
+      "id": "sevt-20260904061947-letdj",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:19:47.997695665+08:00"
+    },
+    {
+      "id": "sevt-20260904061947-i76la",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaa aaaaaa aaa aaaaaaaaaa aaaaaa aaa a aaaa aa aaaa aaa aaaaaaaaaa aaaa aa aaaaaaaaaaa aaa aaaa aaaaaaaa aaa aaaaaa aaaaaaaaaa aaaaaaaaa aaaaaaa aa aaaaaaa aaa\n\naaa aa aa aaaa aa aaaaaaaaa\naa aaaa /mnt/skills/fixture-skill/SKILL.md\naa aaaaaaaa aaa aaaaaaaaaa aaaa aaa aaa\n\naaa aaa aa a aaa aaaaaaa aaa aaa a aaaaaaaaa aaa aa aaaaaaaa aa aaaaa aa aaa aaaa aa aaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:19:57.260612427+08:00"
+    },
+    {
+      "id": "call_f90e577896fd413e88a687d5",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:19:57.260667240+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "call_f68117bb479d4b08b10cfc74",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:19:57.260682703+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaaa aa /mnt/session/fixture-artifact aa aa /mnt/session/fixture-artifact aa aaaa aaaaa aa aaaaaa ahttps://example-bucket.tos-cn-beijing.volces.com/synthetic/object?X-Tos-Algorithm=TOS4-HMAC-SHA256&X-Tos-Credential=AKLTSYNTHETICFIXTUREKEY0000000000000000%2F20260101%2Fcn-beijing%2Ftos%2Frequest&X-Tos-Date=20260101T000000Z&X-Tos-Expires=2592000&X-Tos-Signature=deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef&X-Tos-SignedHeaders=hosta aa aa aaa aa aaaa aaaaaa",
+        "description": "aaaaaaaa aaa aaaaaaaa aaaaaa aaaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904061957-nr8w1",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904061947-letdj",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 6144,
+        "input_tokens": 7495,
+        "output_tokens": 399
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:19:57.300498813+08:00"
+    },
+    {
+      "id": "sevt-20260904061957-aa92j",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_f90e577896fd413e88a687d5",
+      "processed_at": "2026-09-04T14:19:57.300524501+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\taaa\n     a\taaaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaa aaaaa aaa aaaaaaaa aaaa aaaaaaaaa aaaaaaaa aaaaaaa\n     a\taaa\n     a\t\n     a\ta aaaaaaa aaaaa\n     a\t\n     a\taaaaa aaaaaaaaa aaaaaaaaa aaa aaa aaaaaaa aaaaaa aaaaaaa aaa aaaaaaaaa aaaaaa aaaa aaaaaaaa aaaa aaa aaaaa aaaaaaaaaa aaaaaaaaa aaa aaaaaa aaaaa aa aaaa aaaaaa\n     a\t\n     a\taaaaaa aaaaaaa aa aaaa aaaa aaaaaaaaa aaaa a aaaaa aaaaaaa aaaaaaaaa aa aaa\n    aa\taaaaa aaaaaaa aa aa a aaaaaaaaaaaaaaaa aaaaaaaaaaa aaaaaaaaa aaaa aaaa aaaa aaa\n    aa\taaaaa aaaaaaaaaa aaaaa aaaaaaaaaa aaa aaaaa aaaaaaaaa aaaa aaaaaaaaaa\n    aa\t\n    aa\taaa\n    aa\t\n    aa\taa aa aaaaaaa aaaaaaaaaa\n    aa\t\n    aa\ta aaaa a aaaaaaaa a\n    aa\taaaaaaaaa\n    aa\ta aaa aaaaaaaa aaaaaaaaa a aaaaa aaaaaaa aaaaaa aaaaaaaa aaaaa aaaaaa aaaaaaaaa aaaa aaaaaa aaaaa aa aaaaaaa aaaaaa aaaa a\n    aa\ta aaaaaaaaaa aaaaaaaaa aaa aaa aaaaaaaaa aaaaaa a aaaaaa aaaaaaaa aaaaa aa",
+          "_fixture_truncated_from": 11460
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904061957-vw3u3",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_f68117bb479d4b08b10cfc74",
+      "processed_at": "2026-09-04T14:19:57.388883+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa aaa\naaa aaaaaa aaa\naaaaa aaaa\naaaaaaaaaa a aaaa aaaa    aaaa aaa  a aaaaa a\naaaaaaaaaa a aaaa aaaa    aaaa aaa  a aaaaa aa\naaaaaaaaaa a aaaa aaaa aaaaaaa aaa  a aaaaa aaaaaa\n\naaa aaaaaa aaa\n/workspace/fixture-artifact aaaa aa aaaaa aaaaaaa aaa aaaaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904061957-ih0mh",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:19:57.388923080+08:00"
+    },
+    {
+      "id": "sevt-20260904061957-fljb2",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaaaaa aaaaaaaaaa aaaaaaaaaaaa aaaaaa aaa aaaaaa aaaaaaa aaaaa aaaaaaaaaa aa aaa aa aaaaa aaa aaaa aaaa aaaaaaa aaaa aaa aa aaaa aa aaa aaaaa aaaaa aa aaa aaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:03.637917522+08:00"
+    },
+    {
+      "id": "sevt-20260904061957-bbprx",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一a一aaaaa一一一一一一一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:03.637960186+08:00"
+    },
+    {
+      "id": "call_d14eae94d8544c4ab27c48ee",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:20:03.638011392+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aa /mnt/session/fixture-artifact aa aaaa aa aaa aaaaaa a aaa a aaaa aaa aaaa aaaaaa aaaaa aaaaaaa aaaaaaaaa aaaaaaaaaaa aaaaaaa aaaaaaaaaaaa aaaaaaa aa aaaaaaa aaaaa aaaaa aaaaaaa aa aaaaaaa aaaaa aaaaa aaaaaaa aa aaaaaaa aaaaaa aaaaa aaaaaaa aa aaaaaaa aaaaa aaaa",
+        "description": "aaaaa aaaa aaaa aaa aaaaaaaaa aaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062003-2y1oa",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904061957-ih0mh",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 7488,
+        "input_tokens": 10910,
+        "output_tokens": 172
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:03.815954435+08:00"
+    },
+    {
+      "id": "sevt-20260904062003-buef5",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_d14eae94d8544c4ab27c48ee",
+      "processed_at": "2026-09-04T14:20:03.815990939+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa  aaaaaaaaaaaaaaaa\naaaaaaaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa  aaa a aaaaaaaaaa\naaaaaaaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa  aaaaaaaaaaaaaaaa\naaaaaaaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa  aaaaaaa aaaaaaaa\naaaaaaaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa  aaaaaaaaaaaaaaaa\naaa\naaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaa aaaaa aaaaaa aaaa aaaaaa\n  aaaa aaaaaaaaaaa aaaa aa aa aaaaaaaa\naaaaaaaaaaaaaaaaaaaa aa aaaaaa aaaaa aaaaaa\naaaaaaaaa aaaaa aaaaaa aaaa aaaaaa\n  aaaa aaaaaaaaaaa aaaa aa aa aaaaaaaa\naaaaaaaaaaaaaaaaaaaa aa aaaaaa aaaaa aaaaaa\naaaaaaaaa aaaaa aaaaaa aaaa aaaaaa\n  aaaa aaaaaaaaaaa aaaa aa aa aaaaaaaa\naaaaaaaaaaaaaaaaaaaa aa aaaaaa aaaaa aaaaaaa\naaaaaaaaa aaaaa aaaaaa aaaa aaaaaa\n  aaaa aaaaaaaaaaa aaaa aa aa aaaaaaaa\naaaaaaaaaaaaaaaaaaaa aa aaaaaa aaaaa aaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062003-zugyg",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:03.816012211+08:00"
+    },
+    {
+      "id": "sevt-20260904062003-5zzxz",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaaaaa aa a aaa aaaaaaaaaa a aaaa aaaaaaa aaa aa aaa aaaaaaaaaa aaa aa aaa aaaaaaaaaa aaaaa aa aaaaaaaaaa aaa aaaa aa aaaaa aa aaaaa aaa aaaaa aaaaa aaaaaaaaaa aaa aa aaaaa aaaaa aaa aaaaaaaaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:10.338922207+08:00"
+    },
+    {
+      "id": "sevt-20260904062003-m82ij",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一aaa一一a一一一一一一aa一一一一一aaa一一一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:10.338945752+08:00"
+    },
+    {
+      "id": "call_527deeb9ad6947d78ca46a02",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:20:10.338980194+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaaa aaaaa aaaaaaa aaa aaa aaaa aaaaaaaaaa",
+        "command": "aaaa aaaaaaa aaaaaaa aaaaa aaaa a aaaa aaa aaaaaaa aa aaaaaaa aaaaaa aaaaaaaaaaaa aaaa aaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062010-jhdxq",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062003-zugyg",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 10880,
+        "input_tokens": 11540,
+        "output_tokens": 130
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:13.016075728+08:00"
+    },
+    {
+      "id": "sevt-20260904062013-ejp48",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_527deeb9ad6947d78ca46a02",
+      "processed_at": "2026-09-04T14:20:13.016116750+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaa a aaa aaaaaaa aa aaa aa aaaaaaaaaa aaaaaa aa aaaaaa\naaaaaaaa aa aaaaaaa aaaa aaaa aaaaaaa aaaaaaaaa aaa\naaaaa aa aaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062013-5hy97",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:13.016135788+08:00"
+    },
+    {
+      "id": "call_f43e0df95b5b4a5897ebc97c",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:20:18.376050893+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaaa aaaa aaaa aaa aaa aaaaaa",
+        "command": "aa /mnt/session/fixture-artifact aa aa aaaaaa aaaaaaaaaa aa aaaaaaa aa aaaaa\naaaa aaaaa aaaaaa aaaaaaaaa\na a aaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaaaaaaaa aaaaaaaaaaaaa\naaaa a aaaaaaaaaa\naaaaaaaaaaaaaa aaaaa\na aaaaaaa aaa aaaa\naaaaaaaa a aa\naaa aa a aa aaaaaaaaaaaaaaaaaaa\n    a a aaaaaaaaaaaaaaaa aa aa\n    aaaaaaaaaaaaaaaaaaaaaaa aaaa aaaaa aaaaaaaaaaaa\naaaa a aaaaaaaaaaaaaaaaaaa\naaaa aaaaaaaaaaaaaaaaaaaaaaa aaaa aaaaaaaaaaaaaaaaa aa aa\n    aaaaaaaaaaaaa\naaaaaaaaaaaa aaaaaaaa aaaaaaaaaa\naaaaaaaaaaaaaaaaaa\naaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062018-ahz63",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062013-5hy97",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 11520,
+        "input_tokens": 11786,
+        "output_tokens": 168
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:19.410981941+08:00"
+    },
+    {
+      "id": "sevt-20260904062019-i1kei",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_f43e0df95b5b4a5897ebc97c",
+      "processed_at": "2026-09-04T14:20:19.411027099+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaa aa\naaaaa aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaa aaaaaaaaaaa aaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaa aaaaaaa aaaaaa aaaaa aaaaaaaaa aaaaaaa\naaaaa aaaaaa aaaa\naaaaa aaaa a aaaaa\n一一一一一一一一a一一一一一一一一一\naaaaaaaaaaaa\n一a一一一一一一一a\n一一一一一一一一一一一一一一a一一一一a一a一一一一a一一一一一一a一一一一一一一一一一一一\n一a一一一一一a一一aa\n一aaaaa一一一一a一一一一一aaaaaa一aa一一一一一一一一一aaaaa一一a一aaaaaaaaa一一\naaaaa一一a一aaaaaaaaa一aaaa一一一一一一一a一一aaaaaa一一一一一一a一一a一一一一\n一一a一一一一一aaaa一一aaaaa一a一一一一一一一a一aaaaaa一一aa一a一aaa一一一一\n一一一aaa一一a一一aa一a一一一a一一a一一aa\n一aa一一一一一一一一一一一一一一一一aaaaaaaaaaa一一a一一一一一aaa一aaaa一一一一一\n一a一一aaaaaaaaa一一一一aaa一一一一一一一一一a一一一aaa一一一一aaaa一一一一aaa一\n一a一一一aaaa一一a一一一a一一一一一一一一aa一一一aaa一一一一一一一a一一一一一一一\n一aa\n一一a一一一一一a一一一一aa一一一一a一一aaaaaaa一一aaaa一一一一一aaa一一a一一一一一\n一一a一aaaa一一一一aaaaa一一一一aaaaa一一a一一一一一一一一一一一一一一a一一a一一a\n一一一一a一a一一一一一一一一一一aa\n一一a一一一a一一一一一a一一一一一aaa一一一一一aaaa一一一aaaa一一aaaaa一一aaaaaa一aa\n一一一一一aaa一一一a一aaaa一aaaaaa一一一a一一一一a",
+          "_fixture_truncated_from": 2239
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062019-xh76q",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:19.411053779+08:00"
+    },
+    {
+      "id": "sevt-20260904062019-dvefk",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaa aa a aaaaaaa aaaaaaaa aaaaaa aa a一一一一一一一一一一一一一一一一一一aaaaaaaaaaaa aaaaaa aaaaa aaaaaaaaa aaaaaaaa aaaaaaaa aaaaa aaaa aaaaaaaa aaaaaa aaaaaaaaaaa aa aaa aa aaaaaa aaa aa aaaa aaa aaaa aaaa aa aaaaaaaaaa aaa aaaaaaaa aaaa aaaa aaaaaa a aaaaaaa aaaa\n\naaa aa aaaa aaa aaaaaaaaa aaaa aaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:25.120673987+08:00"
+    },
+    {
+      "id": "sevt-20260904062019-u2mku",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa一一一一aa一一一一a一一一一一一一一一一一一一一一一一一aaaaaaaaaaaaa一aa一a一一一一一一a一一一 aaaaaaaaaa 一 aaaaaaaa aaaa 一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:25.120703151+08:00"
+    },
+    {
+      "id": "call_ac65118b77cf40e6baeaf16d",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:20:25.120736691+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/session/fixture-artifact"
+      }
+    },
+    {
+      "id": "sevt-20260904062025-5jfv6",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062019-xh76q",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 11776,
+        "input_tokens": 13622,
+        "output_tokens": 146
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:25.153843241+08:00"
+    },
+    {
+      "id": "sevt-20260904062025-oimcy",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_ac65118b77cf40e6baeaf16d",
+      "processed_at": "2026-09-04T14:20:25.153875980+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\taaaaa aaaa a aaaaa\n     a\t一一一一一一一一a一一一一一一一一一\n     a\taaaaaaaaaaaa\n     a\t一a一一一一一一一a\n     a\t一一一一一一一一一一一一一一a一一一一a一a一一一一a一一一一一一a一一一一一一一一一一一一\n     a\t一a一一一一一a一一aa\n     a\t一aaaaa一一一一a一一一一一aaaaaa一aa一一一一一一一一一aaaaa一一a一aaaaaaaaa一一\n     a\taaaaa一一a一aaaaaaaaa一aaaa一一一一一一一a一一aaaaaa一一一一一一a一一a一一一一\n     a\t一一a一一一一一aaaa一一aaaaa一a一一一一一一一a一aaaaaa一一aa一a一aaa一一一一\n    aa\t一一一aaa一一a一一aa一a一一一a一一a一一aa\n    aa\t一aa一一一一一一一一一一一一一一一一aaaaaaaaaaa一一a一一一一一aaa一aaaa一一一一一\n    aa\t一a一一aaaaaaaaa一一一一aaa一一一一一一一一一a一一一aaa一一一一aaaa一一一一aaa一\n    aa\t一a一一一aaaa一一a一一一a一一一一一一一一aa一一一aaa一一一一一一一a一一一一一一一\n    aa\t一aa\n    aa\t一一a一一一一一a一一一一aa一一一一a一一aaaaaaa一一aaaa一一一一一aaa一一a一一一一一\n    aa\t一一a一aaaa一一一一aaaaa一一一一aaaaa一一a一一一一一一一一一一一一一一a一一a一一a\n    aa\t一一一一a一a一一一一一一一一一一aa\n    aa\t一一a一一一a一一一一一a一一一一一aaa一一一一一aaaa一一一aaaa一一aaaaa一一aaaaaa一aa\n    aa\t一一一一一aaa一一一a一aaaa一aaaaaa一一一a一一一一aaaa一一aaaa一一a一a一a一一\n    aa\t一一一a一aaaaa一一一一一aaa\n    aa\t一一aaaaaaaaa一一一a一一一一a一a一一一一aaaaa一一一一一一",
+          "_fixture_truncated_from": 11697
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062025-bhbbr",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:25.153922760+08:00"
+    },
+    {
+      "id": "sevt-20260904062025-ta0u3",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaa aaaa aaa aaaa aaaaaaa aaaa a aaaaaaaaaaaaa aaaaaaaa aaaaaa aa aaaaaaa aaaaa aaaaaaaaa aaaaaaaa aaaaaaaa aaaaaaaaaaaa aaaaaaaaa\n\naa aaaa aaaaaaaa aa aaa aaaaaaaaaa\naa aaaaaaa aa aaaaaa aaaaaaaa a a aaaaaaaaaa aaaaaaaaa一一 aaaaa\naa aaaaaaa aa aaa aaaaaaaaa aaaaaaaa a aaaa aaaa aa aaaaaaaaaa\naa aaaaaaa aa aaaaaaaaaa aaaaaaaaa aaaaaaaa a aaa aaaa aaaaa\naa aaaaaaa aa aaaaaaaa aaaaaaaaa aaaaaaaa aaaaaaaaaaaaaaaaaa aaaaaaa aaaaaa aaaaaaa aaaa\naa aaaaaaa aa aaaaaaaaa a aaaaaaa aaaaaaaaa\naa aaaaaaa aa aa aaaaaaaaaa aaaaaaa aaaa aaaaaaa aaaa aaa aaaaaaaaaaa\naa aaaaaaa aa aaaaaaaaaaaa a aaaaaa aaaaaaaaa\naa aaaaaaa aa aaaaaaaa aaaaaa a aaaaaa aaaaa\naaa aaaaaaa aa aaaaaa aaaaaaaaaaa\naaa aaaaaaa aaa aaaaaa aaaaaaaaaa a aaaaaa aaaaaa aa aaaaaaa\n\naaa aaaa aaaaa a aaaaaaa aaaa aaa a aaaaaa aaa aaaaaaaaaa aaaaaaa aaaaaaaa aaaa aa aaaaaaa aaaaaaaaa aaaaa aaaaa a aaaaaaaa a aaa aaaaaaaaaaaa aaaa aaaaaa ",
+          "_fixture_truncated_from": 960
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:35.468564168+08:00"
+    },
+    {
+      "id": "sevt-20260904062025-wz5nd",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一a一一一一一一一一一一一一一一一一一一一一一一一a一一一一一一aaaaa一一a一一一一a一一a一一一一aaa一一a一一一一a一一一一a一一一一一一一一aa一一一a\n\n一一 aaaaaaaaaa 一一一一a一一一一一 aaaaaaaaaa aaaaaa 一一a一一一一一一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:35.468601624+08:00"
+    },
+    {
+      "id": "call_dd9dffdbfabb47d382f810fe",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:20:35.468641334+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062035-ulp4p",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062025-bhbbr",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 13568,
+        "input_tokens": 22391,
+        "output_tokens": 355
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:35.498720744+08:00"
+    },
+    {
+      "id": "sevt-20260904062035-cfmaf",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_dd9dffdbfabb47d382f810fe",
+      "processed_at": "2026-09-04T14:20:35.498757359+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\taaa\n     a\taaaaaaaaaaaa aaaaaaaa aaaa aaaaa aaaaaaaaa aaa aaaaaa aaaaaaa aaaaaaaaa aaa aaaaaaaaaa aaaaaaa aaaaaa aaa aaaaaa aaaa aaaaaaa\n     a\taaa\n     a\t\n     a\ta aaaaaaaa aaaa aaaaa\n     a\t\n     a\ta aaaa aaaa aaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaa aaaaaaaa aaaaa aaaa aaaa aaaa aaa aaaaaaa aaaa aaa aaaaaaaaa aaaaaa aaaa aaaaaaaaaa aaa aaaaaaaaa aaaaaaaaa\n     a\t\n     a\taaaaaa aaaaaaaaaaa aaaaaaaa aaaaaaaaa a aaaaa aaaaaaaaa a aaaaaa aaaaaaa a aaaaaaaaaa a aaaaaaaaaa aaaaaaaaaa aaaa a aaaaaa aaaaaaaaaaaa a aaaaaaaa aaaa aaaaaaa a aaaaaaa aaaaa a aaaaaaaaaaaaaaa a aaaaaaa\n    aa\t\n    aa\taaaaaaaaaaaaaaaaaaa aaaaaaaaa aaaaaaaaaaaaa\n    aa\t\n    aa\ta aaa aaaaaaa aaaa aaaaa aaaaaaaaaaa aaaaa aaa aaaaa aaaaa aaaaaaaa aaaa aaaaaaaaaa aa aaa a aaaaaaa aaaaa aa aaaaa aaaaaaaaa aaaa aaaaaaaaaaaaaa\n    aa\ta aaaaaaa aaa aaaaaaaa aaa a aaaaaaaaaa aaaa a aaaaaaaaaaaaa aaaaaaaaa aaaaa a aaaa",
+          "_fixture_truncated_from": 59474
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062035-z0hgy",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:35.498822566+08:00"
+    },
+    {
+      "id": "sevt-20260904062035-0luzk",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa a aaaaaaaaaa aaa aaaa aaaaaaaaa aaa aa aaaaaaaa\n\naaaaaa aa aaaaaa aaaaaaa aaaaaaaaaaaa a a aaaa aaa aaaa a aaaaaa aaa aaa aaaaaaaaaaaaaaa aaaaaaaaa aa aaa a aaaaaaa aaaaaaaaa aaa aaaa aaaaaaaa aaaa aaaaaa aaa aaa aaaaaaaa aaaa aa aaa aaa aaaaaaa aaaaaaaaaaa aaa aa aaa aaa aaaaaaa aaaaaaa\n\naaa aa aaaa aaa aaaaa aaaaaaaaa aaaaaa /mnt/skills/fixture-skill/SKILL.md\n\naaaaaa\naa aaaaaaa aaa aa aaaaaaaaa aaaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaa\naa aaaa aaaaaaaa aaaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaa aaaaaaaaaaaaaa aaaaaaaa aaaaaaa\naa aaaaaa aaaaaaa\naa aaaa aa aaaaaaaaaa aaaaa a aaaa aaaaaaaaaaaaaa aaaaaa aaaaaaaaaa aaaaaaaaaaaaaaaa aaaaaa aaaaaaa aaaaaaa aaaa aaa aaaa aaaaaaaaaaaa aaaaaaaaa aaaaa\naa aaaa aa aaaaa aaaaaaaaaaa aaaaaaaaaaaaa\naa aaaa aa aaaaaaaa a aaaaaaaaaa aaa aaaaa\naa aaaa aa aaaaaa\n\naaa aaaa aaaaa aaa a aaaaaaa aaa aaaa aaa aaaaaaa aaa aa ",
+          "_fixture_truncated_from": 929
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:51.270493116+08:00"
+    },
+    {
+      "id": "sevt-20260904062035-knu60",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一a一一一一一一 aaaaaaaaaa aaaaaa 一一一一一一一a\n\naa aaaa aa 一一一一一"
+        }
+      ],
+      "processed_at": "2026-09-04T14:20:51.270520257+08:00"
+    },
+    {
+      "id": "call_20b5f9b5480f4bd491de956b",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:20:51.270552405+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaaa aaa aaaaaa aa aaaaaaaa aaa aaaaa aaaaaaaaa",
+        "command": "aa /mnt/session/fixture-artifact aa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaaa aaaa a aaaa aaa aa aa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062051-rqebg",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062035-z0hgy",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 22336,
+        "input_tokens": 37494,
+        "output_tokens": 322
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:51.395204071+08:00"
+    },
+    {
+      "id": "sevt-20260904062051-l6j0v",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_20b5f9b5480f4bd491de956b",
+      "processed_at": "2026-09-04T14:20:51.395242138+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaa aaaaaaaaaaaa aaaaaaaaaa aa aaaaaaaaa\naaaaaaa aaaaaaa aaa aaaaaaaaaa aaaa aaa aaaaaaa aaaaaaa\naaaaa aaaa\naaaaaaaaaa a aaaa aaaa    aaaa aaa  a aaaaa a\naaaaaaaaaa a aaaa aaaa    aaaa aaa  a aaaaa aa\naaaaaaaaaa a aaaa aaaa aaaaaaa aaa  a aaaaa aaaaaaaaaa\naaaaaaaaaa a aaaa aaaa   aaaaa aaa  a aaaaa aaaaaaaaaaaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062051-58j5q",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:51.395261907+08:00"
+    },
+    {
+      "id": "call_9faac5666bb842178ee0c6cc",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:20:55.413887756+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaaa aaaaaaa aaa aaaaa aaa aaaaaaaaaa",
+        "command": "aaaa aaaaaaa aaaaaaa aaaaaaa aaaa a aaaa aaa aa /mnt/session/fixture-artifact aa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaaa aaaa a aaaa aaa aa aa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062055-c9vfy",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062051-58j5q",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 37440,
+        "input_tokens": 38022,
+        "output_tokens": 75
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:20:59.812192779+08:00"
+    },
+    {
+      "id": "sevt-20260904062059-bjbx0",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_9faac5666bb842178ee0c6cc",
+      "processed_at": "2026-09-04T14:20:59.812244326+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaa aa aaaaaaa aaaa aaaa aaaaaaa aaaaaaaaa aaa\n  aaaaaa aaaaaaaa aaaaaaaaaaaaaaaa aaaaaa aaaaaaaaa aaaa aaaaa\n  aaaaaa aaaaaaaa aaaaaaaaaaaaaaaa aaaaaa aaaaaaaaaa aaaa aaaaa\n  aaaa aaaaaaaaa aaaaaa aaaaaaaaaaaaaaaaa\n  aaaa aaaaaaaaa aaaaaa aaaaaaaaaaaaaaaaaa\n  aaaaaa aaaaaaaa aaaaaaaaaaaaaaaa aaaaaa aaaaaaaaa aaaa aaaaa\n  aaaaaa aaaaaaaa aaaaaaaaaaaaaaaa aaaaaa aaaaaaaaaa aaaa aaaaa\n  aaaa aaaaaaaaa aaaaaa aaaaaaaaaaaaaaaaa\naaaa aaaaa aaaaaaaa aaa aaaaaaaaa\n   aaaaa aaaaaaaaaa aaaaaaa aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaaaa /mnt/session/fixture-artifact\naaaaa aaaa\naaaaaaaaaa a aaaa aaaa    aaaa aaa  a aaaaa a\naaaaaaaaaa a aaaa aaaa    aaaa aaa  a aaaaa aa\naaaaaaaaaa a aaaa aaaa     aaa aaa  a aaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaaa a aaaa aaaa   aaaaa aaa  a aaaaa aaaaaaaaa\naaaaaaaaaa a aaaa aaaa aaaaaaa aaa  a aaaaa aaaaaaaaaa\naaaaaaaaaa",
+          "_fixture_truncated_from": 1023
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062059-to1ao",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:20:59.812275462+08:00"
+    },
+    {
+      "id": "sevt-20260904062059-oi7fx",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa aaaaaaaaaa aaa aaaaaaaaa aaa aaaaaaa aaaa aaaaaaaaa aaaaaa aa aaaaaaaaaaaaaa aaa aa aaaaa aaa aaaaaaaaaa aaaaaaa aaa aaa aaaaaaaaa aaaaaa aa aaa aa aaa aaa aaaaa aaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:06.968137996+08:00"
+    },
+    {
+      "id": "sevt-20260904062059-ubwr4",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一a一一一一一一一一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:06.968165377+08:00"
+    },
+    {
+      "id": "call_77d792c99f184bbb8e31a947",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:21:06.968217215+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaa aaaaaaaaaa aaaaaaa aaa aaaaaaaaa aaaaaa",
+        "command": "aa /mnt/session/fixture-artifact aa aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aa aaaa aaaaaaaaaaaaaa aa aa aaa aaaaaaaaaaaaa aa aaaaaaa aa a\naaaa aaa aaaaaa aaaaa\naaaaaa aaaa\naaa a aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    aaaa\n        aa a aaaaaaaaaaaaa\n        aaaaaaaa aaaaaaaa aaaaaaaa\n    aaaaaa aaaaaaaaa aa aa\n        aaaaaaaa aaaaaa aa\na aaaa a aaaa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062106-p4pmz",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062059-to1ao",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 38016,
+        "input_tokens": 38538,
+        "output_tokens": 163
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:21:07.013064633+08:00"
+    },
+    {
+      "id": "sevt-20260904062107-86ylz",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_77d792c99f184bbb8e31a947",
+      "processed_at": "2026-09-04T14:21:07.013097322+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\na\n  aaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  aaaaaaaaaaaa aaaaaaaaaaaaaaa\n  aaaaaaaaaaaaaaaaaa aaaaaa\n  aaaaaaaaa a\n    aaaaaaa aaaaaaaaaaaaa\n    aaaaaaa aaaaaaaaaaaaa\n    aaaaaaaaa aaaaaaa\n    aaaaaaa aaaaaaa\n    aaaaaaaaa aaaaa\n    aaaaaaaaaaaaa aaaaaaa\n  aa\n  aaaaaaaaaa a\n    aaaaaaaaaaa aaaaaaaaaaaa\n    aaaaaaaaaaaa aaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaa aa\n  aa\n  aaaaaaaaaaa a\n    aaaaaaaaaaaaa aaaa\n    aaaaaaaaaaaaa aaaaaa\n    aaaaaaaaaaaaaaaa aaa\n    aaaaaaaaaaaaaa aa\n    aaaaaaaaaaaaaaaaaa aaa\n    aaaaaaaaaaaaa a\n  aa\n  aaaaaaaaaaa aa\na\naaaaaaaaaaaa\naaaaa aaaa\naaaaaaaaaa a aaaa aaaa   aaaa aaa  a aaaaa a\naaaaaaaaaa a aaaa aaaa   aaaa aaa  a aaaaa aa\naaaaaaaaaa a aaaa aaaa  aaaaa aaa  a aaaaa aaaaaaaaaaaaaaaaaaa\naaaaaaaaaa a aaaa aaaa aaaaaa aaa  a aaaaa aaaaaaaaaaaaaaaaaa\naaaaaaaaaa a aaaa ",
+          "_fixture_truncated_from": 2402
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062107-detf7",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:21:07.013123482+08:00"
+    },
+    {
+      "id": "sevt-20260904062107-8welg",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aaa aaaa aaaaaa aaaa aaaaaa aaaaaaaaaaa aaaa aaaa aa aa aaaaaaaaaaa aaaaaa aaaa aaa aaaaaa a aaaaaa aaaaaaaaaaaa aaaa a一一一一一一一一一一一一一一一aa aaaa aa一一一一一一一一一一一aa aaa一一一一一一一一一一一一一一aa a一一一一一一一一一aa a一一一一一一一一一一一一一aa aaa aaaaa aaaaaaaaa aaaa aaa aaaaaaaaaa aaaaaaaa aaaaa aaaaaaaa aaaaaaaa\n\naaa aa aaaaaaa aaaa a aaa aa aaa aaaaaa aaaaaa aa aaa aaaa aaaa aaaa aaaaaaaaa aaa aaa aaaaaaaaa a aaaaaaaaa aaaaaaaaa aaaaaaa aaa aaaaa aaa aaaaaa aaaaaa a aaa aaaaaaaaaa aaaaa aaaa aa aaa aaaaaa aaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaa aaa aaaaaaaaaaaaaaaaaaa aaa aaaa aaaaaaaa aaa aa aaaa aaa aaaaaaaa aa aaa aaaaa aaaaaa aaa aaaaaaaaaaa\n\naaa aa aaaa aaa aaaaaaaaa aaaaaaaaa aa aaa aaa aaaaa aaaaaaaaaa aaa aaaaa aaaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:15.042426631+08:00"
+    },
+    {
+      "id": "call_8cd46108f8994991875a2791",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:21:15.042483045+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/session/fixture-artifact"
+      }
+    },
+    {
+      "id": "sevt-20260904062115-jg288",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062107-detf7",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 38528,
+        "input_tokens": 39790,
+        "output_tokens": 198
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:21:15.073937593+08:00"
+    },
+    {
+      "id": "sevt-20260904062115-exqes",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_8cd46108f8994991875a2791",
+      "processed_at": "2026-09-04T14:21:15.073970542+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\ta aaaaaa\n     a\t\n     a\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n     a\t\n     a\ta 一一一一一一一一一一一一一一一一一一 aaaaaaaaaaaa\n     a\t\n     a\taa 一一一一一一一一一a\n     a\t\n     a\t一一一一一一一一一一一一一一a一一一一a一a一一一一a一一一一一一a一一一一一一一一一一一一 一a一一一一一一一一aa 一一aaaa一一一一一一一一一一aaaaa一aa一一一一一一一一一aaaaa一一a一一aaaaaaaa一一\n    aa\t\n    aa\taaaa a一一a一一aaaaaaaa一aaaa一一一一一一一一一一aaaaaa一一一一一一一一一一一一一一\n    aa\t\n    aa\t一一a一一一一一aaaa一一一aaaa一a一一一一一一一a一aaa一一一一一一a一a一aaa一一一一 一一一aa一一一a一一一a一一一一一一一一一一一aa 一一a一一一一一一一一一一一一一一一一aaaaaaaaaa一一一一一一一一aaa一aaaa一一一一一 一a一一aaaaaaaaa一一一一aaa一一一一一一一一一一一一一aaa一一一一aaaa一一一一aaa一 一a一一一aaaa一一一一一一a一一一一一一一一a一一一一aaa一一一一一一一a一一一一一一一 一aa 一一a一一一一一a一一一一一a一一一一a一一aaaaaa一一aaaa一一一一一aaa一一a一一一一一 一一一一aaaa一一一一一aaaa一一一一aaaaa一一a一一一一一一一一一一一一一一一一一a一一一 一一一一一一一一一一一一一一一一一aa 一一a一一一一一一一一一a一一一一一aa 一一一一一aaaa一一一aaaa一一aaaaa一一aaaaaa一一一 一一一一一一a一一一一一一aaaa一aaa一一a一一一一一一一一aaaa一一aaaa一一a一一一一一一 一一一一一一一aaa一一一一一一aa 一一aaaaaaaaa一一一一一一一一一一a一一一一aa 一一一一一一一一一一一 aaaa",
+          "_fixture_truncated_from": 13410
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062115-f930c",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:21:15.074020857+08:00"
+    },
+    {
+      "id": "sevt-20260904062115-nxa5x",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaa aaaaaaa aa aaaaaa aaa aaaaaa aaaaaaaa a aaaaaa aaa aaaaaaaa aaaaaaaaaaaaa aaa aaa aaaa aaaaaa aaa aaaaaa aaaaaaaaaaaa aaaa aaa aaaaaaaa aaaaaa a一一一一a 一一一a 一一一a 一一一 aaaaaa aaa a aaaaaaaaaaaa aaaaaaaa aaaa aaaa aaaaaa aaaaaaa aaaa aa aaaaaa aaaaaaaaaaaaa aaaaaa aaaa aaaaaaaaa aaaaaaa aaaaaaaaaa aaaaaaaaaaaaa\n\naaaaaaa aaaaaaaaaaaa aaa aaaaaa aa aaaaaaaaaaaaa aaa aaaaaaaaaaaaaaa aaa aaaa aaaaa a aaaaaaa aaaa aa aaaa aaa aaaaaaaaaaaaaa a aaaaaa aaaaaaa aaaaaa aaaaaaaa aa aaaaaaaaaaa\n\naaa aaaa aa aaaaaaa aaaaaaaaaaaaaaa\n\naaa aa aaaa aaa aaaaaaa aaaa aaaaaa aaaaaa aaa aaaaaa aaaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:21.527352282+08:00"
+    },
+    {
+      "id": "sevt-20260904062115-0ya7t",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一a一一一一一一aaa一 a a一一一一一 a a一一一一aa一一一一a一一一一一一一一a\n\naa aaaa aa 一一一一一"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:21.527401255+08:00"
+    },
+    {
+      "id": "call_e2ed3cec67824766a86cc40d",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:21:21.527444339+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaaaaaa aaa aaaaaaa aaa aaaaaa aaaaaaa",
+        "command": "aa aaaaaaaaaa aa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaa aaaaaaaaaaaaaaaaaaaaaa aaaaaaaa aaaaaa aaaa a aaaa aaa aa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /mnt/session/fixture-artifact /mnt/session/fixture-artifact aaaa a aaaa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062121-uh0sl",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062115-f930c",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 39744,
+        "input_tokens": 48005,
+        "output_tokens": 278
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:21:21.950237907+08:00"
+    },
+    {
+      "id": "sevt-20260904062121-m5h7n",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_e2ed3cec67824766a86cc40d",
+      "processed_at": "2026-09-04T14:21:21.950291007+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaa aaaaaaaa /workspace/fixture-artifact\naaaaaaa aaa aaaa aaaaaaaaaa\naaaa aaaaaaa aaaaaaaaaaaa /workspace/fixture-artifact\naaaaa\naa aaa aaaaaa aaaaa aaaa aaaaaaaa aaa aaa aaaaaaaaaaaaaaa\naa aaaa aaaa aaaaaa aaaa aa aaa aaaaaaa aaaa\naa aaaaaaaa aaa aaaaa aaaa aaaaaaaaaaa\naaaaaaa aaaaaaa aaaaaaaaa aaa aaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062121-xec6b",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:21:21.950316956+08:00"
+    },
+    {
+      "id": "sevt-20260904062121-fcdff",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaaaaaa aaa aaaaaaa aa /workspace/fixture-artifact aaaaa aaaaaaaa aaa aaaaaaaaaaaaaa aaaaaa aaaaaaa a aaaa aaa aaaaa aaaaa aaa aa aaaaaa aaaa aaa aaaaaaa aaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:28.176379939+08:00"
+    },
+    {
+      "id": "call_ce661766bdea475b9847dcc3",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:21:28.176433639+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaa aaaaaa aaaaa aaaa aaa aaaaaaa",
+        "command": "aa aaaaaaaaaa aa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /mnt/session/fixture-artifact /mnt/session/fixture-artifact aaaa a aaaa aaa aa aaaa aaaaa aa aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062128-r7s51",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062121-xec6b",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 48000,
+        "input_tokens": 48462,
+        "output_tokens": 171
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:21:28.384046896+08:00"
+    },
+    {
+      "id": "sevt-20260904062128-g149u",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_ce661766bdea475b9847dcc3",
+      "processed_at": "2026-09-04T14:21:28.384089841+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaa aaaaaaaaa a aaa aaaaaaaa\n  a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n  a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\naaaaaaaaaa aaaaaaaaa\n  a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\naaaaaaaa aaaaa aaaaaaaaaaaa\n  a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\naaaaaa\n  a /mnt/session/fixture-artifact aaaaaaa aaa aaaaaaaaaaaaaaa aaaaaaa a aaaaaaaaa aaaaaaaa aaaaaa aaa aaaaaaaa\naaa\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaa\naaaaaaaa\naaaaaaa\naaaaa\naaaaaa\naaaaaaaaaaaa\naaaaa\naaaaaaa\naaaaaaaaa\naaaaaaaaaa\naaaaaaaaa\naaaaaaaaaa\n\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaaaaaa\naaaaaaaaaa\naaaaaaaaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062128-fn6h6",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:21:28.384112565+08:00"
+    },
+    {
+      "id": "sevt-20260904062128-dfvj8",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaa aaaaaaaaaaa aaa aaaaaaa aaaaaaaaa aaaa aa aaaaaaaa aaaaaa a aaaaaaa aaaa aaaaaa aaaaa aaaaaa aaaaaaa aaa aaaaaaaa aaaaaaaaa aaaaaa aaaaaaa aaaaaaaa aa aaaa aa\n\naaaa aa aaaaaaaaaa aaaaaa a aaaa aa aaaa aaaaaaaaaaaaaaaaaaaaaaaa aaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:34.854253382+08:00"
+    },
+    {
+      "id": "sevt-20260904062128-tercw",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一aaaaa a 一一一一a一一一一一一一一一一一一a一aa一一一一一一aa一一a\n\naa aaaa aa aaaaaaaaaa 一一"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:34.854273822+08:00"
+    },
+    {
+      "id": "call_ff2b9671f05141c7b35bc1a6",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:21:34.854305329+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062134-in71r",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062128-fn6h6",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 48448,
+        "input_tokens": 48911,
+        "output_tokens": 118
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:21:34.896143635+08:00"
+    },
+    {
+      "id": "sevt-20260904062134-07xui",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_ff2b9671f05141c7b35bc1a6",
+      "processed_at": "2026-09-04T14:21:34.896193450+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\ta aaaaa aaaaaaaaaa\n     a\t\n     a\taa aaaa aaaaaaa\n     a\t\n     a\taa a aaaaaaaa aa aaaaaaaaaaaa aaaaaaaaaaa aaaaaaa aaaaaa aaaaaaaaaa aaaaaaa aaaaaaa aaaaaaaa aaa aaaaaa aaaaaaaaa aaa aaaaaa aaa aaaaaaaa aaaaaaaaaaaaa a aaaaaaa aaaaaaaaa aaaaaaaaaa aaaaaaaaaaaaaaa\n     a\t\n     a\taa aaaaaaaa aaaaaaa\n     a\t\n     a\ta aaaaaaaa aaaa a aaaaaaa a aaaa aaaa a\n    aa\taaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n    aa\ta aaaaaaa aaaaaaaa a aaaaaaaa aaaaaa aaaaaaaaa a aaaaaaaaaaaaaaa aaaaaaaaaa aaaaaaaaaaaa aaaaa a aaaaaa aaaa a aaaaaaaaaaaaaaa aa aaaaaaaa a\n    aa\t\n    aa\taaa\n    aa\t\n    aa\taa aaaaaa aaaaaa aaaaa aaaaaaaaa\n    aa\t\n    aa\ta aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaa aaa aaaa aaaaaa aaaaa aaaaaaaaaaaaaa a aaaaaa a aaaaaaaaaa aaa aaa aaaaaaaaaaaaaaaa aaaaaaaa aaaaa\n    aa\t\n    aa\taaa\n    aa\t\n    aa\taa aa aaaaaaaaaa aaaaaaaaaaaa aaaaa\n    aa\t\n    aa\ta aaaaaa a aaaaaaaaaaaaaa a",
+          "_fixture_truncated_from": 64755
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062134-ep6g0",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:21:34.896269093+08:00"
+    },
+    {
+      "id": "sevt-20260904062134-yutcx",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaa aaaa aaa aaaaaaaaaa aaaaa aaa a aaaa aaa\n\naa aaaa aaa aaaaaaaaaaaaaaa aaa aaaaaaaaaaaaaaaaaaaaaaa aaaaaa aaaaaaaaaaaa aaaaaa aaa aaa\naa aaaaaaa aaaaa a aaaaaaaaaaaaaa aaaaaaaaa aaaaaaaaaaaaaaa aaa aaaaaa aaaaaaa aaa\n\naaa aaaaaa aaaaaaaa aaaaaaa aaa aaaa aaa aaaaaaaa aaaaaaa aaa aaaaaa aaaaaaaa aaaaa aaaaaa aaaa a一一一一一a aaaaaaaaaaaaa aaaaaaaa aaaaaaa aaaa aa a aaaaaaaaaaaaaaaaa aaaaaaa aa aaaa aaaaaaaaaaa\n\naaa aa aaaaa aaaa aaa aaaa aaa aaaaaaaaaaaa aaaaaaaa aaaaa aaaaa aaaa aa a aaaaaaaaaa aaaaaaa a aaaaaa aaaaaaaa aaaaaaa aa aaa aaaaaaa aaa aaaaaa aaa aaaaaaaaaaaaa aaa aaaaaaa aaaaaa aaaaaa aa aaaaaaaa aaaaaaaa aaa a aaaaaaaaaaaa aaaaaaaa aaaaa aaa aaaaaaaaa aaaaaa aa aaaa aaaaa aaaaaaa aaaaaaaaa aaa aa aaaaa a aaa aaaaaa aaaaaa aaa aaaaaaaaa aaaaaa aaaaaaaaaaaaa aaaaa aaaa aaaaa aaaa aaaaaaaaaaaa aaaa a aaa aaaaaaa aaa aaaaaaaaa aaaaaaaaaa aaaa aa aaaaaa aaaaaa aaaaaa aa aaaaaaaa ",
+          "_fixture_truncated_from": 962
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:48.587436637+08:00"
+    },
+    {
+      "id": "sevt-20260904062134-ky9zp",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一 aaaaaaaaaa 一一a一一一 aaaa 一一一一一一一一一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:21:48.587462576+08:00"
+    },
+    {
+      "id": "call_5792d7905dea4dbf88a0c51f",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:21:48.587494273+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "call_8a951008962e4b2798f8462f",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:21:48.587506552+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062148-ukpjo",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062134-ep6g0",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 48896,
+        "input_tokens": 64478,
+        "output_tokens": 282
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:21:48.610673738+08:00"
+    },
+    {
+      "id": "sevt-20260904062148-nrtat",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_5792d7905dea4dbf88a0c51f",
+      "processed_at": "2026-09-04T14:21:48.610717965+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\ta aaaaa a aaaaa\n     a\t\n     a\ta aaaaaaaa aa aaa aaaaaa aaaaaaaaaaa a aaaaaaaaaa aaaaaaaaaa a aaa aaa aaaaaaaa aa aaaaaaaaa aaa aaaaaaaa aaaaaa aaaaaa aaaa aaaaa aaaa aaa aaaaaaa aa aaaaaa aaaa aaaaaaaaaaa aaaaa aaaaaa aaaaaaaaaaaaaa aaaaaaaaaaa aaa aaaaaaaaaaaaa aaaaaaaaa\n     a\t\n     a\ta a aaaa aa aaaaa a aaaaaa aaaaaa aaaaaa a aaa aaa aaaaaa aaaaaa aaaaa a aaa aa aaaaaaa aaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaa aaa aaa aaaaaa aaaaaaaaaaaaa a aaa aaaa aaaaa aaaa aaa aaaaaa aaaaa aa aaaaaaaaa aaaa aaa aaaa aaaaaaaaaaaaaaa aa aaaaaaaaaaaaa\n     a\t\n     a\taaa\n     a\t\n     a\taa aa aaaaaaa aa aaaaaa\n    aa\t\n    aa\taaaa aaaa aaa aaa aaa aaaa aaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaaaaaaa aaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaa aaa a aaaa aaaaaaaa aaaaaaaa a aaaaaa aaaa aaaaa aaaa aaa aaaaa a aaaaaaaaaaaaa aaaaaaaa aaaaa aaaaa aaaaaa aaaaa aa aaaaaaaaaaaaaaaaaa a aaaaa ",
+          "_fixture_truncated_from": 9402
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062148-py7dw",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_8a951008962e4b2798f8462f",
+      "processed_at": "2026-09-04T14:21:48.613398425+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "     a\ta aaaaaa aaaaaa a aaaaa\n     a\t\n     a\ta aaaaaaaa aaaaaaa aa aaa aaa aaaa aaaaaaaaa a aaaaa aaaaaaaaa aaaaaaaaaa aaaaaaaa aaaaaaaaaa aaaaaaa aaaaaaaaaaa aaaaaaaaaa aaaaaaa a aaaaaaaaaa aaaa aaaaa aaa aaaaaaa aa aaaaaaa aaa aaaaaaaaa aa aaa aaa aaaaaa aaaaaa aaaaaaa aaaaaaaaa aaaaaaaa aaaaaa aaaaaaa aaaaaa aaaaa\n     a\t\n     a\ta aaaaaaaa aaaaa aa aaaaa aaa aaa aaaa aa aaaaaaaaaa aaaa aaaaa aaaaaaaa aaa aaaaaaaaa aaaa aaaaaaaa aaaa aa aaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaa aaaaaaaaaaaaa aaaaa a aaaaaa aaaaa aaaaaaaaa aaa aaaaa aaaaaaa aaaaaa aa aaa aaaaaaaaaaa aaa aaa aaaa aaa aaaaaaaaaa aaaaaa aaaaaaaaaa aaaaaaaa aa aaaaaaaa aaaaaaaaaaaa aa aaaa aaa aaaaaaaaaa aa aaaaaaaaa aaaaaaaa aaaaaaaaa aaaaaa aaaaaa aaa aaaa aaaaaa aaaaa aaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aa aaaaaa aaaaaaaaaaaaa aaaaaaaa aaaaa\n     a\ta\n     a\ta a aa",
+          "_fixture_truncated_from": 11112
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062148-ze0ko",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:21:48.613445846+08:00"
+    },
+    {
+      "id": "sevt-20260904062148-wc3ep",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaa aaaa aaaa aaaaaaaa aaa a aaaaaaaaaaa\n\na aaaa aa a aaaaaaaa aaaaaaaaaaaaaaa aaaaaaaa aaaa a aaa aaaaaaaa aaaaaaaa aa aaaaaaaaaaaaaaaaaa aaaaa aaaaa aaaaa aaaaaaa a aaaaaaaaaaa a aaaaaaaaa aaaa aaaa aaaa aaaaaaaaa aaaaaaaa aaaaaaaaa aaaaaaaaaa aaa aaaaaa aaaaaa aaaaaaaa a aaaa aaaaaaaa aaa aaaa aaaaaaaa aaaaa\na aaaaaa aaaaaa aaaa aa a aaaa aaaaaa a aaaaaa aaaaaa a aaaaaaaaaaaaaaaaa aa aaa aaaaaaaaaaa aaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaaaaa aaa aaaaaa aaaaa aaaaaa aaaa a一一一一一a aaaaaaaaaaaaa aaaaaaaa aaaaaa a aaaaaaaaaaaaaaa aa aaaaaaaaa aaaa aaaa aaa a aaaaaaaaa aaaa a aaaaaaaaaaaaaaaaaa aaaaaaa a aaaaaaaaaaaa aaaa a aaaaaaaaaaaa\n\naaaa a aaa aaa aaaaaaaaaa aaaaa aaa aaaaaa aaaaa a aaaa aaaaaaa aa aaaaaaaa aaaaaa aaaaaaaa aaaa a aaaaaaa a aaaaa aaaa aaaaaaaaaaa aaaaa aaa aaa aaaaa aaaaaaaaa aaaa aaaaaaaaaaaaaaa\n\naaaa aaaaa aaaaaaa aaa aaaaaa aa aaaaaaaaaaa aaa aaaaa",
+          "_fixture_truncated_from": 2449
+        }
+      ],
+      "processed_at": "2026-09-04T14:22:04.069327608+08:00"
+    },
+    {
+      "id": "sevt-20260904062148-ddf0d",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "一一一一一一一一一a一一一一 aaaaaaa aa 一一一一一a一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:22:04.069357693+08:00"
+    },
+    {
+      "id": "call_27856dae325f4564a28ecdc1",
+      "type": "agent.tool_use",
+      "name": "read",
+      "processed_at": "2026-09-04T14:22:04.069389210+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "file_path": "/mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062204-iw2go",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062148-ze0ko",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 64448,
+        "input_tokens": 70157,
+        "output_tokens": 570
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:04.105457001+08:00"
+    },
+    {
+      "id": "sevt-20260904062204-yy6tm",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_27856dae325f4564a28ecdc1",
+      "processed_at": "2026-09-04T14:22:04.105477592+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaa aaaaaa /mnt/skills/fixture-skill/SKILL.mdaaa"
+        }
+      ],
+      "is_error": true
+    },
+    {
+      "id": "sevt-20260904062204-y76bz",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:04.105496380+08:00"
+    },
+    {
+      "id": "call_2d3e429eff3049f496ba4829",
+      "type": "agent.tool_use",
+      "name": "glob",
+      "processed_at": "2026-09-04T14:22:08.543774155+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "path": "/mnt/skills/fixture-skill/SKILL.md",
+        "pattern": "aaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062208-6q6gw",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062204-y76bz",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 70144,
+        "input_tokens": 70813,
+        "output_tokens": 27
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:08.580322034+08:00"
+    },
+    {
+      "id": "sevt-20260904062208-4fyjk",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_2d3e429eff3049f496ba4829",
+      "processed_at": "2026-09-04T14:22:08.580342955+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062208-vyogc",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:08.580362014+08:00"
+    },
+    {
+      "id": "call_f617e14f858748e6ab7db41c",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:13.981341063+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaa aaaaaaa aa aaaa aaa aaaaaaa aaaaaa",
+        "command": "aaaa /mnt/skills/fixture-skill/SKILL.md aaaaa aaaaaa aaaaa aaaaaaaaaaa aaaaaaaaaaaa aaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaa a aaaaa a aaaaaaaaaaaa aa /mnt/skills/fixture-skill/SKILL.md a aaaa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062213-gbsx7",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062208-vyogc",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 70784,
+        "input_tokens": 70896,
+        "output_tokens": 84
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:14.014310698+08:00"
+    },
+    {
+      "id": "sevt-20260904062214-02dhf",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_f617e14f858748e6ab7db41c",
+      "processed_at": "2026-09-04T14:22:14.014341504+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md\n/mnt/skills/fixture-skill/SKILL.md",
+          "_fixture_truncated_from": 1940
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062214-6xpo9",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:14.014362896+08:00"
+    },
+    {
+      "id": "call_d962ec3258044bebaaf0ce79",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:18.286221152+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aa /mnt/skills/fixture-skill/SKILL.md aa aaaa aaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaaaa a aaaa aa aa aa aaaaaaaaaaaaaaaaaaaaa aaaaa a aaaa aaa aaaa aaaaaa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaa aaaa a aaaa aaa",
+        "description": "aaaaaaa aaaaaaa aa aaaaaa aaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062218-yxcct",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062214-6xpo9",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 70848,
+        "input_tokens": 71575,
+        "output_tokens": 108
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:18.394581490+08:00"
+    },
+    {
+      "id": "sevt-20260904062218-3pkfy",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_d962ec3258044bebaaf0ce79",
+      "processed_at": "2026-09-04T14:22:18.394615420+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaaaa\naaaaaaaaa\naaaaaa\naaa\naaaaaaaaa aaaaa aaaaaa aaaa aaaaaa\n  aaaa a/mnt/skills/fixture-skill/SKILL.mdaa aaaa aaa aa aaaaaaaa\n    aaaa aaaaa aaaaaa aaaaaa aaaaaaaa aaaaaaaa aaaaaaaaaaaaaaaaaaa\naaaaaaaaaaaaaaaaaaaa aa aaaaaa aaaaa aaaaaaa\n\naaa aaaaaa aaa\naaaaa aaaaaa aaaa aaaa aaa aaaaaaaa aa aaaa aaaa aa aaaaaaaaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062218-f66l7",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:18.394658144+08:00"
+    },
+    {
+      "id": "sevt-20260904062218-ywx6m",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aa aaaaaaaa a aaaa aa aaaaaaa aa aaa aaa aaaaaaa aa aaaaaaa aaa aa aaaaaaa aaaaa aaa aaaaa aaa aaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:22:26.692242911+08:00"
+    },
+    {
+      "id": "call_0324e00b57d44b72a54854ba",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:26.692282640+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaaa aaaaa aaa aaaa aaaaaaa aaaaaa aaaa",
+        "command": "aaaa aaaaaaa aaaaaaa aaaaa aaaa a aaaa aaa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaa aaaa a aaaa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062226-9ci1c",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062218-f66l7",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 71552,
+        "input_tokens": 71829,
+        "output_tokens": 87
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:29.976002447+08:00"
+    },
+    {
+      "id": "sevt-20260904062229-nahet",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_0324e00b57d44b72a54854ba",
+      "processed_at": "2026-09-04T14:22:29.976059432+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaa aa aaaaaaa aaaa aaaa aaaaaaa aaaaaaaaa aaa\naaaaaa aaaaaaaaa aaaa aaaaaaa aaaaa aaaaaaaaaaaaaa aaaaaaaaaa aaaaaaaa\n                 aaaaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaaaaaaaa\n                 aaaaaaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaaa aaaaaaaa\n                 aaaaaaaaaaaa\n                 aaaaaaaaaaa\n\naaa aaaaaa aaaaaaaaaa aaaaaaaaaaaa aaaaa aa\n\naaaaaaaaaa aaaaaaaaaa\n  aaaaaaaaaaa           aaaa aa aaaaaaa aaaaaaaaa\n\naaaaaaaa\n  aaa aaaaaa            aaaa aaaa aaaa aaaaaaa aaa aaaa\n  aaaaaa aaaa           aaaa aa aaaaaa aa aaaaaaaaa aaaaa\n  aaaaaaaaaaaa          aa aaa aaaaaaaaa aaaaaaa\n  aaaaaaaa              aaaaa aaa aaaaaa aa aaa aaaaaaaaaaa aaaaaaa aaaa\n                        aaaaaa aa aaaaa aaaaa aaaaaaaaaaaa\n  aaaaaa                aaaa aaaaaaaaa aaaa aaaaa a aaaaa aaaaaaaaaaa aa\n                        aaaaaaa\n  aaaaaaaaaaa           aaaaaa aa ",
+          "_fixture_truncated_from": 2032
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062229-rrfuw",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:29.976088696+08:00"
+    },
+    {
+      "id": "sevt-20260904062229-nqpll",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaa aaa a aaaa aa aaaaa aaa aaaaaa aaaa aaaaaaa aaa aa aaaa aa aaa aaaaaa aaaaa aa aaaa aaa aaaaaa aa aaaaaaaaa aa aaaaaaaaaa aaaa aaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaa aaaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:22:37.792819392+08:00"
+    },
+    {
+      "id": "call_9c0b818edac64966b3ca0fc0",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:37.792875045+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaa aaaaa aaaa aaaaaa aa aaaaaaa aaaaaa",
+        "command": "aaaa aa aaaaaaaaaaaaaaaaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md a aaaa aaaa aaaa aaaa aa /mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062237-pplcn",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062229-rrfuw",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 71808,
+        "input_tokens": 72369,
+        "output_tokens": 110
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:37.837706670+08:00"
+    },
+    {
+      "id": "sevt-20260904062237-qqu8q",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_9c0b818edac64966b3ca0fc0",
+      "processed_at": "2026-09-04T14:22:37.837734001+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaa    aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaa    aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaa    aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaa    aa aaa aa aaaaa aaaaaaaaa aaaaaaaaa\naaaa        aaaaaa aaaaaaaa\naaaa    aa aaa aa aaaaa aaaaaaaaa aaaaaaaaa\naaaa        aaaaaa aaaaaaaa\naaaa    aa aaa aa aaaaa aaaaaaaaa aaaaaaaaa\naaaa        aaaaaa aaaaaaaa\naaaa    aa aaaaa aa aaaaaaaaa\naaaa    aa aaaaa aa aaaaaaaaa\naaaa    aa aaaaa aa aaaaaaaaa\naaaa        aaaaaa aaaaaaaa\naaaa        aaaaaa aaaaaaaa\naaaa        aaaaaa aaaaaaaa\naaaa    aaaaaaaaa aaaaaa aaaaaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaaaa\naaaa    aa aaaaa aa aaaaaaaaa\naaaa    aa aaaaa aa aaaaaaaaa\naaaa    aa aaaaaaaaaaaa aa aaaaaaaaa\naaaa    aa aaaaaaaaaaaa aa aaaaaaaaaa aaaaaaaaa\naaaa    aaaaaa aaaaaaa aaaaaaaa aa aaaaa aaaaaaa a aaaaaa a aaaaaaaa a\naaaa    aaaa a aaaaaaaaaa aaaa aaaaa aaaa aaaaa a aa aaaaaaaaa aa a aaaa ",
+          "_fixture_truncated_from": 2629
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062237-83h7q",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:37.837763064+08:00"
+    },
+    {
+      "id": "call_c9e03b29719b4ebd95f25265",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:43.056668078+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaa aa aaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md",
+        "description": "aaaa aaaaaa aaaaaaaaaa aaaaaaaaaaaa aa aaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062243-pvz9w",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062237-83h7q",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 72320,
+        "input_tokens": 73327,
+        "output_tokens": 46
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:43.097304395+08:00"
+    },
+    {
+      "id": "sevt-20260904062243-kxon4",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_c9e03b29719b4ebd95f25265",
+      "processed_at": "2026-09-04T14:22:43.097332567+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n        aaaa a aaaaaaaaaaaaaaaaaaaa\n        aa aaa aaaaaaaaaaaaaaaa aaaaaa\n            aaaaaa aaaaaaaaaaaaaaaa aaaa aa aa aaaaaaa\n        aaa aaaaa aa aaaaaaa aaaaaaaa aaaaaaa\n            aa aaa aaaaaaaaaaaaaaaaaaaaaaaaaaa aaaa aa aaa aaaaaaaaaaaaaaaaaaaa\n                aaaaaa aaaaaaaaaaaaaaaaaaaaaaaa aaaa aa aaaaaaaaaa\n    aa aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        aaaaaa aaaaaaaaaaaaaaaaaaa aaaa aa a aaaaaaaa aaaaaaa\n    aa aaa aaaaaaaaaaaaaa\n        aaaaaa aaaa\n    aaaaa a aaaaaaaaaaaaaaaaaaaaaaa\n    aa aaa aaaaaaaaaaaaaaaaa aaaaaa\n        aaaaaa aaaaaaaaaaaaaaa aaaa aa aa aaaaaaa\n    aaa aaaa aa aaaaaaaaaaaaaaaaaaaaaaa\n        aa aaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n            aaaaaa aaaaaaaaaaaaaaaaaaaaaa aaaa aa a aaaaaaaa aaaaaaa\n    aaaaaa aaaa\n\n\naaa aaaaaaaaaaaaaaaaaaaaa aaaaaaa aa aaaaa\n    aaaaaaaaa aaaaaaaaaa aaaa aaa aaaaaaa",
+          "_fixture_truncated_from": 9021
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062243-no4v8",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:43.097365296+08:00"
+    },
+    {
+      "id": "sevt-20260904062243-f5c52",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "a aaaaaaaaaa aaa aaaaaaaaaa aaaaaaaaaaaaa aaa aa aaaa aa aaa aaaaaa aa aaaaa aaa aaaaaaa aaaaaaaaaaaaa aaaa aaaaaaaaa aa aaa aaa aaaaa aaaaaaa aaa aa aaaa aa aaa aaaaa aa aaaaaaaaa aaaa aaaa aaaaaa aaaaaaaaaaaaaaaa aaa aaaa aa aaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaa aa aaaaaaaaaa aaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:22:49.002665824+08:00"
+    },
+    {
+      "id": "call_ca8d574b52b144a79ee1d57d",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:49.002711693+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaa aaaaaaa aaa aaaaaaaaaa aaaaaaaaaa aaaaaaaaa",
+        "command": "aaa aa aaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062249-fvlih",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062243-no4v8",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 73280,
+        "input_tokens": 75295,
+        "output_tokens": 105
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:49.047976105+08:00"
+    },
+    {
+      "id": "sevt-20260904062249-vuoby",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_ca8d574b52b144a79ee1d57d",
+      "processed_at": "2026-09-04T14:22:49.048015053+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaa aa aaaa\n    aaaaaaaaa aaa aaaaaaaaaaaaaa aaaaa aaaa aaaaaaa aaa aaaaaaa aaaaaaaaaa\n    aa aaaaaaaaaaaa aa aaaaaaaaa\n        aaaaaa a\n    aa aaaaaaaaaaaa aa aaaaaaaaaa aaaaaaaaa\n        aaaaaa a\n    aaaaaa a\n\n\naaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaa aaaaaaaaaaaaa aaaa aa aaaaa\n    aaaaaaaaa aaa aaaaaaaaaaaaaa aaaaaaaaaaaaaa aaaa aaa aaa aaaaaaaaaaa\n    aaaaaa aaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\n\naaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaa aa aaaaa\n    aaaaaaaaaa aaa aaaaaaaaaaaaaa aaaa aaa aaa aaaaaaa aaaaaaaaaaaa aaaaaa\n\n    aaaa aaa aaaaaaaaaaaaaa aaaa aaaaaaa aaa aaaaaa aaaaaaaaaaa aaaaa aa aaaaaaaa\n    aa aaa aaaaaaaa aaaaa aa aaaaaaa aaa a aaaaa aaaaa aaaaaaa aaaaaa aaaa aaaaa\n    aaaa aa aaa aaaaaaaa aaaaaaaaaa aaaaa aaa aaaaaa aaa aaaaaaaa aaaaaa\n    aa",
+          "_fixture_truncated_from": 7346
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062249-vcns3",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:49.048047242+08:00"
+    },
+    {
+      "id": "call_dba4cadc272f4fa8bc479207",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:22:59.198754531+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaa aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aa a /mnt/skills/fixture-skill/SKILL.md a aaaa aaaa aaaa aaaaaa aaaa aa aaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md a aaaa aaa",
+        "description": "aaa aaaaaaa aaaaa aaa aaaaa aaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062259-joics",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062249-vcns3",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 75264,
+        "input_tokens": 77100,
+        "output_tokens": 106
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:22:59.239463737+08:00"
+    },
+    {
+      "id": "sevt-20260904062259-i5kpp",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_dba4cadc272f4fa8bc479207",
+      "processed_at": "2026-09-04T14:22:59.239501053+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaaaaaaaaaa a a\naaa    aaaaaaaaaaaaa\naaa    aaaaaaaaaaaaaaa\naaa    aaaaaaaaaa\naaa    aaaaaaaaa\naaa    aaaaaaaaaaaaaaaaaaa\naaa    aaaaaaaaaaaa\naaaa\naaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaa aaaaaaaaaaa aaaaaaaaaaaaa\naaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaa\naaaaa aaaaaa aaaaaa aaaaaaaa aaaaaa aa aaaaaaaaaaaaa aaaaaaa aaaaaa aaaa aaaa aaaaaaaa\naaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaa a aaaaaaaaaaaaaaa\naaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaa a aaaaaaa\naaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaa a aaaaaaaaaaa\naaaaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaa\naaaaaaaaaaaaaaaaaaaaaaaaa a a\naaa\naaaa    aaaaaaaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062259-meqer",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:22:59.239523286+08:00"
+    },
+    {
+      "id": "call_2798f858fbcb485abae011bf",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:23:04.221713013+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaa aa aaaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md",
+        "description": "aaaa aaaaaa aaaaa aaaaaaaa aaaaaa aaaa aaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062304-l28hk",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062259-meqer",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 77056,
+        "input_tokens": 77516,
+        "output_tokens": 48
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:23:04.262088570+08:00"
+    },
+    {
+      "id": "sevt-20260904062304-4o2pl",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_2798f858fbcb485abae011bf",
+      "processed_at": "2026-09-04T14:23:04.262123793+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n        aaaaaaaaaaaa\n        aaaaaaaaaaaaaaaaaaaaaaaa\n        aaaaaaaaaaaa\n    a\n    aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaa\n    aaaaaa aaaaaaa\n\n\na aaaaaaaaaaaaa aaaaaaa aaa aaa aaaaaaaa aa aaaaa aaaaaa aa aaaaa aaaaaa aaaa\na aaaa aa aaaaaaa aaaaa aaa aaaaa aa aaaa aa aaaaaaaa aaaa aaaa aaaa aaaaaaaaaaa\na aaaa aaa aaaaaa aaaaaaaaaaaaaaa aa a aaaaaaa a aaaaaa aaaaaaa aaaa aaa aaaaaa\na aaaaaa aaaaaaaaaaaaa aaaaaaaa aaa aaaaaaaa aaaaaaaaaaaaa aaaaaaaa\naaaaaaaaaaaaaaaaaaaaaaaa a a\n    aaaaaaaaa\na\naaaaaaaaaaaaaaaaaaaa a a\n    aaaaaaaaaaa\n    aaaaaaaaaaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaaaaaaaa\n    aaaaaaaaaaaaaaaaaaaaa\na\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a a\n    aaaaaaaaaaaaaaaaaaa\n    aaaaaaa\n    aaaaaaaaaaaaaaa\n    aaaaaaaa\n    aaaaaaaaaaaaaa\na\naaaaaaaaaaaaaaaaaaaaaaaaaa a a\n    aaaaaaaaaaaaaaaaa\n  ",
+          "_fixture_truncated_from": 5275
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062304-wdt8v",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:23:04.262153287+08:00"
+    },
+    {
+      "id": "sevt-20260904062304-gaict",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa a aaaa a aaaa aaaaaaaaaaaaa aa aaa aaaaaa aaaaaaaaaaaaaa aaaaaaa aaa aaaaaa aaaa aaaa\na aaaaaaaa aaaaaaaa\na aaaaaaaaaaaa a aaaaaaa aaaaaaaaa aaa a\na aaaaaaaaaaaaa aaaaaaaa aaaaaa aa aaaaaaaa aaaaaa aaaaaaaaa aaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaa\n\naaa aa aaaaa aaa aaaaaa aa aaa aaaaaaa aaaa aaaaaa aaa aa aaaaaaa aaa aaaaaaa aaaaaaaaa aaa aa aaaaa aa aaaaaaa aa aaaaaaaa aaaaaaa aa aaa aaaaa aaaaaaaaaa aaa aa aaaaaa aaa aaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaa aa aaa aaaaa aaaaaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:23:11.677386459+08:00"
+    },
+    {
+      "id": "call_7d3a06bd3a7a4fcb987fd18d",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:23:11.677441532+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaa aaa aaaaaaaa /mnt/skills/fixture-skill/SKILL.md a aaaa aaaa aaaa aaaaaa aaaa aa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md a aaaa aaa",
+        "description": "aaaaa aaaaaa aaaaaa aaaaa aaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062311-q99jl",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062304-wdt8v",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 77504,
+        "input_tokens": 78819,
+        "output_tokens": 219
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:23:11.725441718+08:00"
+    },
+    {
+      "id": "sevt-20260904062311-01a0t",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_7d3a06bd3a7a4fcb987fd18d",
+      "processed_at": "2026-09-04T14:23:11.725472735+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaa            aaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaaa aaaaaa aaaaaaa aaaaaaaaaaaaaaaa aaaaa aaaaaaa aa aaaaa aaaaa aaaaaaaaaaaa aaaaa aaa aaaaaaa aaaa aaaaaaaa aaaaaaaaa aaaaa aaaaaaaaa\naaaa            aaaaaaaaaaaaaaaaaaaaaaaaaa a一一一一一一一一一一一一一一一一一a一一一一一一一一一一一一一一一一一一一一一a一一一一一一一一一一一一一一一一一一一一一一一aaa\naaaa            aaaaaaaaaaaaaaaaaaaaaaaaaa a一一一一一一一一一一一a一一一一一a一一一一一a一一一一一一一一一一一一一a一一一一一一一一aaa\naaaaa        aa aaaa aaa aaa aa aaa aaa aaaaaaaa aa aaa aaa aaaaaaaa aaaaaa aa\naaaaa        aa aaaaaa aaaaaaaaaaaaaaaa a aaaaa aaa a a aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaa\naaaaa    aaaaaaaa aaaaaaaaaaaaaaa a\naaaaa        aaaaaaaaaaaaa a aaaaaaaaa\naaaaa        aaaaaaaaaaaaaaaaaaaaaaaaaaaa aaa\naaa\naaa            aaaaaaaaaaaaaaaaaaaaa aaaaa aaaaaa aaaa aaaaaaaaaaaa aaaaaaaaaaaaa\naaa            aaaaaaaaaaaaaaaaaaaaaaaaaa aaaaa aaaaaa a aaaaaaa aaa aaaa aaaaaa aaaaaaa a",
+          "_fixture_truncated_from": 2734
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062311-bohvz",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:23:11.725507236+08:00"
+    },
+    {
+      "id": "call_2e8911bded3249eba2d2045e",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:23:16.640091629+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaa aaaaaaaaaaaaa aaa aaaaaa aaaaaaa aaaaaaaaa",
+        "command": "aaa aa aaaaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md"
+      }
+    },
+    {
+      "id": "sevt-20260904062316-hfxet",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062311-bohvz",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 78784,
+        "input_tokens": 79950,
+        "output_tokens": 50
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:23:16.681168805+08:00"
+    },
+    {
+      "id": "sevt-20260904062316-fqsph",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_2e8911bded3249eba2d2045e",
+      "processed_at": "2026-09-04T14:23:16.681223708+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\n            aaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaa\n            aaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaa\n        aa\n    a\n\n    aaaaaaaa aaaaaaaaaaaaaaa a\n        aaa aaaaaaa a aaaaaaaaaaaaaaaaaaaaaaa\n        aaaaaaaaaaaaa a aaaaaaaaa\n        aaaaaa aaaaaaaa\n    a\n\n    aaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a\n        aa aaaaaaaaaaaaa aaa aaaaaaaaa aaaaaa aaaaaaaaaaaaaaaaaaaaaa\n        aa aaaaaaaaaaaaaaaaaaaaa aaa aaaaaaaaa aaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n        aaa aaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaa\n        aa aaaaaaaaaaaaaa aa aaaaaaaaaaaaaaaaaaaaaaa aaa aaaaaaaaa a\n            aa aaaaaaaaaaaaaaaaaaaaaaaa aa aaaaaaaaaaaaaaaaaaaaa a\n                aaaaaaaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaa\n            a\n            aaaaaa aaaaaaaaaaaaaaaaaaaaa\n        a aaaa aa aaaaaaaaaaaaaaa a\n            aaaaaa aaaaaaaaaaaaaaaaaaaaaaa\n         ",
+          "_fixture_truncated_from": 5877
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062316-bwp0z",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:23:16.681253923+08:00"
+    },
+    {
+      "id": "sevt-20260904062316-jv3gw",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa a aaaaaaaaaa aaa aaaaaa aaaaaa aaa aa aaa aaaaa aaa aaaaa a aaaaaaaaaaaaaaa aaaaa aaa aaaaaa aaaa aaaaaa\na aaaaaaaa aaaaaaaa\na aaaaaaaaaaaa a aaaaaaaaa aaaaaaaa a\na aaaaaaaaaaa aaaaaaa aaaaaaa aaaaaaaaaaaaaaaaaaaaaaa aaaaaaaa aaaaaaaaaaaaaaaaaaa aaaaaaaa aaaaaaaaaaaaaaa aaaaaaaa aaaaaaaaaaaaaaaaaaa aaaaaaaa aaaaaaaaaaaaaaaaaaaaa aaaaaaaa aaaaaaaaaaaaaaaaaaaaa aaaaaaa\n\naaa aaaa aaaa aaaaaaaa aaa aaaa aa aaaaaaaa aaaaaaaa aaaaaaaa\n\na aaaaaaaaaaaaa 一一一一一一一一一一一一a一一一一a一一一一一a一一一一一一一一aa一一一一一一一一一一a一一一一一一a一一一一一一一一一a\na aaaaaaaaaaaaaaaaaaaaaaaaa 一一一一一一一a一一一一一一一一一一一一一一一一一a一一一一一一一a一一一一一一一一一一一一一一一一一a一一一一一一一一一a一一一一一一一一a\na aaaaaaaaaaaaaaaaaaaaa 一一一一一一一一一一一一一一一一一一一aaaa一一一一一一一一一一一一一一a一一一一一一一一一一一一a一一一一一一一一a一一一一一一一一一一一一一一a\na aaaaaaaaaaaaaaaaa 一一一一一一一一一一一一a一一一一a一一a一一一一aaaaa一一一一一一一a一一一一一一一一一一aaaaaaaaaa一一一一一一一一一一一一一a一一aaa一一一一一一一a\na aaaaaaaaaaaaaaaaaaaaa 一一一一一一一a一aaaaa一一aa一一一一一一一一一一一一一一一一一一a\na aaaaaaaaaaaaa",
+          "_fixture_truncated_from": 4780
+        }
+      ],
+      "processed_at": "2026-09-04T14:23:49.508635830+08:00"
+    },
+    {
+      "id": "call_48cf88a3210d48cda1bd89f9",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:23:49.508695950+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "command": "aaaa aa aaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa /mnt/skills/fixture-skill/SKILL.md a aaaa aaaa aaaa aaaa aaa aa aaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaa    aaaa /mnt/skills/fixture-skill/SKILL.md a aaaa aaa",
+        "description": "aaaaa aaaaaaaaaaaaa aaaaaaa aaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062349-03xea",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062316-bwp0z",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 79936,
+        "input_tokens": 81253,
+        "output_tokens": 1375
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:23:49.548036068+08:00"
+    },
+    {
+      "id": "sevt-20260904062349-yeoq3",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_48cf88a3210d48cda1bd89f9",
+      "processed_at": "2026-09-04T14:23:49.548084580+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaa                aaaaaaaaaaaa a aa\naaaaa        aaaaaaaaaaaa a aaaaaaaaaaaaaa aaaaaaaaaaaa\naaaaa        aaaaaaaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaa aa aaaaaaaaaaaaaaaaaaaaaa aa aaaaaaaaaaaaaa aa aaaaaaaaaaaaaaaaaaaaaaaaaaaa\naaaaa    aaaaaaaa aaaaaaaaaaaaaaaaaaaaaa a\naaa\n    aaaaaaaa aaaaaaaaaaaaaaaaaaaaaa a\n        aaaaaa a\n            aaaaaaa aaaaaaaaaaaaa\n            aaaaaaaaa aaaaaaaaaaaaaaa\n            aaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaaaa\n            aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaa\n            aaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaa\n            aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaa\n            aaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaaa\n            aaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaaaaaaa\n        aa\n    a\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062349-ehe0p",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:23:49.548110709+08:00"
+    },
+    {
+      "id": "sevt-20260904062349-b32bt",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaaaaaaaaaaaa aaaaaaa aaaaaa aaa aaaaaa aaa aaaaaa aaaaaaaaaaaaaaa aaaa aaaaaa\na aaaaaaaa aaaaaaaa\na aaaaaaaaaaaa a aaaaaaaaa aaaaaaaa a\na aaaaaaaaa aaaaaa aaaa aaaaaaaa aaaaaaaa aaaaaaaaa aaaaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaaaaaaaaaaa aaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaaa aaaaaaaaaaaaaaaaaa\n\naaa aaa aa aaaaaa aaa aaaaa a aaaaaaaaaaaaaaaa aaaa aa a aaaaaaaaaaaaaaaa aaaa aaaaaaa aa aaaaaaaa aaaa aaaaaa aaaaaaaaa aaaa aaaaa aaaaaaaaaaaaaaa aa aaaaaaaa\n\naaaa aaaaaa aaa aaaaaa aaa aaaaaa aa aaa aaaaa aaa aa aaaaa aaa aaaaaa aaaa aaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:24:03.073674891+08:00"
+    },
+    {
+      "id": "sevt-20260904062349-dv4xm",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaa 一一一a一一一一 aaaaa aa一一一一a一一一一一一一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:24:03.073703994+08:00"
+    },
+    {
+      "id": "call_39cea4baaf2e4737a6694c4b",
+      "type": "agent.tool_use",
+      "name": "write",
+      "processed_at": "2026-09-04T14:24:03.073740930+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "content": "a\n  aaaaaaaa aaaaaaaaa\n  aaaaaaaaaaaa a\n    aaaaaaaaa aaaaaaaa\n  aa\n  aaaaaaaaaaa a\n    aaaaaaaa a一一一一一一一一一a一一一一一一一一一一a一一一一一一一a一一一一一一一一一一一一a一一一一一一a一一一一一一一一一a一一一一一一一一一一一一一一一一aa\n  aa\n  aaaaaaaaaaaaaaaaaaaaaaa a\n    aaaaaaaa a一一一一一一一一a一一一一一一一一一一一一一一aaaaaaaaaaa一一一a一一一一一一一a一一一一一一一一一一一一一一一一一一aaaa一一一一a一一一一a一一一一一a一一一一一一一a一一一一aa一一一一一一一一一一一一一一一一一一一一一aa\n  aa\n  aaaaaaaaaaaaaaaaaaa a\n    aaaaaaaa a一一一一一一一一aaa 一一一一一一一一一一一一一一一一一一aaa 一一aaa一一一一一一一一一一一一一一一一aaa 一一一一一一一一一一一一一一a一一一一一一一一一aaa 一一aaaaaaaaaaa一一一一一aa一一一一一一一一一一一aaa 一一一一aaa一一一一一一一一一一一一一一a一一一一一一一一一一一一aa\n  aa\n  aaaaaaaaaaaaaaa a\n    aaaaaaaa a一一一一一一一一一一一一aa一一一一aa一一aa一一一一aaaaaa一一一一一一一一一一aaaaaaa一一aaaaaaaa一一一一一一一一一一一一一aaaaaaaaaaa一一一一一一一一一aa一一一aa一一一一一aaa一一aaa一一aa一一一一一一一一aa一一一一一一aa一一一一一一aa\n  aa\n  aaaaaaaaaaaaaaaaaaa a\n    aaaaaaaa a一一一一一一a一一一一a一aaaaa一一a一一一一aa一一一一一一一一一一a一一一一一一一一一一aa\n  aa\n  aaaaaaaaaaaaaaaaaaaaa a\n    aaaaaaaa a一一一一一一一aaaa一一a一一一一一一一一一一一一一一a一一一一一一a一一一一一aa\n  aa\n  aaaaaaaaaaaaaaaaaaaaa a\n    aaaaaaaa a一一aaaaaaaaaaa一一一一一一一一一一a一aa一一一一一一aa一一一一一a一一一一一一一一一一一a一一一一一一一一一一一一一a一一一一一一一aa\n  a\na\n",
+        "file_path": "/workspace/fixture-artifact"
+      }
+    },
+    {
+      "id": "sevt-20260904062403-pasly",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062349-ehe0p",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 81216,
+        "input_tokens": 82856,
+        "output_tokens": 706
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:24:03.136041665+08:00"
+    },
+    {
+      "id": "sevt-20260904062403-648xr",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_39cea4baaf2e4737a6694c4b",
+      "processed_at": "2026-09-04T14:24:03.136084149+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062403-s1sy7",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:24:03.136107804+08:00"
+    },
+    {
+      "id": "call_1c8f6f08a56c4f7aaab742ed",
+      "type": "agent.tool_use",
+      "name": "bash",
+      "processed_at": "2026-09-04T14:24:08.556137643+08:00",
+      "evaluated_permission": "allow",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "input": {
+        "description": "aaaaaa aaaaaaa aa aaaaaa aaa aaaaa a",
+        "run_in_background": false,
+        "command": "aa aaaaaaaaaa aa aaaaa aaaaaaa /mnt/skills/fixture-skill/SKILL.md aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa aaaaaaaa aaaaaa aaaaaaaaaaaa a aaaaaaaaaaaaaaaaaaaaaaa aaaa a\naaaaa a aa aaa aaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "sevt-20260904062408-gclzk",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062403-s1sy7",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 82816,
+        "input_tokens": 83620,
+        "output_tokens": 102
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:24:14.583831354+08:00"
+    },
+    {
+      "id": "sevt-20260904062414-c2i6z",
+      "type": "agent.tool_result",
+      "tool_use_id": "call_1c8f6f08a56c4f7aaab742ed",
+      "processed_at": "2026-09-04T14:24:14.583885645+08:00",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaaaaaaaaa a\naaa aaaaaa aaa\naaaaaaaaaa aaaaaa aaaaaaaaaaa aaaa /workspace/fixture-artifact\naaaaaaaaaa aaaaaa aaaaaaaaaaa aaaaaaa aaaaaaa aa aa aaaaaaaaaaa https://example.com/synthetic aaaaaaaaa\naaaaaaaaaa aaaaaa aaaaaaaaaaa aaaaaaa aaa aaaaaaa aaaaaaaaaaaaaaa\n\naaa aaaaaa aaa\n"
+        }
+      ],
+      "is_error": false
+    },
+    {
+      "id": "sevt-20260904062414-aoa1u",
+      "type": "span.model_request_start",
+      "processed_at": "2026-09-04T14:24:14.583913357+08:00"
+    },
+    {
+      "id": "sevt-20260904062414-n1hrw",
+      "type": "agent.thinking",
+      "content": [
+        {
+          "type": "text",
+          "text": "aaa aaaaaaa aa aaaaaa aa aaaaaaaa aa https://example.com/synthetic aaa a aaaa aa aaaaaa aaa aaa aa aaa aaaa aaaaa aaaa aaa aaaaa a aaaaaaaaaaaaaaaa aaa aaaa aaa aaaaa aaaaaaaaaaaaa aaaa aa a aaaaaaaa aaaaa\n\naaa aaa aaaaaaaaa aaaaaaa aaa aaaaaa aaa aaa aaaa aaa aaaaaa aaaa aaaaaaaaa aaaaaaaaa aa aaaaaaaaaa\n\naaaa aaaaaaa aaa aaaaa a aaaaaaaaaaaaaaa aa aaaa aa aaaaaaaa aaaaaaaa aaaa aaa aaaa aaa aaaa aaa aaa aa aaaa aa aaaa aaa aaaaaaaaaaaaa"
+        }
+      ],
+      "processed_at": "2026-09-04T14:24:27.799096773+08:00"
+    },
+    {
+      "id": "sevt-20260904062414-kexiu",
+      "type": "agent.message",
+      "content": [
+        {
+          "type": "text",
+          "text": "aa a aaaa a a aaaaaaaaaa 一一一一aaaaaa a a aa\n\n一一一一一一一aaahttps://example.com/synthetic\n\naaa a aaaaa a 一一一一 a 一一一一一一\n\na 一一 a 一一一一 a\naaaaaaaaa\na aa一一aa a 一一一一一一一一一a一一一一一一一一一一a一一一一一一一a一一一一一一一一一一a一一一一一一a一一一一一一一一一a一一一一一一一一 a\na aa一一一一aa a 一一一一一一一一a一一一一一一一一一一一一一一aaaaaaaaaaa一一一a一一一一一一一a一一一一一一一一一一一一一一一一一一a一一一一一一一一一一一一一一一 a\na aa一一一一一一aa a 一一一一一一一一一一一一一一a一一aaa一一一一一一一一一a一一一一一一一一一一一a一一aaaaaaaaaa一一一一一a一一一一a一一a一一aaa一一a一一一一一一一一一一一 a\na aa一一一一aa a 一一一一a一一一一a一一a一一一一aaaaa一一一一一一一aaaaaaa一一aaaaaaaa一一一一一一一一一aaaaaaaaaaa一一一一一一一一一a一一一aaa一一aaa一一a一一一一一一一一 a\na aa一一一一aa a 一一一一一一aaaaaa一一a一一一一一a一一一一a一一一一a a\na aa一一一一一一aa a 一一一一一aaaaa一一一一一一一一一一一一一a一一一一一一一一 a\na aa一一一一一一aa a 一一a一一一一一一一一一a一aa一一一一一一aa一一一一一a一一一一一一一 a\na aa一一aa a aaa aaaaaaaaaaaaaa a\n\n一一一一一一一一 aaaaa a 一一a一一一一一a一一aa一一一一一一aa一一一一一一一一一 aaaaa aa一一一一一一a一一a一一一一aaa一一一a一一a一一a一 aaaaa aa一一一一a一一一a一一一一一一a"
+        }
+      ],
+      "processed_at": "2026-09-04T14:24:27.799116663+08:00"
+    },
+    {
+      "id": "sevt-20260904062427-3fcgk",
+      "type": "span.model_request_end",
+      "model_request_start_id": "sevt-20260904062414-aoa1u",
+      "model_usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 83584,
+        "input_tokens": 83882,
+        "output_tokens": 600
+      },
+      "is_error": false,
+      "processed_at": "2026-09-04T14:24:27.863089090+08:00"
+    },
+    {
+      "id": "sevt-20260904062427-ge31b",
+      "type": "session.thread_status_idle",
+      "agent_name": "fixture-agent",
+      "session_thread_id": "aaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stop_reason": {
+        "type": "end_turn"
+      },
+      "processed_at": "2026-09-04T14:24:27.863117152+08:00"
+    }
+  ]
+}
