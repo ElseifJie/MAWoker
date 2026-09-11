@@ -267,12 +267,40 @@ export class QuotaExceededError extends Error {
   }
 }
 
+// Drizzle hands back raw driver values from execute(): timestamptz arrives as
+// driver text ("2026-09-11 15:56:49.05906+08") while the query builder returns
+// Dates. Revive the aliased timestamp columns here so every repository method
+// returns the Date its type declares.
+const timestampFields = new Set([
+  "archivedAt",
+  "assignedAt",
+  "createdAt",
+  "expiresAt",
+  "generatedAt",
+  "lastEventAt",
+  "lastObservedAt",
+  "lockedAt",
+  "monthStart",
+  "runAfter",
+  "runningSince",
+  "updatedAt",
+]);
+
+function reviveTimestamps<T extends Row>(row: T): T {
+  for (const [key, value] of Object.entries(row)) {
+    if (typeof value !== "string" || !timestampFields.has(key)) continue;
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) row[key as keyof T] = parsed as never;
+  }
+  return row;
+}
+
 async function rows<T extends Row>(
   database: DatabaseClient,
   query: SQL,
 ): Promise<T[]> {
   const result = await database.execute<T>(query);
-  return result.rows;
+  return result.rows.map((row) => reviveTimestamps(row));
 }
 
 async function first<T extends Row>(
