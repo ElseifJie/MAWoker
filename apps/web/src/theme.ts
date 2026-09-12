@@ -12,7 +12,11 @@ export function isThemePreference(value: unknown): value is ThemePreference {
 
 function storage(): Storage | undefined {
   try {
-    return globalThis.localStorage;
+    const candidate = globalThis.localStorage;
+    // Node exposes a non-conforming stub unless --localstorage-file is set.
+    return candidate && typeof candidate.getItem === "function"
+      ? candidate
+      : undefined;
   } catch {
     // Private browsing and some embedded webviews throw on access.
     return undefined;

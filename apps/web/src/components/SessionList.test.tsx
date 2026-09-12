@@ -121,7 +121,11 @@ describe("SessionList", () => {
           title: "Pinned task",
           pinnedAt: "2026-09-11T10:00:00.000Z",
         }),
-        session({ id: "plain", title: "Plain task" }),
+        session({
+          id: "plain",
+          title: "Plain task",
+          updatedAt: new Date().toISOString(),
+        }),
       ],
       archivedSessions: [],
       searchOpen: false,
