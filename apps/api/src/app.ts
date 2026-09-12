@@ -1584,7 +1584,9 @@ export function buildApp(options: BuildAppOptions = {}) {
         }
         return authorizeAdmin(request, reply);
       }
-      if (route === "/api/v1/me") {
+      // /me and /capabilities describe the caller, not user content, so both
+      // roles may read them; authorizeUser would 404 an administrator.
+      if (route === "/api/v1/me" || route === "/api/v1/capabilities") {
         return authenticate(request, reply);
       }
       return authorizeUser(request, reply);
