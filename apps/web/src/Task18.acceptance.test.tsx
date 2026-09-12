@@ -354,14 +354,16 @@ describe("Task 18 browser acceptance", () => {
 
     await user.click(screen.getByRole("link", { name: "Platform Agents" }));
     await user.click(
-      await screen.findByRole("button", { name: "Disable Operations Lead" }),
+      await screen.findByRole("button", {
+        name: "Actions for Operations Lead",
+      }),
     );
-    expect(
-      await screen.findByRole("button", { name: "Enable Operations Lead" }),
-    ).toBeVisible();
+    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
+    await waitFor(() => expect(backend.platformAgentVersion()).toBe("2"));
     await user.click(
-      screen.getByRole("button", { name: "Delete Operations Lead" }),
+      screen.getByRole("button", { name: "Actions for Operations Lead" }),
     );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", {
       name: "Delete platform Agent?",
     });

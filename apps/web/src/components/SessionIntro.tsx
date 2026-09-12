@@ -18,7 +18,6 @@ import {
 import {
   Alert,
   Button,
-  Field,
   IconButton,
   PageHeader,
   Select,
@@ -220,11 +219,7 @@ export function SessionIntro({
 
   return (
     <div className="page session-intro">
-      <PageHeader
-        eyebrow="Workspace"
-        title="New task"
-        description="Describe the outcome you want. The Agent works it through and leaves you the result."
-      />
+      <PageHeader title="New task" />
 
       <section className="session-intro__templates" aria-label="Task templates">
         {taskTemplates.map((template) => (
@@ -232,56 +227,29 @@ export function SessionIntro({
             key={template.id}
             type="button"
             className="template-card"
+            title={template.outcome}
             onClick={() => applyTemplate(template)}
             disabled={submitting || Boolean(blocker)}
           >
             <Sparkles size={16} aria-hidden="true" />
             <span className="template-card__label">{template.label}</span>
-            <span className="template-card__outcome">{template.outcome}</span>
           </button>
         ))}
       </section>
 
       <form className="composer" onSubmit={submitTask}>
-        <div className="composer-toolbar">
-          <Field label="Agent">
-            <Select
-              className="agent-picker"
-              value={selectedAgentId}
-              onChange={(event) => setSelectedAgentId(event.target.value)}
-              disabled={submitting || agents.agents.length === 0}
-            >
-              {agents.agents.length === 0 ? (
-                <option value="">No Agent available</option>
-              ) : null}
-              {agents.agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name}
-                  {agent.kind === "platform" ? " · Platform" : ""}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <IconButton
-            className="attachment-button"
-            label="Attach files"
-            size="small"
-            onClick={() => fileInput.current?.click()}
-            disabled={submitting || uploads.length >= 20}
-          >
-            <Paperclip size={18} aria-hidden="true" />
-          </IconButton>
-          <input
-            ref={fileInput}
-            className="file-input"
-            type="file"
-            multiple
-            aria-label="File picker"
-            onChange={addFiles}
-            disabled={submitting || uploads.length >= 20}
-            tabIndex={-1}
-          />
-        </div>
+        <label className="sr-only" htmlFor="task-message">
+          Task message
+        </label>
+        <Textarea
+          id="task-message"
+          ref={messageInput}
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          placeholder="Describe what you need done…"
+          rows={6}
+          disabled={submitting}
+        />
 
         {uploads.length > 0 ? (
           <ul className="upload-list" aria-label="Attachments">
@@ -331,18 +299,6 @@ export function SessionIntro({
           </ul>
         ) : null}
 
-        <Field label="Task message">
-          <Textarea
-            id="task-message"
-            ref={messageInput}
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Describe what you need done…"
-            rows={6}
-            disabled={submitting}
-          />
-        </Field>
-
         <div className="composer-footer">
           <div className="composer-feedback" aria-live="polite">
             {blocker ? (
@@ -354,26 +310,61 @@ export function SessionIntro({
                 <Spinner size={15} aria-hidden="true" />
                 {submissionStatus}
               </span>
-            ) : (
-              <span className="muted">
-                Enter to add a line. Use Send to run.
-              </span>
-            )}
+            ) : null}
           </div>
-          <IconButton
-            type="submit"
-            className="send-button"
-            label="Send task"
-            disabled={
-              submitting ||
-              Boolean(blocker) ||
-              hasUnreadyUploads ||
-              !selectedAgentId ||
-              message.trim().length === 0
-            }
-          >
-            <Send size={18} aria-hidden="true" />
-          </IconButton>
+          <div className="composer-controls">
+            <IconButton
+              className="attachment-button"
+              label="Attach files"
+              size="small"
+              onClick={() => fileInput.current?.click()}
+              disabled={submitting || uploads.length >= 20}
+            >
+              <Paperclip size={16} aria-hidden="true" />
+            </IconButton>
+            <input
+              ref={fileInput}
+              className="file-input"
+              type="file"
+              multiple
+              aria-label="File picker"
+              onChange={addFiles}
+              disabled={submitting || uploads.length >= 20}
+              tabIndex={-1}
+            />
+            <Select
+              className="agent-picker"
+              aria-label="Agent"
+              value={selectedAgentId}
+              onChange={(event) => setSelectedAgentId(event.target.value)}
+              disabled={submitting || agents.agents.length === 0}
+            >
+              {agents.agents.length === 0 ? (
+                <option value="">No Agent available</option>
+              ) : null}
+              {agents.agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}
+                  {agent.kind === "platform" ? " · Platform" : ""}
+                </option>
+              ))}
+            </Select>
+            <IconButton
+              type="submit"
+              className="send-button"
+              label="Send task"
+              size="small"
+              disabled={
+                submitting ||
+                Boolean(blocker) ||
+                hasUnreadyUploads ||
+                !selectedAgentId ||
+                message.trim().length === 0
+              }
+            >
+              <Send size={15} aria-hidden="true" />
+            </IconButton>
+          </div>
         </div>
       </form>
     </div>

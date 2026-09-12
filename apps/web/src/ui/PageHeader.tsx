@@ -1,8 +1,8 @@
 import type { ReactNode, Ref } from "react";
 
 export interface PageHeaderProps {
-  eyebrow: string;
   title: string;
+  eyebrow?: string;
   description?: string;
   actions?: ReactNode;
   headingRef?: Ref<HTMLHeadingElement>;
@@ -24,7 +24,7 @@ export function PageHeader({
   return (
     <header className="ui-page-header">
       <div className="ui-page-header__copy">
-        <p className="ui-page-header__eyebrow">{eyebrow}</p>
+        {eyebrow ? <p className="ui-page-header__eyebrow">{eyebrow}</p> : null}
         <h1 ref={headingRef} className="ui-page-header__title" tabIndex={-1}>
           {title}
         </h1>

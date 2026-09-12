@@ -20,6 +20,7 @@ import {
   Input,
   PageHeader,
   PasswordInput,
+  RowActionsMenu,
   Select,
   Spinner,
   type BadgeTone,
@@ -282,9 +283,7 @@ export function AdminUsersPage({
   return (
     <div className="page admin-page">
       <PageHeader
-        eyebrow="Administration"
         title="Users"
-        description="Create accounts, manage lifecycle and roles. Users sign in with the email and password set here."
         headingRef={headingRef}
         actions={
           <Button onClick={() => setCreating(true)}>
@@ -413,53 +412,55 @@ export function AdminUsersPage({
                         >
                           View
                         </Button>
-                        <Button
-                          size="compact"
-                          variant="secondary"
-                          aria-label={`${user.status === "active" ? "Disable" : "Enable"} ${user.email}`}
-                          onClick={() =>
-                            setAction({
-                              kind:
-                                user.status === "active" ? "disable" : "enable",
-                              user,
-                            })
-                          }
-                        >
-                          <Power size={14} aria-hidden="true" />
-                          {user.status === "active" ? "Disable" : "Enable"}
-                        </Button>
-                        {user.status === "active" ? (
-                          <Button
-                            size="compact"
-                            variant="secondary"
-                            aria-label={`Force sign-out for ${user.email}`}
-                            onClick={() => setAction({ kind: "signout", user })}
-                          >
-                            <LogOut size={14} aria-hidden="true" />
-                            Force sign-out
-                          </Button>
-                        ) : null}
-                        <Button
-                          size="compact"
-                          variant="secondary"
-                          aria-label={`Change role for ${user.email}`}
-                          onClick={() =>
-                            setAction({
-                              kind: "role",
-                              user,
-                              role: user.role === "admin" ? "user" : "admin",
-                            })
-                          }
-                        >
-                          {user.role === "admin" ? (
-                            <ShieldOff size={14} aria-hidden="true" />
-                          ) : (
-                            <ShieldCheck size={14} aria-hidden="true" />
-                          )}
-                          {user.role === "admin"
-                            ? "Revoke admin"
-                            : "Make admin"}
-                        </Button>
+                        <RowActionsMenu
+                          label={`Actions for ${user.email}`}
+                          items={[
+                            {
+                              icon: <Power size={14} aria-hidden="true" />,
+                              text:
+                                user.status === "active" ? "Disable" : "Enable",
+                              run: () =>
+                                setAction({
+                                  kind:
+                                    user.status === "active"
+                                      ? "disable"
+                                      : "enable",
+                                  user,
+                                }),
+                            },
+                            ...(user.status === "active"
+                              ? [
+                                  {
+                                    icon: (
+                                      <LogOut size={14} aria-hidden="true" />
+                                    ),
+                                    text: "Force sign-out",
+                                    run: () =>
+                                      setAction({ kind: "signout", user }),
+                                  },
+                                ]
+                              : []),
+                            {
+                              icon:
+                                user.role === "admin" ? (
+                                  <ShieldOff size={14} aria-hidden="true" />
+                                ) : (
+                                  <ShieldCheck size={14} aria-hidden="true" />
+                                ),
+                              text:
+                                user.role === "admin"
+                                  ? "Revoke admin"
+                                  : "Make admin",
+                              run: () =>
+                                setAction({
+                                  kind: "role",
+                                  user,
+                                  role:
+                                    user.role === "admin" ? "user" : "admin",
+                                }),
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>

@@ -326,6 +326,7 @@ function renderWorkspace(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <AdminWorkspace
+        user={{ userId: adminId, authSubject: "local:admin", role: "admin" }}
         onSignedOut={() => undefined}
         onAuthRequired={() => undefined}
       />
@@ -358,6 +359,17 @@ afterEach(() => {
 });
 
 describe("admin console walkthrough", () => {
+  // The dense row actions live behind the "…" overflow menu.
+  async function openRowMenu(
+    user: ReturnType<typeof userEvent.setup>,
+    rowName: string,
+  ) {
+    await user.click(
+      screen.getByRole("button", { name: `Actions for ${rowName}` }),
+    );
+    return screen.getByRole("menu");
+  }
+
   it("confirms account disable and force sign-out before mutating", async () => {
     const { calls, fetchMock } = createBackend();
     vi.stubGlobal("fetch", fetchMock);
@@ -367,11 +379,8 @@ describe("admin console walkthrough", () => {
 
     // Force sign-out is only offered while the account is active; it goes
     // through its own confirmation dialog.
-    await user.click(
-      screen.getByRole("button", {
-        name: "Force sign-out for user@example.com",
-      }),
-    );
+    await openRowMenu(user, "user@example.com");
+    await user.click(screen.getByRole("menuitem", { name: "Force sign-out" }));
     const signoutDialog = screen.getByRole("dialog", {
       name: "Force sign-out",
     });
@@ -391,9 +400,8 @@ describe("admin console walkthrough", () => {
     );
 
     // Cancel the disable confirmation first — nothing must be sent.
-    await user.click(
-      screen.getByRole("button", { name: "Disable user@example.com" }),
-    );
+    await openRowMenu(user, "user@example.com");
+    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
     const dialog = screen.getByRole("dialog", { name: "Disable account" });
     expect(
       within(dialog).getByText(/signs out all of its active sessions/i),
@@ -402,9 +410,8 @@ describe("admin console walkthrough", () => {
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     // Confirm — the PATCH lands and the row flips to Enable.
-    await user.click(
-      screen.getByRole("button", { name: "Disable user@example.com" }),
-    );
+    await openRowMenu(user, "user@example.com");
+    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
     const confirmDialog = screen.getByRole("dialog", {
       name: "Disable account",
     });
@@ -413,14 +420,17 @@ describe("admin console walkthrough", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Enable user@example.com" }),
-      ).toBeInTheDocument(),
+        calls.find(
+          (call) => call.method === "PATCH" && call.url.endsWith("/status"),
+        ),
+      ).toMatchObject({ body: { status: "disabled" } }),
     );
+
+    // The now-disabled account offers Enable instead.
+    await openRowMenu(user, "user@example.com");
     expect(
-      calls.find(
-        (call) => call.method === "PATCH" && call.url.endsWith("/status"),
-      ),
-    ).toMatchObject({ body: { status: "disabled" } });
+      screen.getByRole("menuitem", { name: "Enable" }),
+    ).toBeInTheDocument();
   });
 
   it("surfaces lifecycle guard errors from the API", async () => {
@@ -439,9 +449,8 @@ describe("admin console walkthrough", () => {
     renderWorkspace("/admin/users");
     const user = userEvent.setup();
     await screen.findByText("user@example.com");
-    await user.click(
-      screen.getByRole("button", { name: "Change role for user@example.com" }),
-    );
+    await openRowMenu(user, "user@example.com");
+    await user.click(screen.getByRole("menuitem", { name: /admin/i }));
     const dialog = screen.getByRole("dialog", { name: "Change role" });
     await user.click(
       within(dialog).getByRole("button", { name: "Grant administrator" }),

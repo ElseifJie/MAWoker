@@ -674,6 +674,7 @@ describe("AppShell", () => {
             navigation={navigation}
             navigationExtra={navigationExtra}
             openNavigationLabel={openNavigationLabel}
+            user={{ name: "Test User", handle: "user@example.com" }}
             onSignOut={onSignOut}
           >
             {children}
@@ -683,7 +684,7 @@ describe("AppShell", () => {
     };
   }
 
-  it("marks the current navigation item active and signs out", async () => {
+  it("marks the current navigation item active and disconnects from the account menu", async () => {
     setMobileViewport(false);
     const user = userEvent.setup();
     const { onSignOut } = renderShell();
@@ -694,8 +695,19 @@ describe("AppShell", () => {
     );
     expect(screen.getByRole("navigation", { name: "Workspace" })).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.click(
+      screen.getByRole("button", { name: "Account: user@example.com" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     expect(onSignOut).toHaveBeenCalledOnce();
+  });
+
+  it("shows the signed-in identity in the sidebar footer", () => {
+    setMobileViewport(false);
+    renderShell();
+
+    expect(screen.getByText("Test User")).toBeInTheDocument();
+    expect(screen.getByText("user@example.com")).toBeInTheDocument();
   });
 
   it("keeps the closed mobile drawer out of the keyboard sequence", async () => {
@@ -713,7 +725,10 @@ describe("AppShell", () => {
       screen.getByRole("link", { name: "Agents", hidden: true }),
     ).toHaveAttribute("tabindex", "-1");
     expect(
-      screen.getByRole("button", { name: "Sign out", hidden: true }),
+      screen.getByRole("button", {
+        name: "Account: user@example.com",
+        hidden: true,
+      }),
     ).toHaveAttribute("tabindex", "-1");
 
     toggle.focus();
@@ -735,7 +750,9 @@ describe("AppShell", () => {
     await user.click(screen.getByRole("button", { name: "Open navigation" }));
 
     const firstLink = screen.getByRole("link", { name: "New task" });
-    const lastControl = screen.getByRole("button", { name: "Sign out" });
+    const lastControl = screen.getByRole("button", {
+      name: "Account: user@example.com",
+    });
     expect(firstLink).toHaveFocus();
     expect(screen.getByRole("main")).toHaveAttribute("inert");
 

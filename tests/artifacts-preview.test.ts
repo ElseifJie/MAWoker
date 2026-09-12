@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DOCUMENT_PREVIEW_MAX_BYTES,
   PREVIEW_MAX_BYTES,
   artifactDownloadUrl,
   artifactKind,
@@ -23,9 +24,11 @@ describe("artifactKind", () => {
     ["paper.pdf", "application/pdf", "pdf"],
     ["log.txt", "text/plain", "text"],
     ["config.json", "application/octet-stream", "text"],
-    ["deck.pptx", "application/octet-stream", "other"],
+    ["deck.pptx", "application/octet-stream", "slides"],
     ["sheet.xlsx", "application/octet-stream", "other"],
-    ["document.docx", "application/octet-stream", "other"],
+    ["document.docx", "application/octet-stream", "word"],
+    ["legacy.doc", "application/msword", "other"],
+    ["legacy.ppt", "application/vnd.ms-powerpoint", "other"],
     ["archive.zip", "application/zip", "other"],
   ])("classifies %s as %s", (name, mimeType, expected) => {
     expect(artifactKind(artifact(name, mimeType))).toBe(expected);
@@ -37,6 +40,14 @@ describe("artifactKind", () => {
     expect(artifactKind(artifact("notes.txt", "text/markdown"))).toBe(
       "markdown",
     );
+    expect(
+      artifactKind(
+        artifact(
+          "brief.txt",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+      ),
+    ).toBe("word");
   });
 
   it("is case insensitive about the extension", () => {
@@ -59,16 +70,35 @@ describe("canPreview", () => {
     }
   });
 
-  it("does not preview office, PDF or unknown files", () => {
+  it("previews Office and PDF documents through their embedded renderers", () => {
     for (const [name, mimeType] of [
       ["a.pptx", "application/octet-stream"],
-      ["a.xlsx", "application/octet-stream"],
       ["a.docx", "application/octet-stream"],
       ["a.pdf", "application/pdf"],
+    ]) {
+      expect(canPreview(artifact(name, mimeType)), name).toBe(true);
+    }
+  });
+
+  it("does not preview unknown or legacy binary files", () => {
+    for (const [name, mimeType] of [
+      ["a.xlsx", "application/octet-stream"],
+      ["a.doc", "application/msword"],
+      ["a.ppt", "application/vnd.ms-powerpoint"],
       ["a.zip", "application/zip"],
     ]) {
       expect(canPreview(artifact(name, mimeType)), name).toBe(false);
     }
+  });
+
+  it("gives documents a larger cap than text", () => {
+    const deck = artifact("a.pptx", "application/octet-stream");
+    expect(canPreview({ ...deck, sizeBytes: PREVIEW_MAX_BYTES + 1 })).toBe(
+      true,
+    );
+    expect(
+      canPreview({ ...deck, sizeBytes: DOCUMENT_PREVIEW_MAX_BYTES + 1 }),
+    ).toBe(false);
   });
 
   it("refuses to inline a file large enough to hang the tab", () => {

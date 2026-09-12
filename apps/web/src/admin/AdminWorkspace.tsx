@@ -7,7 +7,12 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { ApiClientError, apiClient, type AdminPlatformAgent } from "../api.js";
+import {
+  ApiClientError,
+  apiClient,
+  type AdminPlatformAgent,
+  type CurrentUser,
+} from "../api.js";
 import { AppShell, EmptyState, Spinner } from "../ui/index.js";
 import { AdminAuditPage } from "./AdminAuditPage.js";
 import { AdminPlatformAgentsPage } from "./AdminPlatformAgentsPage.js";
@@ -17,8 +22,15 @@ import { AdminUsagePage } from "./AdminUsagePage.js";
 import { AdminUsersPage } from "./AdminUsersPage.js";
 
 interface AdminWorkspaceProps {
+  user: CurrentUser;
   onSignedOut: () => void;
   onAuthRequired: () => void;
+}
+
+/** Mirrors the workspace footer: strip the "local:"/"managed:" namespace. */
+function adminHandle(authSubject: string): string {
+  const separator = authSubject.indexOf(":");
+  return separator >= 0 ? authSubject.slice(separator + 1) : authSubject;
 }
 
 /**
@@ -26,6 +38,7 @@ interface AdminWorkspaceProps {
  * model allowlist); every page owns its own paginated fetching.
  */
 export function AdminWorkspace({
+  user,
   onSignedOut,
   onAuthRequired,
 }: AdminWorkspaceProps) {
@@ -114,6 +127,7 @@ export function AdminWorkspace({
       openNavigationLabel="Open administration navigation"
       closeNavigationLabel="Close administration navigation"
       backdropLabel="Close administration navigation"
+      user={{ handle: adminHandle(user.authSubject) }}
       onSignOut={() => void signOut()}
     >
       <Routes>

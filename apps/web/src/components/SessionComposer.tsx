@@ -70,12 +70,12 @@ export function SessionComposer({
           {delivery?.status === "waiting" ? (
             <span className="muted">
               <Spinner size={14} aria-hidden="true" />
-              Connecting before first message…
+              Connecting…
             </span>
           ) : delivery?.status === "sending" ? (
             <span className="muted">
               <Spinner size={14} aria-hidden="true" />
-              Sending first message…
+              Sending…
             </span>
           ) : delivery?.status === "failed" ? (
             <Alert tone="danger">
@@ -84,31 +84,33 @@ export function SessionComposer({
           ) : feedback?.kind === "error" ? (
             <Alert tone="danger">{feedback.message}</Alert>
           ) : (
-            <span className="muted">{feedback?.message ?? "\u00a0"}</span>
+            <span className="muted">{feedback?.message ?? ""}</span>
           )}
         </div>
         {delivery?.status === "failed" ? (
           <Button
             variant="secondary"
             size="compact"
+            aria-label="Retry first message"
             onClick={() =>
               onRetryFirstMessage(delivery.sessionId, delivery.content)
             }
           >
-            Retry first message
+            Retry
           </Button>
         ) : null}
         <IconButton
           label="Send message"
           type="submit"
           className="send-button"
+          size="small"
           aria-busy={pendingAction === "message" ? true : undefined}
           disabled={disabled || busy || message.trim().length === 0}
         >
           {pendingAction === "message" ? (
-            <Spinner size={17} aria-hidden="true" />
+            <Spinner size={15} aria-hidden="true" />
           ) : (
-            <Send size={17} aria-hidden="true" />
+            <Send size={15} aria-hidden="true" />
           )}
         </IconButton>
       </div>

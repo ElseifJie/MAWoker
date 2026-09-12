@@ -1,10 +1,11 @@
-import { LogOut, Menu, X } from "lucide-react";
+import { LogOut, Menu, MoreHorizontal, X } from "lucide-react";
 import {
   useEffect,
   useId,
   useRef,
   useState,
   type ComponentType,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { NavLink, useLocation } from "react-router-dom";
@@ -32,8 +33,16 @@ export interface AppShellProps {
   openNavigationLabel?: string;
   closeNavigationLabel?: string;
   backdropLabel?: string;
+  user: AppShellUser;
   onSignOut: () => void;
   children: ReactNode;
+}
+
+export interface AppShellUser {
+  /** Full display name; falls back to `handle`, then the initial. */
+  name?: string;
+  /** The account handle (usually the sign-in email or subject). */
+  handle: string;
 }
 
 const mobileNavigationQuery = "(max-width: 760px)";
@@ -59,6 +68,118 @@ function useMediaQuery(query: string) {
   return matches;
 }
 
+function initialFor(user: AppShellUser): string {
+  const source = user.name?.trim() || user.handle.trim();
+  return source.charAt(0).toUpperCase() || "?";
+}
+
+interface UserMenuProps {
+  user: AppShellUser;
+  tabIndex: number | undefined;
+  onSignOut: () => void;
+}
+
+/**
+ * The sidebar footer: who is signed in, plus a menu that owns the sign-out
+ * action. The trigger is the whole footer so the account identity, not just a
+ * trailing icon, is the affordance.
+ */
+function UserMenu({ user, tabIndex, onSignOut }: UserMenuProps) {
+  const [open, setOpen] = useState(false);
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const trigger = containerRef.current?.querySelector<HTMLElement>("button");
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect();
+      const menuHeight = 48;
+      const opensUp = rect.bottom + menuHeight > window.innerHeight;
+      setPanelStyle({
+        top: opensUp ? undefined : rect.bottom + 4,
+        bottom: opensUp ? window.innerHeight - rect.top + 4 : undefined,
+        left: Math.max(8, rect.left),
+      });
+    }
+    panelRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    const onPointerDown = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+      containerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    };
+    const close = () => setOpen(false);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [open]);
+
+  const name = user.name?.trim();
+  const label = name || user.handle;
+
+  return (
+    <div className="ui-app-shell__user" ref={containerRef}>
+      <button
+        type="button"
+        className="ui-app-shell__user-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Account: ${user.handle}`}
+        tabIndex={tabIndex}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="ui-app-shell__user-avatar" aria-hidden="true">
+          {initialFor(user)}
+        </span>
+        <span className="ui-app-shell__user-identity">
+          <span className="ui-app-shell__user-name">{label}</span>
+          {name ? (
+            <span className="ui-app-shell__user-handle">{user.handle}</span>
+          ) : null}
+        </span>
+        <MoreHorizontal
+          className="ui-app-shell__user-more"
+          size={16}
+          aria-hidden="true"
+        />
+      </button>
+      {open ? (
+        <div
+          className="ui-app-shell__user-menu"
+          role="menu"
+          ref={panelRef}
+          style={panelStyle}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="ui-app-shell__user-menu-item"
+            onClick={() => {
+              setOpen(false);
+              onSignOut();
+            }}
+          >
+            <LogOut size={15} aria-hidden="true" />
+            Disconnect
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AppShell({
   backdropLabel = "Close navigation drawer",
   brand,
@@ -69,6 +190,7 @@ export function AppShell({
   navigationLabel,
   openNavigationLabel = "Open navigation",
   onSignOut,
+  user,
 }: AppShellProps) {
   const sidebarId = useId();
   const location = useLocation();
@@ -219,14 +341,13 @@ export function AppShell({
             </div>
           ) : null}
         </nav>
-        <IconButton
-          className="ui-app-shell__sign-out"
-          label="Sign out"
-          onClick={onSignOut}
-          tabIndex={navigationHidden ? -1 : undefined}
-        >
-          <LogOut size={17} aria-hidden="true" />
-        </IconButton>
+        <footer className="ui-app-shell__footer">
+          <UserMenu
+            user={user}
+            tabIndex={navigationHidden ? -1 : undefined}
+            onSignOut={onSignOut}
+          />
+        </footer>
       </aside>
 
       {mobileNavigation && drawerOpen ? (

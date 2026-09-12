@@ -484,9 +484,11 @@ describe("authentication", () => {
     renderApp();
     const user = userEvent.setup();
 
-    const logout = await screen.findByRole("button", { name: "Sign out" });
-    expect(logout).toHaveAttribute("title", "Sign out");
-    await user.click(logout);
+    const account = await screen.findByRole("button", {
+      name: "Account: user@example.com",
+    });
+    await user.click(account);
+    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
     expect(
       await screen.findByRole("heading", { name: "Sign in to your workspace" }),
     ).toBeInTheDocument();
@@ -589,6 +591,37 @@ describe("workspace shell", () => {
     expect(menu).toHaveAttribute("title", "Close navigation");
     await user.keyboard("{Escape}");
     expect(menu).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens task search from the sidebar and opens a chosen task", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp();
+    const user = userEvent.setup();
+
+    await screen.findByRole("heading", { name: "New task" });
+    const navigation = screen.getByRole("navigation", { name: "Workspace" });
+
+    // The placeholder search field is gone from the sidebar.
+    expect(within(navigation).queryByRole("searchbox")).not.toBeInTheDocument();
+
+    await user.click(
+      within(navigation).getByRole("button", { name: "Search" }),
+    );
+    const search = await screen.findByRole("combobox", {
+      name: "Search tasks",
+    });
+    expect(search).toHaveFocus();
+
+    await user.type(search, "quarterly");
+    expect(
+      screen.getByRole("option", { name: /Quarterly plan/ }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("option", { name: /Quarterly plan/ }));
+    expect(
+      await screen.findByRole("heading", { name: "Quarterly plan" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Search tasks" })).toBeNull();
   });
 
   it("removes the closed mobile drawer from the accessibility tree and tab order", async () => {
@@ -1006,7 +1039,8 @@ describe("Session page", () => {
     expect(screen.getByLabelText("Message")).toHaveClass("ui-textarea");
     expect(screen.getByRole("button", { name: "Send message" })).toHaveClass(
       "ui-icon-button",
-      "ui-icon-button--default",
+      "ui-icon-button--small",
+      "send-button",
     );
 
     const source = MockEventSource.instances[0]!;
@@ -1063,6 +1097,49 @@ describe("Session page", () => {
     expect(transcriptRule?.style.marginInline).toBe("auto");
     expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
     expect(connectionRule?.style.minWidth).toBe("7.5rem");
+  });
+
+  it("resizes the side panel by drag and by keyboard", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp(`/sessions/${sessionId}`);
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "Quarterly plan" });
+
+    const rail = screen.getByRole("complementary", {
+      name: "Session side panel",
+    });
+    const resizer = screen.getByRole("separator", {
+      name: "Resize side panel",
+    });
+    expect(resizer).toHaveAttribute("aria-orientation", "vertical");
+    expect(resizer).toHaveAttribute("aria-valuenow", "340");
+
+    resizer.focus();
+    expect(resizer).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    // Widening the right-anchored panel moves the separator leftward.
+    expect(resizer).toHaveAttribute("aria-valuenow", "364");
+    expect(rail).toHaveStyle({ width: "364px" });
+
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(resizer).toHaveAttribute("aria-valuenow", "316");
+  });
+
+  it("shows composer focus on the card instead of a clipped textarea outline", () => {
+    for (const card of [".composer", ".session-composer"]) {
+      const [focusRule] = findStyleRules(`${card}:focus-within`);
+      expect(focusRule?.style.borderColor, card).toBe("var(--ui-color-accent)");
+      expect(focusRule?.style.boxShadow, card).toBe(
+        "0 0 0 1px var(--ui-color-accent)",
+      );
+    }
+    for (const area of [
+      ".composer .ui-textarea",
+      ".session-composer .ui-textarea",
+    ]) {
+      const rule = findStyleRules(`${area}:focus-visible`)[0];
+      expect(rule?.style.outline, area).toBe("none");
+    }
   });
 
   it("keeps pending Session action labels exposed while showing shared loading state", async () => {
@@ -1491,6 +1568,17 @@ describe("Session page", () => {
       "event-6",
     ]);
     expect(screen.getByText("Prepare the plan")).toBeInTheDocument();
+    expect(screen.getByText("The plan is ready.")).toBeInTheDocument();
+    // The speakers are identified by avatar icon alone; the old "You"/"Agent"
+    // word labels are gone.
+    expect(screen.queryByText("You")).not.toBeInTheDocument();
+    expect(screen.queryByText("Agent")).not.toBeInTheDocument();
+    expect(
+      timeline.querySelector(".transcript__row--user .lucide-user-round"),
+    ).not.toBeNull();
+    expect(
+      timeline.querySelector(".transcript__answer .lucide-bot"),
+    ).not.toBeNull();
     expect(screen.getByText("Thinking…")).toBeInTheDocument();
     expect(
       screen.queryByText("private chain of thought"),
@@ -1764,7 +1852,7 @@ describe("artifact management", () => {
     expect(await screen.findByText("quarterly-plan.pdf")).toBeInTheDocument();
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(heading.closest("header")).toHaveClass("ui-page-header");
-    expect(screen.getByLabelText("Filter by Session")).toHaveClass("ui-select");
+    expect(screen.getByLabelText("Session")).toHaveClass("ui-select");
     expect(
       screen.getByText("Deletion failed").closest(".ui-badge"),
     ).toHaveClass("ui-badge", "ui-badge--danger");
@@ -1858,17 +1946,14 @@ describe("artifact management", () => {
     expect(screen.queryByText("brief.txt")).not.toBeInTheDocument();
     expect(
       screen
-        .getByLabelText("Filter by Session")
+        .getByLabelText("Session")
         .querySelector(`option[value="${createdSessionId}"]`),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("link", { name: "Download quarterly-plan.pdf" }),
     ).toHaveAttribute("href", `/api/v1/artifacts/${artifactId}/download`);
 
-    await user.selectOptions(
-      screen.getByLabelText("Filter by Session"),
-      sessionId,
-    );
+    await user.selectOptions(screen.getByLabelText("Session"), sessionId);
     await waitFor(() => {
       expect(
         calls.some(
@@ -2218,6 +2303,10 @@ describe("new task composer", () => {
       "ui-icon-button",
       "ui-icon-button--small",
     );
+    expect(composer?.querySelector(".composer-controls")).not.toBeNull();
+    expect(screen.getByRole("combobox", { name: "Agent" })).toHaveClass(
+      "agent-picker",
+    );
 
     const file = new File(["hello"], "brief.txt", { type: "text/plain" });
     await user.upload(screen.getByLabelText("File picker"), file);
@@ -2230,14 +2319,14 @@ describe("new task composer", () => {
       "ui-icon-button--small",
     );
 
-    const [attachmentRule] = findStyleRules(".attachment-button");
     const [smallControlRule] = findStyleRules(".small-control");
     const [composerRule] = findStyleRules(".composer");
-    expect(attachmentRule?.style.width).toBe("");
-    expect(attachmentRule?.style.height).toBe("");
+    const [sendRule] = findStyleRules(".send-button");
     expect(smallControlRule?.style.width).toBe("");
     expect(smallControlRule?.style.height).toBe("");
     expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
+    expect(sendRule?.style.width).toBe("28px");
+    expect(sendRule?.style.height).toBe("28px");
     expect(findStyleRules(".ui-app-shell__main > .page")).toHaveLength(1);
   });
 
@@ -2276,7 +2365,9 @@ describe("new task composer", () => {
       await flush();
 
       expect(
-        screen.getByText("Connecting before first message…"),
+        within(
+          document.querySelector<HTMLFormElement>(".session-composer")!,
+        ).getByText("Connecting…"),
       ).toBeInTheDocument();
       expect(
         screen.queryByRole("button", { name: "Retry first message" }),
@@ -2388,11 +2479,15 @@ describe("new task composer", () => {
       );
     });
     expect(
-      screen.getByRole("link", { name: /Summarize the attached brief/ }),
+      await screen.findByRole("link", { name: /Summarize the attached brief/ }),
     ).toBeInTheDocument();
-    expect(
-      await screen.findByText("Connecting before first message…"),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(
+          document.querySelector<HTMLFormElement>(".session-composer")!,
+        ).getByText("Connecting…"),
+      ).toBeInTheDocument(),
+    );
     expect(
       calls.filter((call) => call.path.endsWith("/messages")),
     ).toHaveLength(0);
@@ -2400,14 +2495,13 @@ describe("new task composer", () => {
       source.url.includes(createdSessionId),
     )!;
     act(() => createdSource.emitOpen());
-    expect(
-      await screen.findByText("Sending first message…"),
-    ).toBeInTheDocument();
-    expect(
-      within(
-        document.querySelector<HTMLFormElement>(".session-composer")!,
-      ).getByText("Sending first message…"),
-    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(
+          document.querySelector<HTMLFormElement>(".session-composer")!,
+        ).getByText("Sending…"),
+      ).toBeInTheDocument(),
+    );
     expect(document.querySelector(".session-delivery")).not.toBeInTheDocument();
     resolveMessage(apiError("ARK_UNAVAILABLE", 503, true));
 

@@ -165,12 +165,7 @@ export function AdminSettingsPage({
 
   return (
     <div className="page admin-page">
-      <PageHeader
-        eyebrow="Administration"
-        title="Settings"
-        description="Platform-wide defaults. User-level overrides take precedence per dimension."
-        headingRef={headingRef}
-      />
+      <PageHeader title="Settings" headingRef={headingRef} />
 
       <section className="admin-section" aria-label="Default quota policy">
         <h2 className="admin-section__title">Default quota policy</h2>

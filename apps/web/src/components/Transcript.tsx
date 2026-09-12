@@ -38,7 +38,6 @@ export function Transcript({ blocks }: { blocks: readonly TranscriptBlock[] }) {
             >
               <UserRound size={17} aria-hidden="true" />
               <div className="transcript__bubble">
-                <strong>You</strong>
                 <Markdown artifactLinks>{block.item.text}</Markdown>
               </div>
             </li>
@@ -82,7 +81,6 @@ export function Transcript({ blocks }: { blocks: readonly TranscriptBlock[] }) {
               >
                 <Bot size={17} aria-hidden="true" />
                 <div className="transcript__bubble">
-                  <strong>Agent</strong>
                   <Markdown artifactLinks>{block.answer.text}</Markdown>
                 </div>
               </div>

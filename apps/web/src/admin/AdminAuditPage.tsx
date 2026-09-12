@@ -155,11 +155,7 @@ export function AdminAuditPage({
 
   return (
     <div className="page admin-page">
-      <PageHeader
-        eyebrow="Administration"
-        title="Audit"
-        description="Administrative actions, sign-in outcomes, and quota interrupts. Defaults to the last 7 days."
-      />
+      <PageHeader title="Audit" description="Last 7 days by default." />
 
       <div className="admin-filter-grid">
         <Field label="From">

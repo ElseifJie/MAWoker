@@ -32,7 +32,10 @@ import {
   type SessionFeedback,
 } from "./components/SessionComposer.js";
 import { useSessionTimeline } from "./timeline/useSessionTimeline.js";
-import { WorkspaceRail } from "./components/WorkspaceRail.js";
+import {
+  RAIL_DEFAULT_WIDTH,
+  WorkspaceRail,
+} from "./components/WorkspaceRail.js";
 import {
   Alert,
   Badge,
@@ -94,9 +97,18 @@ interface SessionPageProps {
 
 export function SessionPage(props: SessionPageProps) {
   const { sessionId } = useParams();
+  // Held above the keyed content so the chosen panel width survives moving
+  // between Sessions rather than snapping back on every navigation.
+  const [railWidth, setRailWidth] = useState(RAIL_DEFAULT_WIDTH);
   if (!sessionId) return null;
   return (
-    <SessionPageContent key={sessionId} {...props} sessionId={sessionId} />
+    <SessionPageContent
+      key={sessionId}
+      {...props}
+      sessionId={sessionId}
+      railWidth={railWidth}
+      onRailWidthChange={setRailWidth}
+    />
   );
 }
 
@@ -107,7 +119,13 @@ function SessionPageContent({
   onSessionChanged,
   onAuthRequired,
   sessionId,
-}: SessionPageProps & { sessionId: string }) {
+  railWidth,
+  onRailWidthChange,
+}: SessionPageProps & {
+  sessionId: string;
+  railWidth: number;
+  onRailWidthChange: (width: number) => void;
+}) {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [feedback, setFeedback] = useState<SessionFeedback | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -504,7 +522,6 @@ function SessionPageContent({
       >
         <header className="session-header">
           <div className="session-heading">
-            <p className="eyebrow">Session</p>
             <h1 ref={pageHeadingRef} tabIndex={-1}>
               {session.title}
             </h1>
@@ -725,6 +742,8 @@ function SessionPageContent({
           selectedArtifactId={selectedArtifactId}
           onSelectArtifact={selectArtifact}
           onClose={() => setRailOpen(false)}
+          width={railWidth}
+          onWidthChange={onRailWidthChange}
         />
       ) : null}
     </div>

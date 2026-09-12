@@ -128,7 +128,6 @@ describe("SessionList", () => {
         }),
       ],
       archivedSessions: [],
-      searchOpen: false,
       onSessionChanged,
       onAuthRequired: vi.fn(),
     });
@@ -151,7 +150,6 @@ describe("SessionList", () => {
     renderList({
       sessions: [session()],
       archivedSessions: [],
-      searchOpen: false,
       onSessionChanged,
       onAuthRequired: vi.fn(),
     });
@@ -196,7 +194,6 @@ describe("SessionList", () => {
     renderList({
       sessions: [session()],
       archivedSessions: [],
-      searchOpen: false,
       onSessionChanged,
       onAuthRequired: vi.fn(),
     });
@@ -261,7 +258,6 @@ describe("SessionList", () => {
     renderList({
       sessions: [session()],
       archivedSessions: [],
-      searchOpen: false,
       onSessionChanged,
       onAuthRequired: vi.fn(),
     });
@@ -276,23 +272,53 @@ describe("SessionList", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript");
   });
 
-  it("filters by title once search is open", async () => {
+  it("pins a Session from the row's hover control", async () => {
+    stubFetch((path, method) =>
+      path.endsWith("/pin") && method === "PUT"
+        ? { ...session(), pinnedAt: "2026-09-11T12:00:00.000Z" }
+        : {},
+    );
     renderList({
-      sessions: [
-        session({ id: "a", title: "Quarterly plan" }),
-        session({ id: "b", title: "Budget review" }),
-      ],
+      sessions: [session()],
       archivedSessions: [],
-      searchOpen: true,
       onSessionChanged,
       onAuthRequired: vi.fn(),
     });
 
     const user = userEvent.setup();
-    await user.type(screen.getByLabelText("Search sessions"), "budget");
+    const pin = screen.getByRole("button", { name: "Pin Quarterly plan" });
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    await user.click(pin);
 
-    expect(screen.getByText("Budget review")).toBeInTheDocument();
-    expect(screen.queryByText("Quarterly plan")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Results" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(onSessionChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ pinnedAt: "2026-09-11T12:00:00.000Z" }),
+      ),
+    );
+  });
+
+  it("unpins a pinned Session from the row control", async () => {
+    stubFetch((path, method) =>
+      path.endsWith("/pin") && method === "DELETE"
+        ? { ...session(), pinnedAt: null }
+        : {},
+    );
+    renderList({
+      sessions: [session({ pinnedAt: "2026-09-11T10:00:00.000Z" })],
+      archivedSessions: [],
+      onSessionChanged,
+      onAuthRequired: vi.fn(),
+    });
+
+    const user = userEvent.setup();
+    const pin = screen.getByRole("button", { name: "Unpin Quarterly plan" });
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    await user.click(pin);
+
+    await waitFor(() =>
+      expect(onSessionChanged).toHaveBeenCalledWith(
+        expect.objectContaining({ pinnedAt: null }),
+      ),
+    );
   });
 });

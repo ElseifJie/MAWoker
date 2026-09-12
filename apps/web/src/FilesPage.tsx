@@ -122,13 +122,11 @@ export function FilesPage({
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Workspace"
         title="My files"
-        description="Agent-generated artifacts from your Sessions."
         headingRef={pageHeadingRef}
         actions={
           <div className="artifact-filter">
-            <Field label="Filter by Session">
+            <Field label="Session">
               <Select
                 value={sessionId}
                 onChange={(event) => setSessionId(event.target.value)}

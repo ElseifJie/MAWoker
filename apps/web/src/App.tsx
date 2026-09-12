@@ -34,6 +34,7 @@ import { SessionIntro } from "./components/SessionIntro.js";
 import type { FirstMessageDelivery } from "./components/SessionComposer.js";
 import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { SessionList } from "./components/SessionList.js";
+import { SessionSearch } from "./components/SessionSearch.js";
 import { FilesPage } from "./FilesPage.js";
 import { SessionPage } from "./SessionPage.js";
 import {
@@ -70,6 +71,15 @@ export const FIRST_MESSAGE_STREAM_TIMEOUT_MS = 15_000;
 
 function isAuthError(error: unknown): boolean {
   return error instanceof ApiClientError && error.isAuthRequired;
+}
+
+/**
+ * `authSubject` is namespaced ("local:user@example.com"); the part after the
+ * colon is what identifies the person in the sidebar footer.
+ */
+function accountHandle(authSubject: string): string {
+  const separator = authSubject.indexOf(":");
+  return separator >= 0 ? authSubject.slice(separator + 1) : authSubject;
 }
 
 function LoadingScreen() {
@@ -549,11 +559,11 @@ function Workspace({
         <SessionList
           sessions={data.sessions}
           archivedSessions={data.archivedSessions}
-          searchOpen={searchOpen}
           onSessionChanged={handleSessionChanged}
           onAuthRequired={onAuthRequired}
         />
       }
+      user={{ handle: accountHandle(user.authSubject) }}
       backdropLabel="Close navigation"
       onSignOut={signOut}
     >
@@ -629,6 +639,13 @@ function Workspace({
         commands={commands}
         onClose={() => setPaletteOpen(false)}
       />
+      <SessionSearch
+        open={searchOpen}
+        sessions={data.sessions}
+        archivedSessions={data.archivedSessions}
+        onClose={() => setSearchOpen(false)}
+        onSelect={(session) => navigate(`/sessions/${session.id}`)}
+      />
     </AppShell>
   );
 }
@@ -640,11 +657,11 @@ function PageFrame({
 }: {
   children?: ReactNode;
   title: string;
-  description: string;
+  description?: string;
 }) {
   return (
     <div className="page">
-      <PageHeader eyebrow="Workspace" title={title} description={description} />
+      <PageHeader title={title} {...(description ? { description } : {})} />
       {children}
     </div>
   );
@@ -660,10 +677,7 @@ function SettingsPage({
   capabilities: ClientCapabilities;
 }) {
   return (
-    <PageFrame
-      title="Settings"
-      description="Account details, appearance, and workspace capabilities."
-    >
+    <PageFrame title="Settings">
       <dl className="settings-list">
         <div>
           <dt>Account</dt>
@@ -676,10 +690,7 @@ function SettingsPage({
         aria-labelledby="appearance-heading"
       >
         <h2 id="appearance-heading">Appearance</h2>
-        <Field
-          label="Theme"
-          hint="Applies immediately and is remembered on this device."
-        >
+        <Field label="Theme">
           <Select
             id="appearance"
             value={theme.preference}
@@ -749,6 +760,7 @@ export function App() {
   if (auth.user.role === "admin") {
     return (
       <AdminWorkspace
+        user={auth.user}
         onSignedOut={() => setAuth({ status: "unauthenticated" })}
         onAuthRequired={() => setAuth({ status: "unauthenticated" })}
       />

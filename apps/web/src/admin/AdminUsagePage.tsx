@@ -175,9 +175,8 @@ export function AdminUsagePage({
   return (
     <div className="page admin-page">
       <PageHeader
-        eyebrow="Administration"
         title="Usage"
-        description={`Platform consumption for ${formatUsagePeriod(overview.period.startsAt)}, matching the quota enforcement window.`}
+        description={`Platform consumption for ${formatUsagePeriod(overview.period.startsAt)}.`}
         actions={
           <Button variant="secondary" onClick={exportCsv}>
             <Download size={16} aria-hidden="true" />

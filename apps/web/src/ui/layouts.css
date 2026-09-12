@@ -76,13 +76,16 @@
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-large);
   background: var(--ui-color-surface);
+  /* The table sizes to its container; columns handle their own wrapping, so the
+     rounded corners must not clip cell content. */
+  scrollbar-width: thin;
 }
 
 .ui-data-table {
   width: 100%;
   border-collapse: collapse;
   color: var(--ui-color-text);
-  font-size: 0.8125rem;
+  font-size: 0.875rem;
 }
 
 .ui-data-table--standard {
@@ -99,13 +102,31 @@
   border-bottom: 1px solid var(--ui-color-border);
   text-align: left;
   vertical-align: middle;
+  white-space: nowrap;
 }
 
 .ui-data-table th {
   color: var(--ui-color-text-muted);
   background: var(--ui-color-surface-subtle);
   font-size: 0.75rem;
-  font-weight: 700;
+  font-weight: 590;
+  letter-spacing: 0.01em;
+}
+
+.ui-data-table tbody tr:nth-child(even) {
+  background: var(--ui-color-surface-subtle);
+}
+
+/* Numeric and token columns read as aligned figures, centred for a clean edge. */
+.ui-data-table .ui-data-table__num,
+.ui-data-table th[scope="col"].ui-data-table__num {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-data-table .admin-mono,
+.ui-data-table .admin-dimmed {
+  font-size: inherit;
 }
 
 .ui-data-table tbody tr:last-child > * {
@@ -212,10 +233,111 @@
   flex-direction: column;
   margin-top: var(--ui-space-3);
   overflow-y: auto;
+  scrollbar-width: none;
 }
 
-.ui-app-shell__sign-out {
-  margin: var(--ui-space-3);
+.ui-app-shell__navigation-extra::-webkit-scrollbar {
+  display: none;
+}
+
+.ui-app-shell__footer {
+  flex: 0 0 auto;
+  padding: var(--ui-space-2) var(--ui-space-2) var(--ui-space-3);
+}
+
+.ui-app-shell__user {
+  position: relative;
+}
+
+.ui-app-shell__user-trigger {
+  display: flex;
+  width: 100%;
+  min-height: var(--ui-control-height-large);
+  align-items: center;
+  gap: 9px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text);
+  background: transparent;
+  text-align: left;
+}
+
+.ui-app-shell__user-trigger:hover {
+  background: var(--ui-color-surface-hover);
+}
+
+.ui-app-shell__user-avatar {
+  display: inline-grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--ui-color-border-strong);
+  border-radius: 50%;
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.ui-app-shell__user-identity {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.25;
+}
+
+.ui-app-shell__user-name,
+.ui-app-shell__user-handle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-app-shell__user-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.ui-app-shell__user-handle {
+  color: var(--ui-color-text-muted);
+  font-size: 0.6875rem;
+}
+
+.ui-app-shell__user-more {
+  flex: 0 0 auto;
+  color: var(--ui-color-text-muted);
+}
+
+.ui-app-shell__user-menu {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 176px;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-medium);
+  background: var(--ui-color-surface);
+  box-shadow: var(--ui-shadow-overlay);
+}
+
+.ui-app-shell__user-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text);
+  background: transparent;
+  font-size: 0.8125rem;
+  text-align: left;
+}
+
+.ui-app-shell__user-menu-item:hover {
+  background: var(--ui-color-surface-hover);
 }
 
 .ui-app-shell__content {

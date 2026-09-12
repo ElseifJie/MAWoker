@@ -209,9 +209,7 @@ export function AgentPage({
   return (
     <div className="page">
       <PageHeader
-        eyebrow="Workspace"
         title="Agents"
-        description="Use assigned Agents or shape a personal Agent for focused work."
         headingRef={pageHeadingRef}
         actions={
           <Button
@@ -236,7 +234,6 @@ export function AgentPage({
       <section className="agent-section" aria-label="Platform provided">
         <SectionHeader
           title="Platform provided"
-          description="Assigned by your administrator and available read-only."
           actions={<Badge>{platformAgents.length}</Badge>}
         />
         {platformAgents.length === 0 ? (
@@ -253,7 +250,6 @@ export function AgentPage({
       <section className="agent-section" aria-label="My Agents">
         <SectionHeader
           title="My Agents"
-          description="Private configurations that only you can manage."
           actions={<Badge>{personalAgents.length}</Badge>}
         />
         {personalAgents.length === 0 ? (

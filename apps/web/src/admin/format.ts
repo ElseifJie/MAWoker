@@ -1,22 +1,26 @@
 const dateFormatter = new Intl.DateTimeFormat("en", {
-  year: "numeric",
   month: "short",
-  day: "2-digit",
+  day: "numeric",
+  year: "numeric",
 });
 
 const dateTimeFormatter = new Intl.DateTimeFormat("en", {
-  year: "numeric",
   month: "short",
-  day: "2-digit",
-  hour: "2-digit",
+  day: "numeric",
+  hour: "numeric",
   minute: "2-digit",
 });
 
+/**
+ * Compact, single-line dates: the short forms keep the audit and account tables
+ * to one line per cell instead of wrapping the full "Month d, yyyy" spelling.
+ */
 export function formatDate(value: string | Date): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : dateFormatter.format(date);
 }
 
+/** e.g. "Sep 12, 8:53 PM" — omits the year, which the table context supplies. */
 export function formatDateTime(value: string | Date): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : dateTimeFormatter.format(date);

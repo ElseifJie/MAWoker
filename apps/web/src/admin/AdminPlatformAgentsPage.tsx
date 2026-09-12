@@ -1,4 +1,4 @@
-import { Pencil, Plus, Power, Trash2 } from "lucide-react";
+import { Plus, Power, Trash2 } from "lucide-react";
 import { type SyntheticEvent, useRef, useState } from "react";
 import { ApiClientError, apiClient, type AdminPlatformAgent } from "../api.js";
 import {
@@ -10,6 +10,7 @@ import {
   Field,
   Input,
   PageHeader,
+  RowActionsMenu,
   Select,
   Spinner,
   Textarea,
@@ -188,9 +189,7 @@ export function AdminPlatformAgentsPage({
   return (
     <div className="page admin-page">
       <PageHeader
-        eyebrow="Administration"
         title="Platform Agents"
-        description="Manage shared Agent configurations without accessing user content."
         headingRef={headingRef}
         actions={
           <Button
@@ -279,35 +278,36 @@ export function AdminPlatformAgentsPage({
                     }}
                     disabled={pending || agent.status === "deleting"}
                   >
-                    <Pencil size={14} aria-hidden="true" />
                     Edit
                   </Button>
-                  {agent.status === "active" || agent.status === "disabled" ? (
-                    <Button
-                      size="compact"
-                      variant="secondary"
-                      aria-label={`${agent.status === "active" ? "Disable" : "Enable"} ${agent.name}`}
-                      onClick={() => void toggleStatus(agent)}
-                      disabled={pending}
-                    >
-                      <Power size={14} aria-hidden="true" />
-                      {agent.status === "active" ? "Disable" : "Enable"}
-                    </Button>
-                  ) : null}
-                  <Button
-                    size="compact"
-                    variant="text"
-                    className="admin-delete-action"
-                    aria-label={`Delete ${agent.name}`}
-                    onClick={() => {
-                      setFeedback(null);
-                      setDeleteTarget(agent);
-                    }}
-                    disabled={pending || agent.status === "deleting"}
-                  >
-                    <Trash2 size={14} aria-hidden="true" />
-                    Delete
-                  </Button>
+                  <RowActionsMenu
+                    label={`Actions for ${agent.name}`}
+                    items={[
+                      ...(agent.status === "active" ||
+                      agent.status === "disabled"
+                        ? [
+                            {
+                              icon: <Power size={14} aria-hidden="true" />,
+                              text:
+                                agent.status === "active"
+                                  ? "Disable"
+                                  : "Enable",
+                              run: () => void toggleStatus(agent),
+                            },
+                          ]
+                        : []),
+                      {
+                        icon: <Trash2 size={14} aria-hidden="true" />,
+                        text: "Delete",
+                        danger: true,
+                        disabled: pending || agent.status === "deleting",
+                        run: () => {
+                          setFeedback(null);
+                          setDeleteTarget(agent);
+                        },
+                      },
+                    ]}
+                  />
                 </div>
               </td>
             </tr>

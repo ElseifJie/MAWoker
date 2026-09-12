@@ -1,12 +1,26 @@
 import type { ArtifactSummary } from "./api.js";
 
 export type ArtifactKind =
-  "markdown" | "text" | "image" | "html" | "csv" | "pdf" | "other";
+  | "markdown"
+  | "text"
+  | "image"
+  | "html"
+  | "csv"
+  | "pdf"
+  | "word"
+  | "slides"
+  | "other";
 
 /** Above this the browser downloads instead of previewing; a huge CSV would hang the tab. */
 export const PREVIEW_MAX_BYTES = 2 * 1024 * 1024;
 
-const INLINE_KINDS: ReadonlySet<ArtifactKind> = new Set([
+/**
+ * Office and PDF documents are binary and rendered by their own engine; the
+ * text cap above is about DOM text nodes, not file size, so they get more room.
+ */
+export const DOCUMENT_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
+
+const TEXT_KINDS: ReadonlySet<ArtifactKind> = new Set([
   "markdown",
   "text",
   "image",
@@ -14,13 +28,21 @@ const INLINE_KINDS: ReadonlySet<ArtifactKind> = new Set([
   "csv",
 ]);
 
+const DOCUMENT_KINDS: ReadonlySet<ArtifactKind> = new Set([
+  "pdf",
+  "word",
+  "slides",
+]);
+
 export function canPreview(
   artifact: Pick<ArtifactSummary, "name" | "mimeType" | "sizeBytes">,
 ): boolean {
-  return (
-    INLINE_KINDS.has(artifactKind(artifact)) &&
-    artifact.sizeBytes <= PREVIEW_MAX_BYTES
-  );
+  const kind = artifactKind(artifact);
+  if (TEXT_KINDS.has(kind)) return artifact.sizeBytes <= PREVIEW_MAX_BYTES;
+  if (DOCUMENT_KINDS.has(kind)) {
+    return artifact.sizeBytes <= DOCUMENT_PREVIEW_MAX_BYTES;
+  }
+  return false;
 }
 
 function extensionOf(name: string): string {
@@ -32,10 +54,9 @@ function extensionOf(name: string): string {
  * Classifies by MIME type first and falls back to the extension, because Ark
  * reports `application/octet-stream` for files the Agent wrote itself.
  *
- * Office and PDF formats deliberately classify as something we do not render
- * inline: the npm `xlsx` package is frozen at a release with unpatched
- * prototype-pollution and ReDoS advisories, and no other in-browser reader for
- * docx/pptx is worth the supply-chain surface. Those are download-only.
+ * Legacy binary formats (`.doc`, `.ppt`) stay download-only: the in-browser
+ * renderers only understand the OOXML zip containers (`.docx`, `.pptx`), and
+ * misclassifying them would promise a preview that cannot render.
  */
 export function artifactKind(
   artifact: Pick<ArtifactSummary, "name" | "mimeType">,
@@ -45,6 +66,8 @@ export function artifactKind(
   if (mime === "text/csv") return "csv";
   if (mime === "text/html") return "html";
   if (mime === "application/pdf") return "pdf";
+  if (mime.includes("wordprocessingml")) return "word";
+  if (mime.includes("presentationml")) return "slides";
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("text/")) return "text";
 
@@ -60,6 +83,10 @@ export function artifactKind(
       return "html";
     case "pdf":
       return "pdf";
+    case "docx":
+      return "word";
+    case "pptx":
+      return "slides";
     case "txt":
     case "log":
     case "json":

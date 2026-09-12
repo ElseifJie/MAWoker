@@ -11,7 +11,6 @@ import {
 import {
   useCallback,
   useEffect,
-  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -265,6 +264,7 @@ function SessionRow({
   onDeleteRequested,
 }: SessionRowProps) {
   const [busy, setBusy] = useState(false);
+  const pinned = Boolean(session.pinnedAt);
 
   const fail = (error: unknown, operation: string) => {
     if (error instanceof ApiClientError && error.isAuthRequired) {
@@ -324,6 +324,20 @@ function SessionRow({
 
   return (
     <li className="session-row">
+      <IconButton
+        className="session-row__pin"
+        label={pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+        size="small"
+        aria-pressed={pinned}
+        disabled={busy}
+        onClick={() => void togglePin()}
+      >
+        {pinned ? (
+          <PinOff size={14} aria-hidden="true" />
+        ) : (
+          <Pin size={14} aria-hidden="true" />
+        )}
+      </IconButton>
       <NavLink
         to={`/sessions/${session.id}`}
         className={({ isActive }) =>
@@ -362,7 +376,6 @@ function SessionRow({
 export interface SessionListProps {
   sessions: readonly SessionSummary[];
   archivedSessions: readonly SessionSummary[];
-  searchOpen: boolean;
   onSessionChanged: (session: SessionSummary) => void;
   onAuthRequired: () => void;
 }
@@ -375,11 +388,9 @@ export interface SessionListProps {
 export function SessionList({
   sessions,
   archivedSessions,
-  searchOpen,
   onSessionChanged,
   onAuthRequired,
 }: SessionListProps) {
-  const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<SessionSummary | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -390,25 +401,10 @@ export function SessionList({
   const [showArchived, setShowArchived] = useState(false);
   const renameRef = useRef<HTMLInputElement>(null);
   const deleteRef = useRef<HTMLInputElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const searchId = useId();
 
-  useEffect(() => {
-    if (searchOpen) searchRef.current?.focus();
-  }, [searchOpen]);
-
-  const filtering = query.trim().length > 0;
-  const visible = sessions.filter((session) => matchesQuery(session, query));
-  const pinned = visible.filter((session) => session.pinnedAt !== null);
-  const unpinned = visible.filter((session) => session.pinnedAt === null);
-  const groups = filtering
-    ? visible.length === 0
-      ? []
-      : [{ key: "results", label: "Results", sessions: visible }]
-    : groupSessions(unpinned, new Date());
-  const archivedVisible = archivedSessions.filter((session) =>
-    matchesQuery(session, query),
-  );
+  const pinned = sessions.filter((session) => Boolean(session.pinnedAt));
+  const unpinned = sessions.filter((session) => !session.pinnedAt);
+  const groups = groupSessions(unpinned, new Date());
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -495,25 +491,6 @@ export function SessionList({
 
   return (
     <div className="session-list">
-      {searchOpen ? (
-        <div className="session-list__search">
-          <label className="sr-only" htmlFor={searchId}>
-            Search sessions
-          </label>
-          <Input
-            id={searchId}
-            ref={searchRef}
-            type="search"
-            value={query}
-            placeholder="Search sessions"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") setQuery("");
-            }}
-          />
-        </div>
-      ) : null}
-
       {error ? (
         <p className="session-list__error" role="alert">
           {error}
@@ -552,17 +529,11 @@ export function SessionList({
         </section>
       ))}
 
-      {filtering && visible.length === 0 && archivedVisible.length === 0 ? (
-        <p className="session-list__empty">No sessions match “{query}”.</p>
+      {sessions.length === 0 ? (
+        <p className="session-list__empty">No sessions yet.</p>
       ) : null}
 
-      {!filtering && sessions.length === 0 ? (
-        <p className="session-list__empty">
-          No sessions yet. Start one with New task.
-        </p>
-      ) : null}
-
-      {archivedVisible.length > 0 ? (
+      {archivedSessions.length > 0 ? (
         <section
           className="session-group session-group--archived"
           aria-label="Archived sessions"
@@ -575,12 +546,12 @@ export function SessionList({
               onClick={() => setShowArchived((current) => !current)}
             >
               Archived
-              <span>{archivedVisible.length}</span>
+              <span>{archivedSessions.length}</span>
             </button>
           </h2>
           {showArchived ? (
             <ul className="session-group__list">
-              {archivedVisible.map((session) => (
+              {archivedSessions.map((session) => (
                 <SessionRow key={session.id} session={session} {...rowProps} />
               ))}
             </ul>

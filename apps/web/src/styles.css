@@ -209,10 +209,6 @@ select:not(.ui-select):hover {
   padding-bottom: var(--ui-space-2);
 }
 
-.session-list__search {
-  padding-inline: 2px;
-}
-
 .session-list__error {
   margin: 0 6px;
   padding: 7px 9px;
@@ -233,6 +229,8 @@ select:not(.ui-select):hover {
 
 .session-group {
   display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   gap: 2px;
 }
 
@@ -269,6 +267,7 @@ select:not(.ui-select):hover {
 
 .session-group__list {
   display: grid;
+  min-width: 0;
   gap: 1px;
   margin: 0;
   padding: 0;
@@ -276,13 +275,52 @@ select:not(.ui-select):hover {
 }
 
 .session-row {
+  position: relative;
   display: flex;
+  min-width: 0;
   align-items: center;
   border-radius: var(--ui-radius-small);
 }
 
 .session-row:hover {
   background: var(--ui-color-surface-hover);
+}
+
+/* Floating pin control: hidden until the row is hovered or focused, then the
+   link's leading padding opens up so the pin never sits over the title. */
+.session-row__pin {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  transform: translateY(-50%);
+  border-color: transparent;
+  color: var(--ui-color-text-muted);
+  background: transparent;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.session-row:focus-within .session-row__pin,
+.session-row__pin:focus-visible {
+  opacity: 1;
+}
+
+.session-row:focus-within .session-row__link,
+.session-row:has(.session-row__pin:focus-visible) .session-row__link {
+  padding-left: 34px;
+}
+
+@media (hover: hover) {
+  .session-row:hover .session-row__pin {
+    opacity: 1;
+  }
+
+  .session-row:hover .session-row__link {
+    padding-left: 34px;
+  }
 }
 
 .session-row__link {
@@ -401,6 +439,186 @@ select:not(.ui-select):hover {
 
 .session-menu__item--danger:hover {
   background: var(--ui-color-danger-subtle);
+}
+
+/* Dense table-row overflow menu, sharing the session menu's shape. */
+.row-actions-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.row-actions-menu__panel {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 168px;
+  gap: 1px;
+  padding: 4px;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-medium);
+  background: var(--ui-color-surface);
+  box-shadow: var(--ui-shadow-overlay);
+}
+
+.row-actions-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text);
+  background: transparent;
+  font-size: 0.8125rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.row-actions-menu__item:hover {
+  background: var(--ui-color-surface-hover);
+}
+
+.row-actions-menu__item--danger {
+  color: var(--ui-color-danger);
+}
+
+.row-actions-menu__item--danger:hover {
+  background: var(--ui-color-danger-subtle);
+}
+
+/* Standalone task search, opened from the sidebar's Search entry. */
+.session-search {
+  display: flex;
+  width: min(100%, 620px);
+  max-height: min(80vh, 720px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-large);
+  color: var(--ui-color-text);
+  background: var(--ui-color-surface);
+  box-shadow: var(--ui-shadow-overlay);
+}
+
+.session-search__field {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--ui-color-border);
+  color: var(--ui-color-text-muted);
+}
+
+.session-search__input {
+  height: auto;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.9375rem;
+}
+
+.session-search__input:focus-visible {
+  border-color: transparent;
+  outline: none;
+}
+
+.session-search__meta {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--ui-color-border);
+  color: var(--ui-color-text-muted);
+  font-size: 0.75rem;
+}
+
+.session-search__meta-hints {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.session-search__key {
+  display: inline-grid;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  place-items: center;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-small);
+  background: var(--ui-color-surface-subtle);
+  font-family: inherit;
+  font-size: 0.6875rem;
+}
+
+.session-search__key--wide {
+  min-width: 42px;
+}
+
+.session-search__count {
+  margin-left: 6px;
+  color: var(--ui-color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-search__empty {
+  margin: 0;
+  padding: 22px 16px;
+  color: var(--ui-color-text-muted);
+  font-size: 0.8125rem;
+}
+
+.session-search__list {
+  min-height: 0;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.session-search__option {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-3);
+  min-height: 42px;
+  padding: 6px 10px;
+  border-radius: var(--ui-radius-medium);
+  color: var(--ui-color-text);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+
+.session-search__option.is-active {
+  background: var(--ui-color-surface-hover);
+}
+
+.session-search__option-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-search__option-meta {
+  flex: 0 1 auto;
+  overflow: hidden;
+  color: var(--ui-color-text-muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-search__option-time {
+  flex: 0 0 auto;
+  color: var(--ui-color-text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .admin-page {
@@ -751,6 +969,32 @@ select:not(.ui-select):hover {
   padding: 0;
 }
 
+/* New task is a single centered column: the composer is the whole point, so it
+   sits in the optical middle of the viewport rather than at the top. Placed
+   after the shell override above so the same specificity lands last. */
+.ui-app-shell__main > .session-intro {
+  display: grid;
+  width: min(100%, 720px);
+  min-height: calc(100vh - 80px);
+  align-content: center;
+  padding: 0;
+}
+
+/* The composer is the centre of gravity for this page, so the title sits
+   centred above it. The copy box must span the column for that to show. */
+.session-intro .ui-page-header__copy {
+  flex: 1;
+  text-align: center;
+}
+
+/* On mobile the shell reserves a 58px header and 32px block padding, so the
+   viewport-tall centring above would overflow by exactly that difference. */
+@media (max-width: 760px) {
+  .ui-app-shell__main > .session-intro {
+    min-height: 100%;
+  }
+}
+
 .ui-app-shell__main:has(> .session-workspace) {
   width: 100%;
   max-width: none;
@@ -762,20 +1006,67 @@ select:not(.ui-select):hover {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* The rail carries its own width (set while resizing), so the track is `auto`
+   and the transcript column takes whatever is left. */
 .session-workspace:has(> .workspace-rail) {
-  grid-template-columns: minmax(0, 1fr) var(--ui-rail-width);
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .workspace-rail {
+  position: relative;
   display: flex;
   min-width: 0;
+  max-width: 100%;
   flex-direction: column;
   gap: var(--ui-space-3);
   max-height: 100vh;
   padding: 28px 20px 24px;
-  overflow-y: auto;
+  overflow: hidden;
   border-left: 1px solid var(--ui-color-border);
   background: var(--ui-color-surface-subtle);
+}
+
+/* The list region owns the scrolling so the preview below it can take the
+   remaining height instead of being pushed off the bottom. */
+.workspace-rail__scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--ui-space-3);
+  overflow-y: auto;
+}
+
+/* With a preview open the list yields space, and the preview fills what is left. */
+.workspace-rail:has(> .artifact-viewer) .workspace-rail__scroll {
+  flex: 0 1 auto;
+  max-height: 45%;
+}
+
+/* A widened, soft grab strip straddling the divider: easy to hit without a
+   visible bar. It is keyboard-operable with the arrow keys. */
+.workspace-rail__resizer {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 11px;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-rail__resizer:hover,
+.workspace-rail__resizer.is-dragging,
+.workspace-rail__resizer:focus-visible {
+  background: var(--ui-color-accent-subtle);
+}
+
+.workspace-rail__resizer:focus-visible {
+  outline: 2px solid var(--ui-focus-ring);
+  outline-offset: -3px;
 }
 
 .workspace-rail__header {
@@ -950,7 +1241,11 @@ select:not(.ui-select):hover {
 }
 
 .artifact-viewer {
-  display: grid;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
   gap: var(--ui-space-2);
   margin-top: var(--ui-space-4);
   padding: var(--ui-space-3);
@@ -961,6 +1256,7 @@ select:not(.ui-select):hover {
 
 .artifact-viewer__header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--ui-space-2);
 }
@@ -981,6 +1277,7 @@ select:not(.ui-select):hover {
 
 .artifact-viewer__actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: var(--ui-space-2);
 }
@@ -994,7 +1291,9 @@ select:not(.ui-select):hover {
   font-size: 0.8125rem;
 }
 
+/* Text-ish previews scroll within the space the viewer can spare. */
 .artifact-viewer__scroll {
+  min-height: 0;
   max-height: 46vh;
   overflow: auto;
 }
@@ -1016,17 +1315,52 @@ select:not(.ui-select):hover {
 
 .artifact-viewer__image {
   max-width: 100%;
+  min-height: 0;
+  object-fit: contain;
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-medium);
   background: var(--ui-color-surface-subtle);
 }
 
 .artifact-viewer__frame {
+  display: block;
   width: 100%;
+  min-width: 0;
   height: 46vh;
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-medium);
   background: var(--ui-color-embed-canvas);
+}
+
+/* Documents and images fill the panel's remaining height rather than a fixed
+   viewport slice, so a widened side panel shows more of the file. */
+.artifact-viewer__frame--document,
+.artifact-viewer__image,
+.artifact-viewer__document .artifact-viewer__frame {
+  min-height: 160px;
+  flex: 1 1 auto;
+  height: auto;
+  background: var(--ui-color-embed-canvas);
+}
+
+/* The mount, not the frame, carries the border: an iframe border would shrink
+   the content box by 2px and push the width-measured slide into a scrollbar. */
+.artifact-viewer__document {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-medium);
+  background: var(--ui-color-embed-canvas);
+}
+
+.artifact-viewer__document .artifact-viewer__frame {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
 }
 
 .artifact-table {
@@ -1061,6 +1395,24 @@ select:not(.ui-select):hover {
     border-left: 1px solid var(--ui-color-border);
     box-shadow: var(--ui-shadow-overlay);
   }
+
+  /* In the overlay the panel is a scroll container, so the preview keeps a
+     viewport-relative height instead of stretching the sheet. */
+  .workspace-rail:has(> .artifact-viewer) .workspace-rail__scroll {
+    flex: 0 0 auto;
+    max-height: none;
+  }
+
+  .artifact-viewer {
+    flex: 0 0 auto;
+  }
+
+  .artifact-viewer__frame--document,
+  .artifact-viewer__image,
+  .artifact-viewer__document .artifact-viewer__frame {
+    flex: 0 0 auto;
+    height: 46vh;
+  }
 }
 
 .session-intro__templates {
@@ -1071,17 +1423,17 @@ select:not(.ui-select):hover {
 }
 
 .template-card {
-  display: grid;
+  display: flex;
   min-height: var(--ui-control-height-large);
-  gap: var(--ui-space-1);
-  padding: var(--ui-space-4);
+  align-items: center;
+  gap: 8px;
+  padding: 12px var(--ui-space-4);
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-large);
   background: var(--ui-color-surface);
   color: var(--ui-color-text);
   text-align: left;
   cursor: pointer;
-  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .template-card:hover:not(:disabled) {
@@ -1096,22 +1448,17 @@ select:not(.ui-select):hover {
 }
 
 .template-card > svg {
-  grid-row: 1;
-  margin-top: 2px;
+  flex: 0 0 auto;
   color: var(--ui-color-accent-interactive);
 }
 
 .template-card__label {
-  grid-column: 2;
-  font-size: 0.875rem;
-  font-weight: 590;
-}
-
-.template-card__outcome {
-  grid-column: 2;
-  color: var(--ui-color-text-muted);
+  min-width: 0;
+  overflow: hidden;
   font-size: 0.8125rem;
-  line-height: 1.45;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-section {
@@ -1499,16 +1846,6 @@ select:not(.ui-select):hover {
   line-height: 1.5;
 }
 
-.transcript__bubble > strong {
-  display: block;
-  margin-bottom: 2px;
-  color: var(--ui-color-text-muted);
-  font-size: 0.6875rem;
-  font-weight: 590;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
 /*
  * A filled chip for what you wrote, plain text for what the Agent answered:
  * the asymmetry is what makes the two voices readable at a glance.
@@ -1852,16 +2189,28 @@ select:not(.ui-select):hover {
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-large);
   background: var(--ui-color-surface);
-  box-shadow: var(--ui-shadow-raised);
-  grid-template-rows: 70px 52px;
+  box-shadow: var(--ui-shadow-overlay);
+  grid-template-rows: 70px 44px;
+}
+
+/* Same recipe as the New task composer: the card is the input surface, so the
+   focus ring lives on the card and the textarea contributes no box of its own. */
+.session-composer:focus-within {
+  border-color: var(--ui-color-accent);
+  box-shadow: 0 0 0 1px var(--ui-color-accent);
 }
 
 .session-composer .ui-textarea {
   min-height: 70px;
-  padding: 10px 13px;
+  padding: 16px 18px 6px;
   border: 0;
   border-radius: 0;
+  background: transparent;
   resize: none;
+}
+
+.session-composer .ui-textarea:focus-visible {
+  outline: none;
 }
 
 .session-composer-footer {
@@ -1869,8 +2218,7 @@ select:not(.ui-select):hover {
   min-width: 0;
   align-items: center;
   gap: 12px;
-  padding: 7px 10px 7px 13px;
-  border-top: 1px solid var(--ui-color-border);
+  padding: 4px 10px 9px 14px;
   font-size: 0.77rem;
 }
 
@@ -2031,58 +2379,50 @@ select:not(.ui-select):hover {
   box-shadow: var(--ui-shadow-overlay);
 }
 
-.composer-toolbar {
-  display: flex;
-  min-height: 58px;
-  align-items: end;
-  gap: 10px;
-  padding: 10px 12px 8px;
-  border-bottom: 1px solid var(--ui-color-border);
-}
-
-.composer-toolbar > .ui-field {
-  width: min(100%, 320px);
-}
-
-.agent-picker {
-  width: 100%;
-  height: 32px;
-  padding: 0 30px 0 9px;
-  border: 0;
-  background-color: var(--ui-color-surface-subtle);
-  font-size: 0.82rem;
-  font-weight: 590;
-}
-
-.composer > .ui-field {
-  gap: 0;
-}
-
-.composer > .ui-field > .ui-field__label {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
+/* The card is the input surface, so focus is shown on the card: the textarea
+   has no box of its own, and its own outline would be clipped by the card's
+   overflow and read as a stray line under the text. */
+.composer:focus-within {
+  border-color: var(--ui-color-accent);
+  box-shadow: 0 0 0 1px var(--ui-color-accent);
 }
 
 .composer .ui-textarea {
   min-height: 150px;
-  padding: 15px;
+  padding: 16px 18px 8px;
   border: 0;
   border-radius: 0;
+  background: transparent;
+  resize: none;
 }
 
-.attachment-button {
-  margin-left: auto;
+.composer .ui-textarea:focus-visible {
+  outline: none;
 }
 
+.agent-picker {
+  width: auto;
+  max-width: 200px;
+  height: 28px;
+  padding: 0 26px 0 8px;
+  border: 0;
+  color: var(--ui-color-text-muted);
+  background-color: transparent;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.agent-picker:hover:not(:disabled) {
+  color: var(--ui-color-text);
+  background-color: var(--ui-color-surface-subtle);
+}
+
+/* Visually hidden, but pinned to the origin: a bare absolutely-positioned box
+   would sit at its static flex-row offset and add a page-level scrollbar. */
 .file-input {
   position: absolute;
+  top: 0;
+  left: 0;
   width: 1px;
   height: 1px;
   overflow: hidden;
@@ -2094,15 +2434,14 @@ select:not(.ui-select):hover {
 .upload-list {
   display: grid;
   margin: 0;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--ui-color-border);
+  padding: 0 18px 6px;
   gap: 2px;
   list-style: none;
 }
 
 .upload-list li {
   display: flex;
-  min-height: 34px;
+  min-height: 30px;
   align-items: center;
   gap: 8px;
   color: var(--ui-color-text-muted);
@@ -2145,17 +2484,16 @@ select:not(.ui-select):hover {
 
 .composer-footer {
   display: flex;
-  min-height: 58px;
+  min-height: 44px;
   align-items: center;
   gap: 12px;
-  padding: 9px 12px;
-  border-top: 1px solid var(--ui-color-border);
+  padding: 4px 10px 9px 14px;
 }
 
 .composer-feedback {
   display: flex;
   min-width: 0;
-  min-height: 34px;
+  min-height: 28px;
   flex: 1;
   align-items: center;
   font-size: 0.78rem;
@@ -2169,12 +2507,21 @@ select:not(.ui-select):hover {
 }
 
 .composer-feedback .ui-alert {
-  padding: 6px 8px;
+  padding: 6px 0;
   border: 0;
   background: transparent;
 }
 
+.composer-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
 .send-button {
+  width: 28px;
+  height: 28px;
   border-color: var(--ui-color-accent-hover);
   color: var(--ui-color-text-inverse);
   background: var(--ui-color-accent);
@@ -2332,16 +2679,12 @@ select:not(.ui-select):hover {
     padding: 26px 22px;
   }
 
-  .composer-toolbar {
-    align-items: center;
+  .composer-controls {
+    gap: 4px;
   }
 
   .agent-picker {
-    width: 100%;
-  }
-
-  .composer-feedback {
-    min-height: 50px;
+    max-width: 130px;
   }
 
   .upload-list li {
@@ -2469,15 +2812,20 @@ select:not(.ui-select):hover {
 
 .admin-user-cell {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--ui-space-2);
+  min-width: 0;
 }
 
 .admin-user-cell__link {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ui-color-text);
   font-weight: 510;
   text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-user-cell__link:hover {
@@ -2502,7 +2850,8 @@ select:not(.ui-select):hover {
 .admin-table-end {
   padding: var(--ui-space-3) 0 var(--ui-space-6);
   color: var(--ui-color-text-faint);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
+  font-weight: 400;
   text-align: center;
 }
 
@@ -2575,8 +2924,8 @@ select:not(.ui-select):hover {
 .admin-stat-card {
   display: flex;
   flex-direction: column;
-  gap: var(--ui-space-1);
-  padding: var(--ui-space-4);
+  gap: 2px;
+  padding: var(--ui-space-3) var(--ui-space-4);
   background: var(--ui-color-surface-subtle);
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-medium);
@@ -2584,15 +2933,15 @@ select:not(.ui-select):hover {
 
 .admin-stat-card__label {
   color: var(--ui-color-text-muted);
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
   font-weight: 510;
 }
 
 .admin-stat-card__value {
   color: var(--ui-color-text);
-  font-size: 2rem;
+  font-size: 1.375rem;
   font-weight: 590;
-  letter-spacing: -0.704px;
+  letter-spacing: -0.4px;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }

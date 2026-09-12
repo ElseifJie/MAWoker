@@ -236,14 +236,14 @@
 .ui-badge {
   display: inline-flex;
   width: fit-content;
-  min-height: 22px;
+  min-height: 20px;
   align-items: center;
-  gap: 5px;
-  padding: 2px var(--ui-space-2);
+  gap: 4px;
+  padding: 1px var(--ui-space-2);
   border: 1px solid transparent;
   border-radius: var(--ui-radius-medium);
-  font-size: 0.75rem;
-  font-weight: 590;
+  font-size: 0.6875rem;
+  font-weight: 510;
   line-height: 1.2;
 }
 

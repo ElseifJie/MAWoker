@@ -464,6 +464,17 @@ describe("administrator role routing", () => {
 });
 
 describe("platform Agent administration", () => {
+  // The dense row actions live behind the "…" overflow menu.
+  async function openRowMenu(
+    user: ReturnType<typeof userEvent.setup>,
+    rowName: string,
+  ) {
+    await user.click(
+      screen.getByRole("button", { name: `Actions for ${rowName}` }),
+    );
+    return screen.getByRole("menu");
+  }
+
   it("reserves the Agent editor loading icon slot while idle", async () => {
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
 
@@ -498,12 +509,7 @@ describe("platform Agent administration", () => {
     ).toBeInTheDocument();
     expect(
       within(table).getByRole("button", {
-        name: "Disable Research assistant",
-      }),
-    ).toBeInTheDocument();
-    expect(
-      within(table).getByRole("button", {
-        name: "Delete Research assistant",
+        name: "Actions for Research assistant",
       }),
     ).toBeInTheDocument();
   });
@@ -628,23 +634,38 @@ describe("platform Agent administration", () => {
     expect(await screen.findByText("Research lead")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: "Disable Research lead" }),
+    await openRowMenu(user, "Research lead");
+    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "PATCH" &&
+            call.path.endsWith(agentId) &&
+            (call.body as { status?: string }).status === "disabled",
+        ),
+      ).toBe(true),
     );
-    expect(
-      await screen.findByRole("button", { name: "Enable Research lead" }),
-    ).toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", { name: "Enable Legacy assistant" }),
-    );
-    expect(
-      await screen.findByRole("button", { name: "Disable Legacy assistant" }),
-    ).toBeInTheDocument();
 
-    const deleteTrigger = screen.getByRole("button", {
-      name: "Delete Legacy assistant",
+    await openRowMenu(user, "Legacy assistant");
+    await user.click(screen.getByRole("menuitem", { name: "Enable" }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (call) =>
+            call.method === "PATCH" &&
+            call.path.endsWith(disabledAgentId) &&
+            (call.body as { status?: string }).status === "active",
+        ),
+      ).toBe(true),
+    );
+
+    const menuTrigger = screen.getByRole("button", {
+      name: "Actions for Legacy assistant",
     });
-    await user.click(deleteTrigger);
+    await user.click(menuTrigger);
+    const deleteMenuItem = screen.getByRole("menuitem", { name: "Delete" });
+    await user.click(deleteMenuItem);
     const firstDialog = screen.getByRole("dialog", {
       name: "Delete platform Agent?",
     });
@@ -662,9 +683,9 @@ describe("platform Agent administration", () => {
     ).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(deleteTrigger).toHaveFocus();
 
-    await user.click(deleteTrigger);
+    await user.click(menuTrigger);
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     await user.click(
       within(
         screen.getByRole("dialog", { name: "Delete platform Agent?" }),
@@ -774,15 +795,13 @@ describe("platform Agent administration", () => {
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", {
-        name: "Disable Research assistant",
+        name: "Actions for Research assistant",
       }),
     );
+    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
 
     expect(
       await screen.findByText("Ark is temporarily unavailable. Try again."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Disable Research assistant" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByText("must-not-render-ark-id"),
@@ -812,9 +831,10 @@ describe("platform Agent administration", () => {
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", {
-        name: "Delete Research assistant",
+        name: "Actions for Research assistant",
       }),
     );
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
     const dialog = screen.getByRole("dialog", {
       name: "Delete platform Agent?",
     });
