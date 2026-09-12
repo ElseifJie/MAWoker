@@ -25,6 +25,8 @@ export function runProductionWorkerPoll(
     uploadCleanup: WorkerProcessor;
     artifactDeletion: WorkerProcessor;
     artifactCleanup: WorkerProcessor;
+    driveCleanup: WorkerProcessor;
+    driveOrphanGc: WorkerProcessor;
   },
   reportError?: (message: string, error: unknown) => void,
 ): Promise<void> {
@@ -38,6 +40,8 @@ export function runProductionWorkerPoll(
       processors.uploadCleanup,
       processors.artifactDeletion,
       processors.artifactCleanup,
+      processors.driveCleanup,
+      processors.driveOrphanGc,
     ],
     reportError,
   );

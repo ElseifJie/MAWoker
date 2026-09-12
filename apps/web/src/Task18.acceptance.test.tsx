@@ -313,6 +313,16 @@ describe("Task 18 browser acceptance", () => {
 
     await user.click(screen.getByRole("link", { name: "Users" }));
     await screen.findByRole("heading", { name: "Users" });
+    // Account management lives on the detail page.
+    await user.click(
+      await screen.findByRole("link", { name: "user-a@example.com" }),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        name: "user-a@example.com",
+        level: 1,
+      }),
+    ).toBeVisible();
     await user.selectOptions(
       screen.getByLabelText("Default Agent for user-a@example.com"),
       backend.createdPlatformAgentId,

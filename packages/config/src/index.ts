@@ -115,6 +115,13 @@ const environmentSchema = z
     TOS_SESSION_TOKEN: z.string().trim().min(1).optional(),
     MODEL_ALLOWLIST: nonEmptyCsv,
     OUTBOUND_HOST_ALLOWLIST: nonEmptyCsv,
+    /**
+     * How long an unreferenced drive object survives before the GC reaps it.
+     * Zero means "as soon as it is orphaned", preserving phase-1 semantics:
+     * deleting a Session removes its artifacts. Raising it keeps files in a
+     * user's drive after the Session that produced them is gone.
+     */
+    DRIVE_ORPHAN_RETENTION_MS: z.coerce.number().int().min(0).default(0),
     PERSONAL_AGENT_LIMIT: z.coerce.number().int().min(0).default(10),
     CONCURRENT_SESSION_LIMIT: z.coerce.number().int().min(0).default(2),
     SESSION_DAILY_LIMIT: requiredNonnegativeInteger,
@@ -218,6 +225,7 @@ export function parseServerConfig(
     },
     modelAllowlist: publicConfig.modelAllowlist,
     outboundHostAllowlist: csv(env.OUTBOUND_HOST_ALLOWLIST),
+    driveOrphanRetentionMs: env.DRIVE_ORPHAN_RETENTION_MS,
     personalAgentLimit: env.PERSONAL_AGENT_LIMIT,
     concurrentSessionLimit: env.CONCURRENT_SESSION_LIMIT,
     dailySessionLimit: env.SESSION_DAILY_LIMIT,

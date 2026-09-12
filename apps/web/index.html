@@ -7,18 +7,18 @@
       name="description"
       content="A focused workspace for personal Agent tasks."
     />
-    <meta name="theme-color" content="#f5f7f8" />
+    <meta name="theme-color" content="#f7f8f8" />
     <title>Work Agent</title>
     <style>
       /* Painted before the bundle loads so a dark preference never flashes white. */
       html,
       body {
         margin: 0;
-        background: #f5f7f8;
+        background: #f7f8f8;
       }
       html[data-theme="dark"],
       html[data-theme="dark"] body {
-        background: #111719;
+        background: #08090a;
       }
     </style>
     <script>
@@ -47,7 +47,7 @@
         if (meta) {
           meta.setAttribute(
             "content",
-            resolved === "dark" ? "#111719" : "#f5f7f8",
+            resolved === "dark" ? "#08090a" : "#f7f8f8",
           );
         }
       })();

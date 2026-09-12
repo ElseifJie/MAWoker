@@ -145,7 +145,14 @@ describe("database auth store", () => {
     );
     const repositories = createRepositories(database.db);
     const repository = repositories.platformAgents as unknown as {
-      listUsers(): Promise<Array<{ email: string; hasPassword: boolean }>>;
+      listUsers(query?: {
+        limit: number;
+        search: string | null;
+        before: { createdAt: string; id: string } | null;
+      }): Promise<{
+        users: Array<{ email: string; hasPassword: boolean }>;
+        nextCursor: { createdAt: string; id: string } | null;
+      }>;
       createUser(input: {
         id: string;
         authSubject: string;
@@ -169,7 +176,15 @@ describe("database auth store", () => {
     });
 
     expect(created).toBeDefined();
-    const listed = await repository.listUsers();
+    const page = await repository.listUsers({
+      limit: 50,
+      search: null,
+      before: null,
+    });
+    expect(page.nextCursor).toBeNull();
+    const listed = [...page.users].sort((left, right) =>
+      left.email.localeCompare(right.email),
+    );
     expect(listed.map((user) => user.email)).toEqual([
       "admin@example.com",
       "newcomer@example.com",

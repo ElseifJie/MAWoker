@@ -81,6 +81,7 @@ describe("production container structure", () => {
         "TOS_SESSION_TOKEN",
         "MODEL_ALLOWLIST",
         "OUTBOUND_HOST_ALLOWLIST",
+        "DRIVE_ORPHAN_RETENTION_MS",
         "PERSONAL_AGENT_LIMIT",
         "CONCURRENT_SESSION_LIMIT",
         "SESSION_DAILY_LIMIT",

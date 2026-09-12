@@ -22,13 +22,41 @@ const agentSchema = z
     id: z.string().min(1),
     version: z.number().int().positive(),
     name: z.string(),
-    description: z.string(),
-    modelId: z.string(),
-    systemPrompt: z.string(),
-    toolsetId: z.string().optional(),
-    toolPermission: z.literal("always_allow").optional(),
+    description: z.string().optional(),
+    model: z.object({ id: z.string().min(1) }).passthrough(),
   })
-  .strict();
+  .passthrough();
+
+type ArkAgentResponse = z.infer<typeof agentSchema>;
+
+/**
+ * Ark v3 agents use `model: {id}` and never return the instructions, so the
+ * write body maps our camel-case config onto the upstream shape and the write
+ * response re-attaches the `systemPrompt` we just sent.
+ */
+function arkAgentWriteBody(input: ArkAgentInput): Record<string, unknown> {
+  return {
+    name: input.name,
+    description: input.description,
+    model: { id: input.modelId },
+    instructions: input.systemPrompt,
+    ...(input.toolsetId !== undefined ? { toolsetId: input.toolsetId } : {}),
+    ...(input.toolPermission !== undefined
+      ? { toolPermission: input.toolPermission }
+      : {}),
+  };
+}
+
+function toArkAgent(response: ArkAgentResponse, written?: ArkAgentInput) {
+  return {
+    id: response.id,
+    version: response.version,
+    name: response.name,
+    description: response.description ?? "",
+    modelId: response.model.id,
+    ...(written ? { systemPrompt: written.systemPrompt } : {}),
+  };
+}
 
 const normalizedSessionSchema = z
   .object({
@@ -216,6 +244,7 @@ function isSessionExport(entry: FileEntry, sessionId: string): boolean {
 const errorBodySchema = z
   .object({
     code: z.string().optional(),
+    message: z.string().optional(),
   })
   .passthrough();
 
@@ -317,11 +346,11 @@ export class HttpArkGateway implements ArkGateway {
       method: "POST",
       path: "/api/v3/agents",
       safe: false,
-      body: JSON.stringify(input),
+      body: JSON.stringify(arkAgentWriteBody(input)),
       contentType: "application/json",
       schema: agentSchema,
       options,
-    });
+    }).then((response) => toArkAgent(response, input));
   }
 
   getAgent(agentId: string, options?: ArkRequestOptions): Promise<ArkAgent> {
@@ -331,7 +360,7 @@ export class HttpArkGateway implements ArkGateway {
       safe: true,
       schema: agentSchema,
       options,
-    });
+    }).then((response) => toArkAgent(response));
   }
 
   updateAgent(
@@ -340,14 +369,17 @@ export class HttpArkGateway implements ArkGateway {
     options?: ArkRequestOptions,
   ): Promise<ArkAgent> {
     return this.jsonRequest({
-      method: "PATCH",
+      method: "POST",
       path: `/api/v3/agents/${encodeURIComponent(agentId)}`,
       safe: false,
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        ...arkAgentWriteBody(input),
+        version: input.currentVersion,
+      }),
       contentType: "application/json",
       schema: agentSchema,
       options,
-    });
+    }).then((response) => toArkAgent(response, input));
   }
 
   async deleteAgent(
@@ -853,9 +885,22 @@ export class HttpArkGateway implements ArkGateway {
     safe: boolean,
   ): Promise<ArkGatewayError> {
     let code: string | undefined;
+    let message: string | undefined;
     try {
-      const parsed = errorBodySchema.safeParse(await response.json());
-      if (parsed.success) code = parsed.data.code;
+      const body: unknown = await response.json();
+      // Ark nests its error details under `error`; tolerate both that envelope
+      // and a flat body so classification never depends on the shape drift.
+      const readError = (value: unknown) => {
+        const parsed = errorBodySchema.safeParse(value);
+        if (parsed.success && parsed.data.code !== undefined) {
+          code = parsed.data.code;
+          message = parsed.data.message;
+        }
+      };
+      readError(body);
+      if (code === undefined && body !== null && typeof body === "object") {
+        readError((body as { error?: unknown }).error);
+      }
     } catch {
       // Error bodies are intentionally discarded to avoid leaking upstream data.
     }
@@ -865,7 +910,12 @@ export class HttpArkGateway implements ArkGateway {
     };
     if (response.status === 429)
       return new ArkGatewayError("rate_limited", options);
-    if (code === "VERSION_CONFLICT") {
+    // Ark signals optimistic-concurrency losses as a generic 400 whose message
+    // starts with "version:" instead of a dedicated error code.
+    if (
+      code === "VERSION_CONFLICT" ||
+      (message !== undefined && message.startsWith("version:"))
+    ) {
       return new ArkGatewayError("version_conflict", options);
     }
     if (code === "RUNTIME_BUSY") {

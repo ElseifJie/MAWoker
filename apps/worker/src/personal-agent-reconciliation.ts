@@ -5,6 +5,7 @@ export interface PersonalAgentReconciliationJob {
     | "delete_session"
     | "delete_artifact"
     | "cleanup_artifact_object"
+    | "cleanup_drive_object"
     | "cleanup_upload"
     | "reconcile_session"
     | "reconcile_personal_agent";

@@ -20,11 +20,14 @@ describe("Task 18 failure and recovery acceptance", () => {
       .mockResolvedValueOnce(
         Response.json({
           id: "agent-1",
+          type: "agent",
           version: 1,
           name: "Recovered",
           description: "",
-          modelId: "model-a",
-          systemPrompt: "Prompt",
+          model: { id: "model-a" },
+          base_agent: "ark_agent_preview",
+          created_at: "2026-09-07T00:00:00Z",
+          updated_at: "2026-09-07T00:00:00Z",
         }),
       );
     const sleep = vi.fn(async (milliseconds: number, signal: AbortSignal) => {
@@ -213,17 +216,19 @@ describe("Task 18 failure and recovery acceptance", () => {
       submitEvent: vi.fn(),
       deleteSession: vi.fn(async () => undefined),
     };
-    const storage = {
-      delete: vi
-        .fn<(objectKey: string) => Promise<void>>()
-        .mockRejectedValueOnce(new Error("storage unavailable"))
-        .mockResolvedValue(undefined),
+    // Fail the orphaning step once, so the saga checkpoints its progress and
+    // must resume without repeating the Ark delete.
+    const orphanDriveFiles = vi
+      .fn(harness.repositories.sessionDeletion.orphanDriveFiles)
+      .mockRejectedValueOnce(new Error("drive store unavailable"));
+    const repository = {
+      ...harness.repositories.sessionDeletion,
+      orphanDriveFiles,
     };
     const processor = new SessionDeletionProcessor({
       jobs: harness.repositories.jobs,
-      repository: harness.repositories.sessionDeletion,
+      repository,
       ark,
-      storage,
       workerId: "task-18-deletion",
     });
 
@@ -266,8 +271,10 @@ describe("Task 18 failure and recovery acceptance", () => {
           harness.first.sessionId,
         ),
       ).resolves.toBeUndefined();
+      // The Ark delete ran once; the resumed attempt did not repeat it.
       expect(ark.deleteSession).toHaveBeenCalledOnce();
-      expect(storage.delete).toHaveBeenCalledTimes(2);
+      expect(ark.getSession).toHaveBeenCalledTimes(1);
+      expect(orphanDriveFiles).toHaveBeenCalledTimes(2);
     } finally {
       await harness.close();
     }

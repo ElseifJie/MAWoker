@@ -21,7 +21,7 @@
 - SSE 只推送连接建立后产生的事件，重连必须结合完整事件历史去重。
 - 输入文件通过 Files API 上传并作为 Session Resource 挂载。
 - Agent 产物写入 `/mnt/session/outputs/`，通过 `scope_id=session_id` 查询。
-- Session 删除会清除平台默认存储中的产物，但不会删除自有 TOS Bucket 对象。
+- Session 删除会清除该 Session 的产物关联；其字节按云盘回收保留期处理（默认立即回收），不会删除方舟 Environment 桶中的落地对象。
 - Session 沙箱快照保留 30 天，事件历史在 Session 删除前持续保留。
 
 ### 2.2 一期约束
@@ -196,13 +196,25 @@ AuthContext {
 
 ### 5.4 文件与产物
 
-#### `session_inputs`
+字节的归属与 Session 解耦：`drive_files` 是字节的唯一所有者，Session 只通过关联表引用它。这样做的目的是让产物在所属 Session 消失后仍可作为用户云盘中的文件存在（见 §14 云盘扩展），而一期默认行为不变。
 
-保存用户、临时上传状态、方舟 `file_id`、文件元数据、目标 `mount_path` 和绑定的 Session。未绑定上传通过 `expires_at` 标记，由 worker 清理。
+#### `drive_files`
+
+保存用户、来源（`upload` / `artifact` / `import`）、TOS 对象键、名称、MIME、大小、内容哈希（预留去重）、来源 Session、目录（预留云盘目录树）、删除状态、写入租约与失去引用时间。写入前先落一行 `pending` 并登记一个延迟清理意图，提交时置 `none` 并退掉该意图；因此写入中途崩溃留下的半成品对象仍会被回收。
+
+对象键布局固定为 `tenants/{userId}/drive/{origin}/{driveFileId}/{name}`：
+
+- 内嵌租户与来源用途，**不内嵌 Session**。字节要能跨 Session 复用并进入云盘，因此 Session 隔离不靠解析对象键，而由关联表与 API 归属校验共同保证。
+- `{origin}` 是低基数路径段，便于对上传与产物配置不同的 TOS 生命周期规则。
+- 多租户隔离由 `tenants/{userId}/` 前缀与表内 `owner_user_id` 双重保证。
 
 #### `artifacts`
 
-保存用户、Session、方舟文件 ID、TOS 对象键、名称、MIME、大小、生成时间和删除状态。下载 URL 不持久化，每次在授权后获取或签发。
+保存 Session 与 `drive_files` 的关联：用户、Session、方舟文件 ID、`drive_file_id`、以及产出时的名称、MIME、大小、生成时间快照和删除状态。下载 URL 不持久化，每次在授权后获取或签发。删除该关联只把对应 `drive_files` 标记为失去引用，不直接删除字节；由云盘回收作业按 `DRIVE_ORPHAN_RETENTION_MS`（默认 0，即立即回收）处理，因此一期"删除 Session 即删除其产物"的语义不变。
+
+#### `session_inputs`
+
+保存用户、临时上传状态、方舟 `file_id`、文件元数据、目标 `mount_path`、预留的 `drive_file_id` 和绑定的 Session。未绑定上传通过 `expires_at` 标记，由 worker 清理。
 
 ### 5.5 配额、用量与后台作业
 
@@ -359,8 +371,8 @@ API 建立上游 SSE 后再返回下游流。重连过程如下：
 1. API 二次确认后将 `deletion_state` 设为 `pending` 并创建作业。
 2. 若 Session 为 `running`，worker 发送 `user.interrupt` 并等待非运行状态。
 3. worker 删除方舟 Session。
-4. worker 删除该 Session 对应的自有 TOS 对象。
-5. worker删除输入映射、产物索引、用量明细和 Session 本地记录。
+4. worker 把该 Session 独有的 `drive_files` 标记为失去引用（不再被任何其他 Session 引用者）。字节本身由云盘回收作业按 `DRIVE_ORPHAN_RETENTION_MS` 处理，默认 0 即立即回收。
+5. worker删除输入映射、产物关联、用量明细和 Session 本地记录。
 6. 任一步骤失败时记录 `deletion_failed`，使用指数退避重试。
 
 删除操作按步骤记录完成标记，使重复执行具有幂等效果。
@@ -557,6 +569,12 @@ worker 定期对账本地状态与方舟状态，但不自动把无法归属的�
 - MCP：平台或用户声明 MCP Server，并以最小工具白名单挂载。
 - Vault：每个用户独立 Vault，创建 Session 时注入 `vault_ids`。
 - Memory Store：作为只读 Session Resource 挂载，由独立管理流程写入。
+- 云盘：基于 `drive_files` 构建面向用户的文件库。`drive_files` 已经具备字节所有权、来源分类、内容哈希和目录预留字段，因此云盘是在既有存储模型上的增量能力，而非二次改造：
+  - 用户自由管理文件（列表、重命名、移动、删除）只需要在 `drive_files` 上增加目录树与对应 API，不涉及 Session。
+  - `origin` 区分上传、产物与导入；沿用 `{origin}` 路径段即可按用途配置 TOS 生命周期规则。
+  - 上传文件进入云盘需要把字节同时写入 TOS（一期只存在方舟侧），复用 `drive_files` 的暂存/提交协议；`session_inputs.drive_file_id` 已为此预留。
+  - 提升 `DRIVE_ORPHAN_RETENTION_MS` 即可让产物在 Session 删除后留在云盘，无需改动删除 Saga。
+  - 若云盘需要把文件以 TOS 形式挂载给 Session，只能按单个对象签发短时效访问（签名 URL 或限定到具体对象键的 STS），**禁止挂载前缀**，并沿用现有归属校验；不得绕过 Tenant Guard。
 
 这些模块不得绕过现有 Tenant Guard、ark-client、配额、审计和 Session 版本快照。
 

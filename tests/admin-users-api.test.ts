@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { AuthRequiredError } from "../packages/auth/src/index.js";
 import {
+  LastActiveAdminError,
   ResourceNotFoundError,
+  SelfTargetForbiddenError,
   UserEmailConflictError,
 } from "../packages/domain/src/index.js";
 import {
@@ -36,42 +38,44 @@ function auth(): ApiAuthService {
   };
 }
 
+const quota = {
+  personalAgentLimit: 10,
+  concurrentSessionLimit: 2,
+  dailySessionLimit: 25,
+  monthlyTokenLimit: 1_000_000,
+};
+
 function adminService() {
   return {
     listPlatformAgents: vi.fn(async () => []),
     createPlatformAgent: vi.fn(),
     updatePlatformAgent: vi.fn(),
     deletePlatformAgent: vi.fn(),
-    listUsers: vi.fn(async () => [
-      {
-        id: adminId,
-        email: "admin@example.com",
-        role: "admin" as const,
-        status: "active" as const,
-        hasPassword: true,
-        defaultAgentId: null,
-        quota: {
-          personalAgentLimit: 10,
-          concurrentSessionLimit: 2,
-          dailySessionLimit: 25,
-          monthlyTokenLimit: 1_000_000,
+    listUsers: vi.fn(async () => ({
+      users: [
+        {
+          id: adminId,
+          email: "admin@example.com",
+          role: "admin" as const,
+          status: "active" as const,
+          hasPassword: true,
+          defaultAgentId: null,
+          createdAt: new Date("2026-09-01T00:00:00.000Z"),
+          quota,
         },
-      },
-      {
-        id: userId,
-        email: "user@example.com",
-        role: "user" as const,
-        status: "active" as const,
-        hasPassword: false,
-        defaultAgentId: null,
-        quota: {
-          personalAgentLimit: 10,
-          concurrentSessionLimit: 2,
-          dailySessionLimit: 25,
-          monthlyTokenLimit: 1_000_000,
+        {
+          id: userId,
+          email: "user@example.com",
+          role: "user" as const,
+          status: "active" as const,
+          hasPassword: false,
+          defaultAgentId: null,
+          createdAt: new Date("2026-09-02T00:00:00.000Z"),
+          quota,
         },
-      },
-    ]),
+      ],
+      nextCursor: null,
+    })),
     createUser: vi.fn(
       async (input: { email: string; role?: "user" | "admin" }) => ({
         id: createdUserId,
@@ -81,6 +85,17 @@ function adminService() {
       }),
     ),
     resetUserPassword: vi.fn(async () => undefined),
+    setUserStatus: vi.fn(async () => ({
+      from: "active",
+      to: "disabled",
+      revokedSessions: 2,
+    })),
+    setUserRole: vi.fn(async () => ({
+      from: "user",
+      to: "admin",
+      revokedSessions: 0,
+    })),
+    revokeUserSessions: vi.fn(async () => ({ revokedSessions: 3 })),
     assignDefaultAgent: vi.fn(),
     updateUserQuota: vi.fn(),
   } satisfies AdminService;
@@ -88,7 +103,8 @@ function adminService() {
 
 describe("admin user API", () => {
   it("lists every account with role and credential state", async () => {
-    const app = buildApp({ auth: auth(), admin: adminService() });
+    const admin = adminService();
+    const app = buildApp({ auth: auth(), admin });
 
     const response = await app.inject({
       method: "GET",
@@ -106,6 +122,7 @@ describe("admin user API", () => {
           status: "active",
           hasPassword: true,
           defaultAgentId: null,
+          createdAt: "2026-09-01T00:00:00.000Z",
           quota: {
             personalAgentLimit: 10,
             concurrentSessionLimit: 2,
@@ -120,6 +137,7 @@ describe("admin user API", () => {
           status: "active",
           hasPassword: false,
           defaultAgentId: null,
+          createdAt: "2026-09-02T00:00:00.000Z",
           quota: {
             personalAgentLimit: 10,
             concurrentSessionLimit: 2,
@@ -130,6 +148,158 @@ describe("admin user API", () => {
       ],
     });
     expect(response.body).not.toContain("passwordHash");
+    expect(admin.listUsers).toHaveBeenCalledWith({
+      limit: 50,
+      search: null,
+      before: null,
+    });
+    await app.close();
+  });
+
+  it("passes search and cursor through to the admin service", async () => {
+    const admin = adminService();
+    admin.listUsers.mockResolvedValueOnce({
+      users: [],
+      nextCursor: { createdAt: "2026-09-01T00:00:00.000Z", id: userId },
+    });
+    const app = buildApp({ auth: auth(), admin });
+
+    const cursor = Buffer.from(
+      JSON.stringify({
+        createdAt: "2026-08-01T00:00:00.000Z",
+        id: createdUserId,
+      }),
+      "utf8",
+    ).toString("base64url");
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/users?q=${encodeURIComponent("example")}&limit=10&cursor=${cursor}`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().nextCursor).toBe(
+      Buffer.from(
+        JSON.stringify({
+          createdAt: "2026-09-01T00:00:00.000Z",
+          id: userId,
+        }),
+        "utf8",
+      ).toString("base64url"),
+    );
+    expect(admin.listUsers).toHaveBeenCalledWith({
+      limit: 10,
+      search: "example",
+      before: { createdAt: "2026-08-01T00:00:00.000Z", id: createdUserId },
+    });
+    await app.close();
+  });
+
+  it("rejects malformed pagination cursors", async () => {
+    const admin = adminService();
+    const app = buildApp({ auth: auth(), admin });
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/admin/users?cursor=${encodeURIComponent("not-a-cursor")}`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatchObject({ code: "VALIDATION_FAILED" });
+    expect(admin.listUsers).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("disables an account and reports revoked sessions", async () => {
+    const admin = adminService();
+    const app = buildApp({ auth: auth(), admin });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/admin/users/${userId}/status`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: { status: "disabled" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "disabled", revokedSessions: 2 });
+    expect(admin.setUserStatus).toHaveBeenCalledWith(userId, "disabled", {
+      adminId,
+      requestId: expect.any(String),
+    });
+    await app.close();
+  });
+
+  it("changes a role and revokes the target's sessions", async () => {
+    const admin = adminService();
+    const app = buildApp({ auth: auth(), admin });
+
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/admin/users/${userId}/role`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: { role: "admin" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ role: "admin", revokedSessions: 0 });
+    await app.close();
+  });
+
+  it("force signs a user out", async () => {
+    const admin = adminService();
+    const app = buildApp({ auth: auth(), admin });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/admin/users/${userId}/sessions/revoke`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: {},
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ revokedSessions: 3 });
+    await app.close();
+  });
+
+  it("maps lifecycle guard errors to stable conflict codes", async () => {
+    const admin = adminService();
+    admin.setUserStatus.mockRejectedValueOnce(new SelfTargetForbiddenError());
+    admin.setUserRole.mockRejectedValueOnce(new LastActiveAdminError());
+    admin.revokeUserSessions.mockRejectedValueOnce(new ResourceNotFoundError());
+    const app = buildApp({ auth: auth(), admin });
+
+    const selfTarget = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/admin/users/${adminId}/status`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: { status: "disabled" },
+    });
+    const lastAdmin = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/admin/users/${userId}/role`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: { role: "user" },
+    });
+    const unknown = await app.inject({
+      method: "POST",
+      url: `/api/v1/admin/users/${createdUserId}/sessions/revoke`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: {},
+    });
+
+    expect(selfTarget.statusCode).toBe(409);
+    expect(selfTarget.json().error).toMatchObject({
+      code: "SELF_TARGET_FORBIDDEN",
+      retryable: false,
+    });
+    expect(lastAdmin.statusCode).toBe(409);
+    expect(lastAdmin.json().error).toMatchObject({
+      code: "LAST_ACTIVE_ADMIN",
+      retryable: false,
+    });
+    expect(unknown.statusCode).toBe(404);
     await app.close();
   });
 

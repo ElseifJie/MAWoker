@@ -16,6 +16,8 @@ export const errorCodeSchema = z.enum([
   "RESOURCE_NOT_FOUND",
   "VALIDATION_FAILED",
   "USER_EMAIL_CONFLICT",
+  "SELF_TARGET_FORBIDDEN",
+  "LAST_ACTIVE_ADMIN",
   "INVALID_MULTIPART",
   "INVALID_UPLOAD_NAME",
   "QUOTA_EXCEEDED",
@@ -25,6 +27,9 @@ export const errorCodeSchema = z.enum([
   "ARK_RATE_LIMITED",
   "ARK_UNAVAILABLE",
   "ARK_CONFLICT",
+  "ARK_INVALID_RESPONSE",
+  "ARK_RUNTIME_BUSY",
+  "ARK_REQUEST_REJECTED",
   "ARTIFACT_STORAGE_UNAVAILABLE",
   "ARTIFACT_SOURCE_UNAVAILABLE",
   "SESSION_TERMINATED",
@@ -127,6 +132,30 @@ export const quotaSchema = z
   .strict();
 
 export type Quota = z.infer<typeof quotaSchema>;
+
+/**
+ * Quota overrides are sparse: a dimension set to `null` (or omitted) falls
+ * back to the default policy, so clearing a field means "inherit" rather
+ * than "zero".
+ */
+export const partialQuotaSchema = z
+  .object({
+    personalAgentLimit: quotaSchema.shape.personalAgentLimit
+      .nullable()
+      .optional(),
+    concurrentSessionLimit: quotaSchema.shape.concurrentSessionLimit
+      .nullable()
+      .optional(),
+    dailySessionLimit: quotaSchema.shape.dailySessionLimit
+      .nullable()
+      .optional(),
+    monthlyTokenLimit: quotaSchema.shape.monthlyTokenLimit
+      .nullable()
+      .optional(),
+  })
+  .strict();
+
+export type PartialQuota = z.infer<typeof partialQuotaSchema>;
 
 export const PASSWORD_MIN_LENGTH = 8;
 

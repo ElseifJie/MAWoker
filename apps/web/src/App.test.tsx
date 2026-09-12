@@ -2072,14 +2072,14 @@ describe("command palette", () => {
 });
 
 describe("migrated CSS contracts", () => {
-  it("keeps radii at eight pixels or below and typography viewport-independent", () => {
+  it("keeps radii at twelve pixels or below and typography viewport-independent", () => {
+    // docs/ui-design.md radius scale: 6 controls, 8 cards, 12 panels/dialogs.
     const oversizedRadii = Array.from(
       migratedCss.matchAll(/border-radius\s*:\s*(\d+(?:\.\d+)?)px/g),
-    ).filter((match) => Number(match[1]) > 8);
+    ).filter((match) => Number(match[1]) > 12);
 
     expect(oversizedRadii).toEqual([]);
     expect(migratedCss).not.toMatch(/font-size\s*:[^;]*(?:vw|vh|vmin|vmax)/i);
-    expect(migratedCss).not.toMatch(/letter-spacing\s*:\s*-/i);
   });
 
   it("keeps component styles free of hardcoded colors", () => {
@@ -2089,7 +2089,8 @@ describe("migrated CSS contracts", () => {
     expect(literals ?? []).toEqual([]);
   });
 
-  it("redefines every themed token in the dark palette", () => {
+  it("redefines every themed token in the light palette", () => {
+    // Dark is the native medium on :root; light overrides via data-theme.
     const declarationsOf = (block: string) =>
       new Map(
         [...block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((match) => [
@@ -2098,10 +2099,10 @@ describe("migrated CSS contracts", () => {
         ]),
       );
     const rootBlock = /:root\s*\{([^}]*)\}/.exec(tokensCss)?.[1] ?? "";
-    const darkBlock =
-      /\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(tokensCss)?.[1] ?? "";
+    const lightBlock =
+      /\[data-theme="light"\]\s*\{([^}]*)\}/.exec(tokensCss)?.[1] ?? "";
     const root = declarationsOf(rootBlock);
-    const dark = declarationsOf(darkBlock);
+    const light = declarationsOf(lightBlock);
 
     const isThemed = (value: string) =>
       value.startsWith("#") ||
@@ -2111,9 +2112,9 @@ describe("migrated CSS contracts", () => {
     const missing = [...root.entries()]
       .filter(([, value]) => isThemed(value))
       .map(([name]) => name)
-      .filter((name) => !dark.has(name));
+      .filter((name) => !light.has(name));
 
-    expect(dark.size).toBeGreaterThan(0);
+    expect(light.size).toBeGreaterThan(0);
     expect(missing).toEqual([]);
   });
 
@@ -2156,7 +2157,7 @@ describe("migrated CSS contracts", () => {
       ["--ui-color-text", "--ui-color-surface-canvas"],
       ["--ui-color-text-muted", "--ui-color-surface"],
       ["--ui-color-text-muted", "--ui-color-surface-subtle"],
-      ["--ui-color-accent", "--ui-color-surface"],
+      ["--ui-color-accent-interactive", "--ui-color-surface"],
       ["--ui-color-text-inverse", "--ui-color-accent"],
       ["--ui-color-danger", "--ui-color-danger-subtle"],
       ["--ui-color-warning", "--ui-color-warning-subtle"],
@@ -2164,8 +2165,8 @@ describe("migrated CSS contracts", () => {
     ];
 
     for (const [selector, theme] of [
-      [":root", "light"],
-      ['\\[data-theme="dark"\\]', "dark"],
+      [":root", "dark"],
+      ['\\[data-theme="light"\\]', "light"],
     ] as const) {
       const tokens = parseBlock(selector);
       expect(tokens.size).toBeGreaterThan(0);

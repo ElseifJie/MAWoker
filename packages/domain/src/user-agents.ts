@@ -614,7 +614,9 @@ export class UserAgentService {
   }
 
   private matchesConfiguration(
-    agent: AgentConfiguration,
+    agent: Pick<AgentConfiguration, "name" | "description" | "modelId"> & {
+      systemPrompt?: string | undefined;
+    },
     configuration: AgentConfiguration,
   ): boolean {
     return (

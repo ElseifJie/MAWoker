@@ -1,45 +1,77 @@
+/*
+ * Design tokens follow docs/ui-design.md (Design System: Linear).
+ *
+ * Dark is the native medium: a near-black canvas with luminance-stepped
+ * surfaces, whisper-thin translucent borders, and a single brand indigo
+ * reserved for primary actions and active states. The light theme carries the
+ * same structure using the spec's Light Neutrals. Component styles never
+ * branch on theme — they only reference the semantic variables below.
+ */
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 
   /*
-   * A system stack rather than a webfont: it renders instantly, needs no
-   * network, and gives the UI the flat, editorial look the product is after.
+   * Inter Variable is self-hosted via @fontsource-variable/inter, so the
+   * signature OpenType alternates ("cv01", "ss03") apply to all text without a
+   * network fetch. Berkeley Mono is commercial; the spec's own fallback stack
+   * stands in for technical labels.
    */
   --ui-font-sans:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    "Inter Variable", "Inter", ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
   --ui-font-mono:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
-    monospace;
+    "Berkeley Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-feature-settings: "cv01", "ss03";
 
-  /* Near-neutral surfaces: the accent carries emphasis, not the background. */
-  --ui-color-surface-canvas: #f7f7f8;
-  --ui-color-surface: #ffffff;
-  --ui-color-surface-subtle: #f1f2f4;
-  --ui-color-surface-hover: #eaebee;
-  --ui-color-border: #e4e5e9;
-  --ui-color-border-strong: #c9ccd3;
-  --ui-color-text: #16181d;
-  --ui-color-text-muted: #5b6270;
+  /* Luminance-stepped surfaces (spec §2 Background Surfaces). */
+  --ui-color-surface-canvas: #08090a;
+  --ui-color-surface: #0f1011;
+  --ui-color-surface-subtle: #191a1b;
+  --ui-color-surface-hover: #28282c;
+
+  /* Borders are translucent white on dark, never solid dark colors. */
+  --ui-color-border: rgb(255 255 255 / 6%);
+  --ui-color-border-strong: rgb(255 255 255 / 10%);
+
+  /* Four-step text ramp (spec §2 Text & Content). */
+  --ui-color-text: #f7f8f8;
+  --ui-color-text-secondary: #d0d6e0;
+  --ui-color-text-muted: #8a8f98;
+  --ui-color-text-faint: #62666d;
   --ui-color-text-inverse: #ffffff;
-  --ui-color-accent: #1a1c21;
-  --ui-color-accent-hover: #33363d;
-  --ui-color-accent-subtle: #f1f2f4;
-  --ui-color-success: #15683c;
-  --ui-color-success-subtle: #e8f5ee;
-  --ui-color-warning: #8a5300;
-  --ui-color-warning-subtle: #fdf3e0;
-  --ui-color-danger: #b42318;
-  --ui-color-danger-hover: #8f1c13;
-  --ui-color-danger-subtle: #fef3f2;
-  --ui-focus-ring: #3b3f47;
-  --ui-color-overlay: rgb(16 18 21 / 42%);
+
+  /* Brand indigo — the only chromatic chrome color, reserved for CTAs,
+   * links, and active states. */
+  --ui-color-accent: #5e6ad2;
+  --ui-color-accent-interactive: #828fff;
+  --ui-color-accent-hover: #828fff;
+  --ui-color-accent-subtle: #242738;
+  --ui-color-accent-contrast: #ffffff;
+
+  /* Status colors appear only in badges, status dots, and alerts. */
+  --ui-color-success: #3fb950;
+  --ui-color-success-strong: #10b981;
+  --ui-color-success-subtle: #183029;
+  --ui-color-warning: #d9a942;
+  --ui-color-warning-subtle: #342e21;
+  --ui-color-danger: #eb5757;
+  --ui-color-danger-hover: #f25555;
+  --ui-color-danger-subtle: #2d1f1f;
+
+  --ui-focus-ring: #7170ff;
+  --ui-color-overlay: rgb(0 0 0 / 85%);
   --ui-color-embed-canvas: #ffffff;
-  --ui-shadow-raised:
-    0 1px 2px rgb(16 18 21 / 6%), 0 4px 14px rgb(16 18 21 / 8%);
+
+  /* Depth on dark surfaces comes from luminance steps, not shadow darkness
+   * (spec §6); shadows only soften floating layers. */
+  --ui-shadow-raised: 0 0 0 1px rgb(0 0 0 / 20%);
   --ui-shadow-overlay:
-    0 14px 36px rgb(16 18 21 / 12%), 0 2px 8px rgb(16 18 21 / 8%);
+    0 0 1px rgb(0 0 0 / 8%), 0 1px 1px rgb(0 0 0 / 7%),
+    0 3px 2px rgb(0 0 0 / 4%), 0 5px 2px rgb(0 0 0 / 1%),
+    0 8px 2px rgb(0 0 0 / 0%), 0 2px 4px rgb(0 0 0 / 40%);
 
   --ui-space-1: 4px;
   --ui-space-2: 8px;
@@ -49,9 +81,10 @@
   --ui-space-6: 24px;
   --ui-space-8: 32px;
 
-  --ui-radius-small: 5px;
+  /* Radius scale per spec §5: 6 controls, 8 cards, 12 panels/dialogs. */
+  --ui-radius-small: 6px;
   --ui-radius-medium: 8px;
-  --ui-radius-large: 8px;
+  --ui-radius-large: 12px;
 
   --ui-control-height-small: 30px;
   --ui-control-height-default: 34px;
@@ -63,34 +96,46 @@
 }
 
 /*
- * Dark theme redefines the same semantic variables, so component styles never
- * branch on theme. The accent inverts rather than shifting hue: emphasis is
- * carried by lightness contrast in both palettes.
+ * Light theme keeps the same semantic variables using the spec's Light
+ * Neutrals; the text ramp inverts while the brand indigo stays the accent.
+ * index.html resolves and sets data-theme before first paint.
  */
-[data-theme="dark"] {
-  color-scheme: dark;
-  --ui-color-surface-canvas: #0e0f11;
-  --ui-color-surface: #17181b;
-  --ui-color-surface-subtle: #1f2125;
-  --ui-color-surface-hover: #26282d;
-  --ui-color-border: #282a2f;
-  --ui-color-border-strong: #3d4046;
-  --ui-color-text: #f2f3f5;
-  --ui-color-text-muted: #a3a9b4;
-  --ui-color-text-inverse: #131417;
-  --ui-color-accent: #f2f3f5;
-  --ui-color-accent-hover: #d9dbe0;
-  --ui-color-accent-subtle: #23252a;
-  --ui-color-success: #7dc9a1;
-  --ui-color-success-subtle: #1b2f26;
-  --ui-color-warning: #e0b268;
-  --ui-color-warning-subtle: #372c19;
-  --ui-color-danger: #f2938a;
-  --ui-color-danger-hover: #f7b0a8;
-  --ui-color-danger-subtle: #3a2420;
-  --ui-focus-ring: #b9bec7;
-  --ui-color-overlay: rgb(4 5 6 / 66%);
+[data-theme="light"] {
+  color-scheme: light;
+  --ui-color-surface-canvas: #f7f8f8;
+  --ui-color-surface: #ffffff;
+  --ui-color-surface-subtle: #f3f4f5;
+  --ui-color-surface-hover: #ececee;
+
+  --ui-color-border: #e6e6e6;
+  --ui-color-border-strong: #d0d6e0;
+
+  --ui-color-text: #16181d;
+  --ui-color-text-secondary: #3f444d;
+  --ui-color-text-muted: #5b6270;
+  --ui-color-text-faint: #8a8f98;
+  --ui-color-text-inverse: #ffffff;
+
+  --ui-color-accent: #4c54ae;
+  --ui-color-accent-interactive: #4450c0;
+  --ui-color-accent-hover: #3f47a0;
+  --ui-color-accent-subtle: #eceefb;
+  --ui-color-accent-contrast: #ffffff;
+
+  --ui-color-success: #157347;
+  --ui-color-success-strong: #0e9f6e;
+  --ui-color-success-subtle: #e8f5ee;
+  --ui-color-warning: #8a5f10;
+  --ui-color-warning-subtle: #fdf3e0;
+  --ui-color-danger: #b42318;
+  --ui-color-danger-hover: #8f1c13;
+  --ui-color-danger-subtle: #fef3f2;
+
+  --ui-focus-ring: #5e6ad2;
+  --ui-color-overlay: rgb(16 18 21 / 42%);
   --ui-color-embed-canvas: #ffffff;
-  --ui-shadow-raised: 0 1px 2px rgb(0 0 0 / 46%), 0 4px 14px rgb(0 0 0 / 40%);
-  --ui-shadow-overlay: 0 14px 36px rgb(0 0 0 / 56%), 0 2px 8px rgb(0 0 0 / 44%);
+  --ui-shadow-raised:
+    0 1px 2px rgb(16 18 21 / 6%), 0 4px 14px rgb(16 18 21 / 8%);
+  --ui-shadow-overlay:
+    0 14px 36px rgb(16 18 21 / 12%), 0 2px 8px rgb(16 18 21 / 8%);
 }

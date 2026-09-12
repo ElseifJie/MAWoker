@@ -930,8 +930,8 @@ describe("Session database integration", () => {
     });
     const inputId = id();
     const artifactId = id();
-    const objectKey = `tenants/${userId}/sessions/${intent.id}/artifacts/file/version`;
-    const stagedObjectKey = `tenants/${userId}/sessions/${intent.id}/artifacts/staged/version`;
+    const driveFileId = id();
+    const objectKey = `tenants/${userId}/drive/artifact/${driveFileId}/output.txt`;
     await database.client.query(
       `insert into session_inputs
         (id, owner_user_id, session_id, ark_file_id, original_name, mime_type,
@@ -941,24 +941,25 @@ describe("Session database integration", () => {
       [inputId, userId, intent.id],
     );
     await database.client.query(
+      `insert into drive_files
+        (id, owner_user_id, origin, tos_object_key, name, mime_type, size_bytes,
+         source_session_id, deletion_state)
+       values ($1, $2, 'artifact', $3, 'output.txt', 'text/plain', 1, $4, 'none')`,
+      [driveFileId, userId, objectKey, intent.id],
+    );
+    await database.client.query(
       `insert into artifacts
-        (id, owner_user_id, session_id, ark_file_id, tos_object_key, name,
+        (id, owner_user_id, session_id, ark_file_id, drive_file_id, name,
          mime_type, size_bytes, generated_at)
        values ($1, $2, $3, 'ark-output', $4, 'output.txt', 'text/plain', 1,
                now())`,
-      [artifactId, userId, intent.id, objectKey],
+      [artifactId, userId, intent.id, driveFileId],
     );
     await database.client.query(
       `insert into usage_ledger
         (id, user_id, ark_session_id, ark_event_id, metric_type, quantity)
        values ($1, $2, 'ark-session-saga', 'event-1', 'input_tokens', 1)`,
       [id(), userId],
-    );
-    await database.client.query(
-      `insert into background_jobs
-        (id, owner_user_id, type, status, priority, payload)
-       values ($1, $2, 'cleanup_artifact_object', 'pending', 90, $3::jsonb)`,
-      [id(), userId, JSON.stringify({ objectKey: stagedObjectKey })],
     );
     await repositories.sessionLifecycle.beginDelete(userId, intent.id);
     await expect(
@@ -978,28 +979,27 @@ describe("Session database integration", () => {
     await expect(
       repositories.sessionDeletion.findDeleting(id(), intent.id),
     ).resolves.toBeUndefined();
+    // Another tenant cannot even see the row, let alone orphan its bytes.
     await expect(
-      repositories.sessionDeletion.listArtifactObjectKeys(id(), intent.id),
-    ).resolves.toEqual([]);
+      repositories.sessionDeletion.orphanDriveFiles(
+        id(),
+        intent.id,
+        new Date("2026-09-06T00:00:00.000Z"),
+      ),
+    ).resolves.toBe(0);
     await repositories.sessionDeletion.removeLocal(id(), intent.id);
     await expect(
       repositories.sessionDeletion.findDeleting(userId, intent.id),
     ).resolves.toMatchObject({ id: intent.id });
-    await expect(
-      repositories.sessionDeletion.listArtifactObjectKeys(userId, intent.id),
-    ).resolves.toEqual([objectKey, stagedObjectKey].sort());
 
+    // Orphaning the Session's bytes leaves the drive row for the GC to reap.
     await expect(
-      repositories.sessionDeletion.removeLocal(userId, intent.id),
-    ).resolves.toBe("cleanup_pending");
-    await database.client.query(
-      `update background_jobs
-          set status = 'succeeded'
-        where owner_user_id = $1
-          and type = 'cleanup_artifact_object'
-          and payload ->> 'objectKey' = $2`,
-      [userId, stagedObjectKey],
-    );
+      repositories.sessionDeletion.orphanDriveFiles(
+        userId,
+        intent.id,
+        new Date("2026-09-06T00:00:00.000Z"),
+      ),
+    ).resolves.toBe(1);
     await expect(
       repositories.sessionDeletion.removeLocal(userId, intent.id),
     ).resolves.toBe("removed");

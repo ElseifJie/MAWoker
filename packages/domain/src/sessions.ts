@@ -154,7 +154,7 @@ export interface SessionRepository {
     userId: string,
     id: string,
     projection: ArkEventProjection,
-  ): PromiseLike<void>;
+  ): PromiseLike<boolean>;
   listRunningForQuota?(userId: string): PromiseLike<SessionRecord[]>;
   syncQuotaStatus?(
     userId: string,

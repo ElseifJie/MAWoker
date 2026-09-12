@@ -165,6 +165,12 @@ export function createTask18BrowserBackend() {
     dailySessionLimit: 25,
     monthlyTokenLimit: 1000,
   };
+  let quotaOverrides: Record<keyof Quota, number | null> = {
+    personalAgentLimit: 10,
+    concurrentSessionLimit: 2,
+    dailySessionLimit: 25,
+    monthlyTokenLimit: 1000,
+  };
   const calls: BrowserCall[] = [];
   const platformAgents: PlatformAgent[] = [
     {
@@ -198,6 +204,8 @@ export function createTask18BrowserBackend() {
     status: "active";
     hasPassword: boolean;
     defaultAgentId: string | null;
+    createdAt: string;
+    updatedAt: string;
     quota: Quota;
   }> = [
     {
@@ -207,6 +215,8 @@ export function createTask18BrowserBackend() {
       status: "active",
       hasPassword: true,
       defaultAgentId: platformAgentId as string | null,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
       quota,
     },
   ];
@@ -299,6 +309,43 @@ export function createTask18BrowserBackend() {
     if (path === "/api/v1/admin/users" && method === "GET") {
       return json({ users: adminUsers.map((entry) => ({ ...entry, quota })) });
     }
+    if (/^\/api\/v1\/admin\/users\/[^/]+$/.test(path) && method === "GET") {
+      const target = adminUsers.find(
+        (entry) => entry.id === path.split("/").at(-1),
+      );
+      if (!target) return apiError("RESOURCE_NOT_FOUND", 404);
+      const overrides = quotaOverrides;
+      return json({
+        ...target,
+        quota,
+        inherited: {
+          personalAgentLimit: !overrides.personalAgentLimit,
+          concurrentSessionLimit: !overrides.concurrentSessionLimit,
+          dailySessionLimit: !overrides.dailySessionLimit,
+          monthlyTokenLimit: !overrides.monthlyTokenLimit,
+        },
+        usage: {
+          personalAgents: 0,
+          concurrentSessions: 0,
+          dailySessions: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          tokens: 0,
+          runtimeMs: 0,
+          toolCalls: 0,
+        },
+        exhausted: {
+          personalAgents: false,
+          concurrentSessions: false,
+          dailySessions: false,
+          monthlyTokens: false,
+        },
+        period: {
+          startsAt: "2026-09-01T00:00:00.000Z",
+          endsAt: "2026-10-01T00:00:00.000Z",
+        },
+      });
+    }
     if (path === "/api/v1/admin/users" && method === "POST") {
       const email = String(body.email).trim().toLowerCase();
       if (adminUsers.some((entry) => entry.email === email)) {
@@ -311,6 +358,8 @@ export function createTask18BrowserBackend() {
         status: "active" as const,
         hasPassword: true,
         defaultAgentId: null,
+        createdAt: "2026-09-08T00:00:00.000Z",
+        updatedAt: "2026-09-08T00:00:00.000Z",
         quota,
       };
       adminUsers.push(created);
@@ -340,9 +389,24 @@ export function createTask18BrowserBackend() {
       });
     }
     if (path.endsWith("/quota") && method === "PUT") {
-      quota = body as unknown as Quota;
+      // Sparse override semantics: null / omitted dimensions inherit.
+      const values = body as Partial<Record<keyof Quota, number | null>>;
+      quota = {
+        personalAgentLimit:
+          values.personalAgentLimit ?? quota.personalAgentLimit,
+        concurrentSessionLimit:
+          values.concurrentSessionLimit ?? quota.concurrentSessionLimit,
+        dailySessionLimit: values.dailySessionLimit ?? quota.dailySessionLimit,
+        monthlyTokenLimit: values.monthlyTokenLimit ?? quota.monthlyTokenLimit,
+      };
+      quotaOverrides = {
+        personalAgentLimit: values.personalAgentLimit ?? null,
+        concurrentSessionLimit: values.concurrentSessionLimit ?? null,
+        dailySessionLimit: values.dailySessionLimit ?? null,
+        monthlyTokenLimit: values.monthlyTokenLimit ?? null,
+      };
       adminUser.quota = quota;
-      return json({ userId, ...quota });
+      return json({ userId, ...quota, inherited: quotaOverrides });
     }
 
     if (path === "/api/v1/agents" && method === "GET") {

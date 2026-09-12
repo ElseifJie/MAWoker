@@ -13,6 +13,19 @@ const agentInput = {
   systemPrompt: "Be precise.",
 };
 
+/** The agent payload exactly as the Ark v3 wire format returns it. */
+const arkAgentResponse = {
+  id: "agent-1",
+  type: "agent",
+  name: agentInput.name,
+  description: agentInput.description,
+  version: 1,
+  model: { id: agentInput.modelId, service_tier: "default" },
+  base_agent: "ark_agent_preview",
+  created_at: "2026-09-07T00:00:00Z",
+  updated_at: "2026-09-07T00:00:00Z",
+};
+
 const unsafeJsonWrites: Array<
   [string, (gateway: HttpArkGateway) => Promise<unknown>]
 > = [
@@ -364,11 +377,7 @@ describe("HttpArkGateway", () => {
         expect(new Headers(init?.headers).get("x-correlation-id")).toBe(
           "corr-fixed",
         );
-        return Response.json({
-          id: "agent-1",
-          version: 1,
-          ...agentInput,
-        });
+        return Response.json(arkAgentResponse);
       },
     );
     const gateway = new HttpArkGateway({
@@ -378,15 +387,99 @@ describe("HttpArkGateway", () => {
       createCorrelationId: () => "corr-fixed",
     });
 
-    await expect(gateway.getAgent("agent-1")).resolves.toMatchObject({
+    await expect(gateway.getAgent("agent-1")).resolves.toEqual({
       id: "agent-1",
       version: 1,
+      name: agentInput.name,
+      description: agentInput.description,
+      modelId: agentInput.modelId,
     });
     expect(fetch).toHaveBeenCalledTimes(1);
 
     fetch.mockResolvedValueOnce(Response.json({ id: "agent-1" }));
     await expect(gateway.getAgent("agent-1")).rejects.toMatchObject({
       category: "invalid_response",
+      retryable: false,
+    });
+  });
+
+  it("maps agent writes onto the Ark v3 model/instructions contract", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: agentInput.name,
+          description: agentInput.description,
+          model: { id: agentInput.modelId },
+          instructions: agentInput.systemPrompt,
+        });
+        return Response.json(arkAgentResponse);
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    await expect(gateway.createAgent(agentInput)).resolves.toEqual({
+      id: "agent-1",
+      version: 1,
+      name: agentInput.name,
+      description: agentInput.description,
+      modelId: agentInput.modelId,
+      systemPrompt: agentInput.systemPrompt,
+    });
+  });
+
+  it("updates agents by POSTing the current version for optimistic concurrency", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(init?.method).toBe("POST");
+        expect(new URL(String(_input)).pathname).toBe("/api/v3/agents/agent-1");
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: agentInput.name,
+          description: agentInput.description,
+          model: { id: agentInput.modelId },
+          instructions: agentInput.systemPrompt,
+          version: 3,
+        });
+        return Response.json({ ...arkAgentResponse, version: 4 });
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    await expect(
+      gateway.updateAgent("agent-1", { ...agentInput, currentVersion: 3 }),
+    ).resolves.toMatchObject({ id: "agent-1", version: 4 });
+  });
+
+  it("classifies Ark's version-conflict 400 by its message prefix", async () => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch: vi.fn().mockResolvedValue(
+        Response.json(
+          {
+            error: {
+              code: "InvalidParameter",
+              message: "version: conflict Request id: req-1",
+            },
+          },
+          { status: 400 },
+        ),
+      ),
+      maxAttempts: 1,
+    });
+
+    await expect(
+      gateway.updateAgent("agent-1", { ...agentInput, currentVersion: 1 }),
+    ).rejects.toMatchObject({
+      category: "version_conflict",
       retryable: false,
     });
   });
@@ -400,11 +493,7 @@ describe("HttpArkGateway", () => {
         expect(new Headers(init?.headers).get("idempotency-key")).toBe(
           "create-operation",
         );
-        return Response.json({
-          id: "agent-1",
-          version: 1,
-          ...agentInput,
-        });
+        return Response.json(arkAgentResponse);
       },
     );
     const gateway = new HttpArkGateway({
@@ -771,13 +860,7 @@ describe("HttpArkGateway", () => {
       .fn()
       .mockResolvedValueOnce(Response.json({}, { status: 429 }))
       .mockResolvedValueOnce(Response.json({}, { status: 503 }))
-      .mockResolvedValueOnce(
-        Response.json({
-          id: "agent-1",
-          version: 1,
-          ...agentInput,
-        }),
-      );
+      .mockResolvedValueOnce(Response.json(arkAgentResponse));
     const sleep = vi.fn().mockResolvedValue(undefined);
     const gateway = new HttpArkGateway({
       baseUrl: "https://ark.example.com",

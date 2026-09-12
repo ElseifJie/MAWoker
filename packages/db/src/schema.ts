@@ -48,6 +48,16 @@ export const deletionState = pgEnum("deletion_state", [
   "deletion_failed",
   "deleted",
 ]);
+/**
+ * What put a byte object into a user's drive. Distinguishes Agent output from
+ * user uploads and future imports, both for filtering and for TOS lifecycle
+ * rules keyed on the object-path segment.
+ */
+export const fileOrigin = pgEnum("file_origin", [
+  "upload",
+  "artifact",
+  "import",
+]);
 export const uploadStatus = pgEnum("upload_status", [
   "uploading",
   "uploaded",
@@ -70,6 +80,13 @@ export const backgroundJobType = pgEnum("background_job_type", [
   "delete_session",
   "delete_artifact",
   "cleanup_artifact_object",
+  /**
+   * Supersedes `cleanup_artifact_object`: the payload names a `drive_files` row
+   * by id and the server resolves its object key, so no key is attacker-supplied
+   * and no path prefix has to be trusted. `cleanup_artifact_object` is retained
+   * only to drain jobs created before the drive layer landed.
+   */
+  "cleanup_drive_object",
   "cleanup_upload",
   "reconcile_session",
   "reconcile_personal_agent",
@@ -303,6 +320,57 @@ export const sessionEvents = pgTable(
   ],
 );
 
+/**
+ * The owner of a byte object. One row per stored object, keyed by a TOS object
+ * key that never embeds a Session id, so bytes can outlive the Session that
+ * produced them and later be surfaced in a user's drive. Sessions reference
+ * bytes through the `artifacts` association table instead of owning them.
+ *
+ * Object keys embed the tenant and the origin segment but not the Session;
+ * Session isolation is enforced by association rows plus API ownership checks.
+ *
+ * A row is `pending` while its object is being written (`writeLeaseUntil` is a
+ * crash-recovery lease), then `none` once committed. Unreferenced, unplaced
+ * rows (`folderId` null, no artifact associations) are reaped by the drive GC
+ * after `orphanedAt` plus the configured retention.
+ */
+export const driveFiles = pgTable(
+  "drive_files",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    origin: fileOrigin("origin").notNull(),
+    tosObjectKey: text("tos_object_key").notNull().unique(),
+    name: text("name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    contentHash: text("content_hash"),
+    sourceSessionId: uuid("source_session_id").references(() => sessions.id, {
+      onDelete: "set null",
+    }),
+    folderId: uuid("folder_id"),
+    deletionState: deletionState("deletion_state").default("pending").notNull(),
+    writeLeaseUntil: timestamp("write_lease_until", { withTimezone: true }),
+    orphanedAt: timestamp("orphaned_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    check("drive_files_size_check", sql`${table.sizeBytes} >= 0`),
+    index("drive_files_owner_state_idx").on(
+      table.ownerUserId,
+      table.deletionState,
+    ),
+    index("drive_files_owner_orphaned_idx").on(
+      table.ownerUserId,
+      table.orphanedAt,
+    ),
+    index("drive_files_source_session_idx").on(table.sourceSessionId),
+  ],
+);
+
 export const sessionInputs = pgTable(
   "session_inputs",
   {
@@ -315,6 +383,13 @@ export const sessionInputs = pgTable(
     originalName: text("original_name").notNull(),
     mimeType: text("mime_type").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+    /**
+     * Reserved: links an upload to the drive object that owns its bytes once
+     * uploads are mirrored into TOS. Null while uploads live only in Ark.
+     */
+    driveFileId: uuid("drive_file_id").references(() => driveFiles.id, {
+      onDelete: "set null",
+    }),
     mountPath: text("mount_path").notNull(),
     status: uploadStatus("status").default("uploading").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -353,7 +428,14 @@ export const artifacts = pgTable(
       .references(() => users.id, { onDelete: "cascade" }),
     sessionId: uuid("session_id").notNull(),
     arkFileId: text("ark_file_id").notNull(),
-    tosObjectKey: text("tos_object_key").notNull().unique(),
+    /**
+     * The byte object this Session produced. The bytes are owned by
+     * `drive_files`; this row is the Session-side association. Deleting the
+     * Session removes the association, not necessarily the bytes.
+     */
+    driveFileId: uuid("drive_file_id")
+      .notNull()
+      .references(() => driveFiles.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     mimeType: text("mime_type").notNull(),
     sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
@@ -375,6 +457,7 @@ export const artifacts = pgTable(
     ),
     check("artifacts_size_check", sql`${table.sizeBytes} >= 0`),
     index("artifacts_owner_session_idx").on(table.ownerUserId, table.sessionId),
+    index("artifacts_drive_file_idx").on(table.driveFileId),
   ],
 );
 
@@ -388,6 +471,9 @@ export const quotaPolicies = pgTable(
     monthlyTokenLimit: bigint("monthly_token_limit", {
       mode: "number",
     }).notNull(),
+    updatedBy: uuid("updated_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
     ...timestamps,
   },
   (table) => [
@@ -463,6 +549,16 @@ export const usageLedger = pgTable(
     arkEventId: text("ark_event_id").notNull(),
     metricType: usageMetricType("metric_type").notNull(),
     quantity: bigint("quantity", { mode: "number" }).notNull(),
+    /**
+     * Attribution captured at posting time so per-model / per-agent cost
+     * accounting stays exact even after an Agent's model is changed later.
+     * Rows predating the columns are backfilled from the session join and are
+     * therefore approximate for model attribution only.
+     */
+    agentKind: agentKind("agent_kind"),
+    platformAgentId: uuid("platform_agent_id"),
+    personalAgentId: uuid("personal_agent_id"),
+    modelId: text("model_id"),
     recordedAt: timestamp("recorded_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -480,7 +576,20 @@ export const usageLedger = pgTable(
       table.metricType,
     ),
     check("usage_ledger_quantity_check", sql`${table.quantity} >= 0`),
+    check(
+      "usage_ledger_agent_attribution_check",
+      sql`(
+        ${table.agentKind} is null
+        or (${table.agentKind} = 'platform' and ${table.platformAgentId} is not null and ${table.personalAgentId} is null)
+        or (${table.agentKind} = 'personal' and ${table.personalAgentId} is not null and ${table.platformAgentId} is null)
+      )`,
+    ),
     index("usage_ledger_user_recorded_idx").on(table.userId, table.recordedAt),
+    index("usage_ledger_recorded_idx").on(table.recordedAt),
+    index("usage_ledger_platform_agent_recorded_idx").on(
+      table.platformAgentId,
+      table.recordedAt,
+    ),
   ],
 );
 
@@ -587,6 +696,16 @@ export const auditLogs = pgTable(
       table.actorUserId,
       table.createdAt,
     ),
+    index("audit_logs_owner_created_idx").on(
+      table.ownerUserId,
+      table.createdAt,
+    ),
+    index("audit_logs_resource_created_idx").on(
+      table.resourceType,
+      table.resourceId,
+      table.createdAt,
+    ),
+    index("audit_logs_action_created_idx").on(table.action, table.createdAt),
     index("audit_logs_request_id_idx").on(table.requestId),
   ],
 );

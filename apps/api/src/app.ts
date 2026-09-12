@@ -9,11 +9,18 @@ import {
   InvalidModelError,
   InvalidUploadNameError,
   InvalidUserInputError,
+  LastActiveAdminError,
   PersonalAgentQuotaExceededError,
   ResourceNotFoundError,
+  SelfTargetForbiddenError,
   SessionTerminatedError,
   UserEmailConflictError,
+  type AdminPermission,
   type AdminUserCreated,
+  type AdminUserLifecycleResult,
+  type AuditLogCursor,
+  type AuditLogEntry,
+  type AuditLogQuery,
   type AvailableAgentRecord,
   type DefaultAgentRecord,
   type PersonalAgentRecord,
@@ -24,6 +31,7 @@ import {
   type TenantAuthorizationService,
   type TenantResource,
   type TenantResourceKind,
+  roleHasPermission,
 } from "@pwa/domain";
 import {
   capabilities as featureCapabilities,
@@ -86,22 +94,28 @@ export interface AdminService {
     id: string,
     context: { adminId: string; requestId: string },
   ): PromiseLike<void>;
-  listUsers(): PromiseLike<
-    Array<{
+  listUsers(query: {
+    limit: number;
+    search: string | null;
+    before: { createdAt: string; id: string } | null;
+  }): PromiseLike<{
+    users: Array<{
       id: string;
       email: string;
       role: "user" | "admin";
       status: "active" | "disabled";
       hasPassword: boolean;
       defaultAgentId: string | null;
+      createdAt: Date;
       quota: {
         personalAgentLimit: number;
         concurrentSessionLimit: number;
         dailySessionLimit: number;
         monthlyTokenLimit: number;
       };
-    }>
-  >;
+    }>;
+    nextCursor: { createdAt: string; id: string } | null;
+  }>;
   createUser(
     input: { email: string; password: string; role?: "user" | "admin" },
     context: { adminId: string; requestId: string },
@@ -111,6 +125,20 @@ export interface AdminService {
     password: string,
     context: { adminId: string; requestId: string },
   ): PromiseLike<void>;
+  setUserStatus(
+    userId: string,
+    status: "active" | "disabled",
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<AdminUserLifecycleResult>;
+  setUserRole(
+    userId: string,
+    role: "user" | "admin",
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<AdminUserLifecycleResult>;
+  revokeUserSessions(
+    userId: string,
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<{ revokedSessions: number }>;
   assignDefaultAgent(
     userId: string,
     platformAgentId: string,
@@ -119,10 +147,10 @@ export interface AdminService {
   updateUserQuota(
     userId: string,
     quota: {
-      personalAgentLimit: number;
-      concurrentSessionLimit: number;
-      dailySessionLimit: number;
-      monthlyTokenLimit: number;
+      personalAgentLimit?: number | null;
+      concurrentSessionLimit?: number | null;
+      dailySessionLimit?: number | null;
+      monthlyTokenLimit?: number | null;
     },
     context: { adminId: string; requestId: string },
   ): PromiseLike<{
@@ -131,6 +159,166 @@ export interface AdminService {
     concurrentSessionLimit: number;
     dailySessionLimit: number;
     monthlyTokenLimit: number;
+    inherited: {
+      personalAgentLimit: boolean;
+      concurrentSessionLimit: boolean;
+      dailySessionLimit: boolean;
+      monthlyTokenLimit: boolean;
+    };
+  }>;
+}
+
+export interface AdminUsageApiService {
+  overview(input: {
+    limit: number;
+    before: { tokens: number; userId: string } | null;
+  }): PromiseLike<{
+    period: { startsAt: Date; endsAt: Date };
+    totals: {
+      inputTokens: number;
+      outputTokens: number;
+      tokens: number;
+      activeUsers: number;
+      sessions: number;
+      exhaustedUsers: number;
+    };
+    users: Array<{
+      userId: string;
+      email: string;
+      role: "user" | "admin";
+      status: "active" | "disabled";
+      quota: {
+        personalAgentLimit: number;
+        concurrentSessionLimit: number;
+        dailySessionLimit: number;
+        monthlyTokenLimit: number;
+      };
+      usage: {
+        personalAgents: number;
+        concurrentSessions: number;
+        dailySessions: number;
+        inputTokens: number;
+        outputTokens: number;
+        tokens: number;
+        toolCalls: number;
+      };
+      dimensionStatus: {
+        personalAgents: "ok" | "near" | "exhausted";
+        concurrentSessions: "ok" | "near" | "exhausted";
+        dailySessions: "ok" | "near" | "exhausted";
+        monthlyTokens: "ok" | "near" | "exhausted";
+      };
+    }>;
+    nextCursor: { tokens: number; userId: string } | null;
+  }>;
+  byAgents(): PromiseLike<{
+    platform: Array<{
+      platformAgentId: string;
+      name: string;
+      status: string;
+      defaultAssignments: number;
+      inputTokens: number;
+      outputTokens: number;
+      tokens: number;
+    }>;
+    personal: { personalAgents: number; tokens: number };
+  }>;
+}
+
+export interface AdminUserDetailApiService {
+  getDetail(
+    userId: string,
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<{
+    id: string;
+    email: string;
+    role: "user" | "admin";
+    status: "active" | "disabled";
+    hasPassword: boolean;
+    defaultAgentId: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    quota: {
+      personalAgentLimit: number;
+      concurrentSessionLimit: number;
+      dailySessionLimit: number;
+      monthlyTokenLimit: number;
+    };
+    inherited: {
+      personalAgentLimit: boolean;
+      concurrentSessionLimit: boolean;
+      dailySessionLimit: boolean;
+      monthlyTokenLimit: boolean;
+    };
+    usage: {
+      personalAgents: number;
+      concurrentSessions: number;
+      dailySessions: number;
+      inputTokens: number;
+      outputTokens: number;
+      tokens: number;
+      runtimeMs: number;
+      toolCalls: number;
+    };
+    exhausted: {
+      personalAgents: boolean;
+      concurrentSessions: boolean;
+      dailySessions: boolean;
+      monthlyTokens: boolean;
+    };
+    period: { startsAt: Date; endsAt: Date };
+  }>;
+  listSessions(
+    userId: string,
+    input: { limit: number; before: { createdAt: string; id: string } | null },
+  ): PromiseLike<{
+    sessions: Array<{
+      id: string;
+      title: string;
+      status: "idle" | "running" | "rescheduled" | "terminated";
+      agentKind: "platform" | "personal";
+      agentName: string;
+      agentVersion: string;
+      createdAt: Date;
+      lastEventAt: Date | null;
+      archivedAt: Date | null;
+      deletionState: "none" | "pending" | "deletion_failed" | "deleted";
+      tokens: number;
+    }>;
+    nextCursor: { createdAt: string; id: string } | null;
+  }>;
+}
+
+export interface QuotaPolicyApiService {
+  getDefault(): PromiseLike<
+    | {
+        personalAgentLimit: number;
+        concurrentSessionLimit: number;
+        dailySessionLimit: number;
+        monthlyTokenLimit: number;
+        updatedBy: string | null;
+        updatedAt: Date;
+      }
+    | undefined
+  >;
+  updateDefault(
+    quota: {
+      personalAgentLimit: number;
+      concurrentSessionLimit: number;
+      dailySessionLimit: number;
+      monthlyTokenLimit: number;
+    },
+    context: { adminId: string; requestId: string },
+  ): PromiseLike<{
+    updated: {
+      personalAgentLimit: number;
+      concurrentSessionLimit: number;
+      dailySessionLimit: number;
+      monthlyTokenLimit: number;
+      updatedBy: string | null;
+      updatedAt: Date;
+    };
+    overLimitUserIds: string[];
   }>;
 }
 
@@ -256,9 +444,37 @@ export interface QuotaUsageApiService {
   getSummary(userId: string): PromiseLike<QuotaUsageSummary>;
 }
 
+export type AuditLogPageDto = {
+  entries: AuditLogEntry[];
+  nextCursor: AuditLogCursor | null;
+};
+
+export interface AuditApiService {
+  list(query: AuditLogQuery): PromiseLike<AuditLogPageDto>;
+  listForUser(
+    userId: string,
+    query: Pick<AuditLogQuery, "limit" | "before">,
+  ): PromiseLike<AuditLogPageDto>;
+  recordLogin(input: {
+    email: string;
+    userId: string | null;
+    success: boolean;
+    requestId: string;
+  }): Promise<void>;
+  recordUserView(input: {
+    adminId: string;
+    userId: string;
+    requestId: string;
+  }): Promise<void>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
   admin?: AdminService;
+  audit?: AuditApiService;
+  adminUsage?: AdminUsageApiService;
+  quotaPolicy?: QuotaPolicyApiService;
+  adminUserDetail?: AdminUserDetailApiService;
   userAgents?: UserAgentApiService;
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
@@ -394,7 +610,28 @@ const defaultAgentBodySchema = {
   },
 } as const;
 
+const quotaDimension = {
+  type: ["integer", "null"],
+  minimum: 0,
+  maximum: Number.MAX_SAFE_INTEGER,
+} as const;
+
+/**
+ * A `null` dimension inherits the default policy; omitting every override
+ * removes the user's override row entirely.
+ */
 const quotaBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    personalAgentLimit: quotaDimension,
+    concurrentSessionLimit: quotaDimension,
+    dailySessionLimit: quotaDimension,
+    monthlyTokenLimit: quotaDimension,
+  },
+} as const;
+
+const quotaPolicyBodySchema = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -424,6 +661,68 @@ const quotaBodySchema = {
       minimum: 0,
       maximum: Number.MAX_SAFE_INTEGER,
     },
+  },
+} as const;
+
+const listAdminUserSessionsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: { type: "string", minLength: 1, maxLength: 512 },
+    limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+  },
+} as const;
+
+const listAdminUsageQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: { type: "string", minLength: 1, maxLength: 512 },
+    limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+  },
+} as const;
+
+const userStatusBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["status"],
+  properties: {
+    status: { type: "string", enum: ["active", "disabled"] },
+  },
+} as const;
+
+const userRoleBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["role"],
+  properties: {
+    role: { type: "string", enum: ["user", "admin"] },
+  },
+} as const;
+
+const listAdminUsersQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: { type: "string", minLength: 1, maxLength: 512 },
+    limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+    q: { type: "string", minLength: 1, maxLength: 320 },
+  },
+} as const;
+
+const listAuditLogsQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    since: { type: "string", format: "date-time" },
+    until: { type: "string", format: "date-time" },
+    actorId: { type: "string", format: "uuid" },
+    action: { type: "string", minLength: 1, maxLength: 100 },
+    resourceType: { type: "string", minLength: 1, maxLength: 100 },
+    resourceId: { type: "string", minLength: 1, maxLength: 320 },
+    result: { type: "string", enum: ["succeeded", "failed"] },
+    cursor: { type: "string", minLength: 1, maxLength: 512 },
+    limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
   },
 } as const;
 
@@ -681,6 +980,61 @@ function applicationError(
   return { error: { code, message, requestId, retryable } };
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function encodePageCursor(value: Record<string, string | number>): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function decodePageCursor(cursor: string): Record<string, string> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  return parsed as Record<string, string>;
+}
+
+function decodeUserListCursor(cursor: string | undefined) {
+  if (cursor === undefined) return { before: null };
+  const decoded = decodePageCursor(cursor);
+  if (
+    !decoded ||
+    typeof decoded.createdAt !== "string" ||
+    Number.isNaN(Date.parse(decoded.createdAt)) ||
+    typeof decoded.id !== "string" ||
+    !UUID_PATTERN.test(decoded.id)
+  ) {
+    return { before: null, invalid: true as const };
+  }
+  return { before: { createdAt: decoded.createdAt, id: decoded.id } };
+}
+
+function decodeAuditCursor(cursor: string | undefined) {
+  return decodeUserListCursor(cursor);
+}
+
+function decodeUsageCursor(cursor: string | undefined) {
+  if (cursor === undefined) return { before: null };
+  const decoded = decodePageCursor(cursor);
+  if (
+    !decoded ||
+    typeof decoded.userId !== "string" ||
+    !UUID_PATTERN.test(decoded.userId) ||
+    typeof decoded.tokens !== "number" ||
+    !Number.isSafeInteger(decoded.tokens) ||
+    decoded.tokens < 0
+  ) {
+    return { before: null, invalid: true as const };
+  }
+  return { before: { tokens: decoded.tokens, userId: decoded.userId } };
+}
+
 /**
  * Fastify rejects a malformed request itself, before any handler runs — an empty
  * or unparseable JSON body, an unsupported content type, an oversized payload.
@@ -766,6 +1120,63 @@ function sendArkAvailabilityError(
     return true;
   }
   return false;
+}
+
+/**
+ * Last-resort mapping for Ark gateway categories that no flow-specific handler
+ * claimed. Without this the error would escape as a framework 500 with no
+ * application error code for the web client to interpret.
+ */
+function sendArkCategoryError(
+  category: unknown,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): boolean {
+  if (typeof category !== "string") return false;
+  switch (category) {
+    case "invalid_response":
+      reply
+        .code(502)
+        .send(
+          applicationError(
+            request.id,
+            "ARK_INVALID_RESPONSE",
+            "Ark rejected the request or returned an unexpected response",
+            false,
+          ),
+        );
+      return true;
+    case "not_found":
+      reply.code(404).send(resourceNotFoundError(request.id));
+      return true;
+    case "runtime_busy":
+      reply
+        .code(503)
+        .send(
+          applicationError(
+            request.id,
+            "ARK_RUNTIME_BUSY",
+            "Ark is busy handling other work",
+            true,
+          ),
+        );
+      return true;
+    case "session_terminated":
+    case "cancelled":
+      reply
+        .code(409)
+        .send(
+          applicationError(
+            request.id,
+            "ARK_REQUEST_REJECTED",
+            "Ark cannot serve this request in its current state",
+            false,
+          ),
+        );
+      return true;
+    default:
+      return false;
+  }
 }
 
 function publicAgent(agent: PlatformAgentRecord) {
@@ -988,6 +1399,36 @@ function sendAdminError(
       );
   }
   if (
+    error instanceof SelfTargetForbiddenError ||
+    hasErrorName(error, "SelfTargetForbiddenError")
+  ) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "SELF_TARGET_FORBIDDEN",
+          "Administrators cannot target their own account",
+          false,
+        ),
+      );
+  }
+  if (
+    error instanceof LastActiveAdminError ||
+    hasErrorName(error, "LastActiveAdminError")
+  ) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "LAST_ACTIVE_ADMIN",
+          "The last active administrator cannot be disabled or demoted",
+          false,
+        ),
+      );
+  }
+  if (
     error instanceof InvalidUserInputError ||
     hasErrorName(error, "InvalidUserInputError")
   ) {
@@ -1053,6 +1494,7 @@ function sendAdminError(
       ? error.category
       : undefined;
   if (sendArkAvailabilityError(category, request, reply)) return reply;
+  if (sendArkCategoryError(category, request, reply)) return reply;
   throw error;
 }
 
@@ -1142,6 +1584,7 @@ function sendSessionError(
       );
   }
   if (sendArkAvailabilityError(category, request, reply)) return reply;
+  if (sendArkCategoryError(category, request, reply)) return reply;
   throw error;
 }
 
@@ -1203,15 +1646,33 @@ function sendArtifactError(
   return sendSessionError(error, request, reply);
 }
 
-function isAllowedAdminRoute(route: string): boolean {
-  return (
-    route === "/api/v1/admin/platform-agents" ||
-    route === "/api/v1/admin/platform-agents/:id" ||
-    route === "/api/v1/admin/users" ||
-    route === "/api/v1/admin/users/:id/default-agent" ||
-    route === "/api/v1/admin/users/:id/quota" ||
-    route === "/api/v1/admin/users/:id/password"
-  );
+/**
+ * Every admin route declares the permission it requires; unknown admin routes
+ * stay invisible (404). Adding a role later only extends the role → permission
+ * mapping in `@pwa/domain`, never this table's semantics.
+ */
+const ADMIN_ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
+  "/api/v1/admin/platform-agents": "AGENT_MANAGE",
+  "/api/v1/admin/platform-agents/:id": "AGENT_MANAGE",
+  "/api/v1/admin/users": "USER_MANAGE",
+  "/api/v1/admin/users/:id": "USER_MANAGE",
+  "/api/v1/admin/users/:id/audit": "AUDIT_VIEW",
+  "/api/v1/admin/users/:id/default-agent": "USER_MANAGE",
+  "/api/v1/admin/users/:id/password": "USER_MANAGE",
+  "/api/v1/admin/users/:id/quota": "QUOTA_MANAGE",
+  "/api/v1/admin/users/:id/role": "USER_MANAGE",
+  "/api/v1/admin/users/:id/sessions": "USER_MANAGE",
+  "/api/v1/admin/users/:id/sessions/revoke": "USER_MANAGE",
+  "/api/v1/admin/users/:id/status": "USER_MANAGE",
+  "/api/v1/admin/users/:id/usage": "USAGE_VIEW",
+  "/api/v1/admin/audit-logs": "AUDIT_VIEW",
+  "/api/v1/admin/quota-policy": "SETTINGS_MANAGE",
+  "/api/v1/admin/usage/agents": "USAGE_VIEW",
+  "/api/v1/admin/usage/overview": "USAGE_VIEW",
+};
+
+function adminRoutePermission(route: string): AdminPermission | undefined {
+  return ADMIN_ROUTE_PERMISSIONS[route];
 }
 
 function hasErrorName(error: unknown, name: string): boolean {
@@ -1249,9 +1710,13 @@ export function requireAuthenticated(
   };
 }
 
-export function requireAdmin(auth: ApiAuthService, isProduction = false) {
+export function requirePermission(
+  auth: ApiAuthService,
+  permission: AdminPermission,
+  isProduction = false,
+) {
   const authenticate = requireAuthenticated(auth, isProduction);
-  return async function authorizeAdmin(
+  return async function authorizePermission(
     request: Parameters<typeof authenticate>[0],
     reply: Parameters<typeof authenticate>[1],
   ) {
@@ -1259,10 +1724,14 @@ export function requireAdmin(auth: ApiAuthService, isProduction = false) {
     if (reply.sent) {
       return reply;
     }
-    if (request.auth?.role !== "admin") {
+    if (!roleHasPermission(request.auth?.role, permission)) {
       return reply.code(403).send(forbiddenError(request.id));
     }
   };
+}
+
+export function requireAdmin(auth: ApiAuthService, isProduction = false) {
+  return requirePermission(auth, "USER_MANAGE", isProduction);
 }
 
 export function requireUser(auth: ApiAuthService, isProduction = false) {
@@ -1570,7 +2039,6 @@ export function buildApp(options: BuildAppOptions = {}) {
   {
     const auth = options.auth ?? unavailableAuth;
     const authenticate = requireAuthenticated(auth, isProduction);
-    const authorizeAdmin = requireAdmin(auth, isProduction);
     const authorizeUser = requireUser(auth, isProduction);
 
     app.addHook("preHandler", async (request, reply) => {
@@ -1579,10 +2047,18 @@ export function buildApp(options: BuildAppOptions = {}) {
         return;
       }
       if (route.startsWith("/api/v1/admin/")) {
-        if (!isAllowedAdminRoute(route)) {
+        const permission = adminRoutePermission(route);
+        if (!permission) {
           return reply.code(404).send(resourceNotFoundError(request.id));
         }
-        return authorizeAdmin(request, reply);
+        await authenticate(request, reply);
+        if (reply.sent) {
+          return reply;
+        }
+        if (!roleHasPermission(request.auth?.role, permission)) {
+          return reply.code(403).send(forbiddenError(request.id));
+        }
+        return;
       }
       // /me and /capabilities describe the caller, not user content, so both
       // roles may read them; authorizeUser would 404 an administrator.
@@ -1596,16 +2072,25 @@ export function buildApp(options: BuildAppOptions = {}) {
       "/api/v1/auth/login",
       { schema: { body: credentialsBodySchema } },
       async (request, reply) => {
+        const email = request.body.email.trim().toLowerCase();
         try {
-          const session = await auth.login(
-            request.body.email.trim().toLowerCase(),
-            request.body.password,
-          );
+          const session = await auth.login(email, request.body.password);
           reply.setCookie(
             AUTH_COOKIE_NAME,
             session.token,
             cookieOptions(isProduction, session.expiresAt),
           );
+          if (options.audit) {
+            const identity = await auth
+              .authenticate(session.token)
+              .catch(() => undefined);
+            await options.audit.recordLogin({
+              email,
+              userId: identity?.userId ?? null,
+              success: true,
+              requestId: request.id,
+            });
+          }
           return reply.code(204).send();
         } catch (error) {
           if (
@@ -1614,6 +2099,14 @@ export function buildApp(options: BuildAppOptions = {}) {
           ) {
             throw error;
           }
+          await options.audit
+            ?.recordLogin({
+              email,
+              userId: null,
+              success: false,
+              requestId: request.id,
+            })
+            .catch(() => undefined);
           return reply.code(401).send(authError(request.id));
         }
       },
@@ -2382,20 +2875,55 @@ export function buildApp(options: BuildAppOptions = {}) {
         },
       );
 
-      app.get("/api/v1/admin/users", async (_request, reply) => {
-        const users = await admin.listUsers();
-        return reply.send({
-          users: users.map((user) => ({
-            id: user.id,
-            email: user.email,
-            role: user.role,
-            status: user.status,
-            hasPassword: user.hasPassword,
-            defaultAgentId: user.defaultAgentId,
-            quota: user.quota,
-          })),
-        });
-      });
+      app.get<{
+        Querystring: { cursor?: string; limit?: number; q?: string };
+      }>(
+        "/api/v1/admin/users",
+        { schema: { querystring: listAdminUsersQuerySchema } },
+        async (request, reply) => {
+          const { before, invalid } = decodeUserListCursor(
+            request.query.cursor,
+          );
+          if (invalid) {
+            return reply
+              .code(400)
+              .send(
+                applicationError(
+                  request.id,
+                  "VALIDATION_FAILED",
+                  "Invalid pagination cursor",
+                  false,
+                ),
+              );
+          }
+          const search = request.query.q?.trim();
+          const page = await admin.listUsers({
+            limit: request.query.limit ?? 50,
+            search: search ? search : null,
+            before,
+          });
+          return reply.send({
+            users: page.users.map((user) => ({
+              id: user.id,
+              email: user.email,
+              role: user.role,
+              status: user.status,
+              hasPassword: user.hasPassword,
+              defaultAgentId: user.defaultAgentId,
+              createdAt: user.createdAt.toISOString(),
+              quota: user.quota,
+            })),
+            ...(page.nextCursor
+              ? {
+                  nextCursor: encodePageCursor({
+                    createdAt: page.nextCursor.createdAt,
+                    id: page.nextCursor.id,
+                  }),
+                }
+              : {}),
+          });
+        },
+      );
 
       app.post<{
         Body: { email: string; password: string; role?: "user" | "admin" };
@@ -2426,6 +2954,68 @@ export function buildApp(options: BuildAppOptions = {}) {
               context(request),
             );
             return reply.code(204).send();
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.patch<{
+        Params: { id: string };
+        Body: { status: "active" | "disabled" };
+      }>(
+        "/api/v1/admin/users/:id/status",
+        { schema: { params: uuidParamsSchema, body: userStatusBodySchema } },
+        async (request, reply) => {
+          try {
+            const result = await admin.setUserStatus(
+              request.params.id,
+              request.body.status,
+              context(request),
+            );
+            return reply.send({
+              status: result.to,
+              revokedSessions: result.revokedSessions,
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.patch<{
+        Params: { id: string };
+        Body: { role: "user" | "admin" };
+      }>(
+        "/api/v1/admin/users/:id/role",
+        { schema: { params: uuidParamsSchema, body: userRoleBodySchema } },
+        async (request, reply) => {
+          try {
+            const result = await admin.setUserRole(
+              request.params.id,
+              request.body.role,
+              context(request),
+            );
+            return reply.send({
+              role: result.to,
+              revokedSessions: result.revokedSessions,
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{ Params: { id: string }; Body: Record<string, never> }>(
+        "/api/v1/admin/users/:id/sessions/revoke",
+        { schema: { params: uuidParamsSchema, body: emptyBodySchema } },
+        async (request, reply) => {
+          try {
+            const result = await admin.revokeUserSessions(
+              request.params.id,
+              context(request),
+            );
+            return reply.send({ revokedSessions: result.revokedSessions });
           } catch (error) {
             return sendAdminError(error, request, reply);
           }
@@ -2464,10 +3054,10 @@ export function buildApp(options: BuildAppOptions = {}) {
       app.put<{
         Params: { id: string };
         Body: {
-          personalAgentLimit: number;
-          concurrentSessionLimit: number;
-          dailySessionLimit: number;
-          monthlyTokenLimit: number;
+          personalAgentLimit?: number | null;
+          concurrentSessionLimit?: number | null;
+          dailySessionLimit?: number | null;
+          monthlyTokenLimit?: number | null;
         };
       }>(
         "/api/v1/admin/users/:id/quota",
@@ -2485,10 +3075,331 @@ export function buildApp(options: BuildAppOptions = {}) {
               concurrentSessionLimit: quota.concurrentSessionLimit,
               dailySessionLimit: quota.dailySessionLimit,
               monthlyTokenLimit: quota.monthlyTokenLimit,
+              inherited: quota.inherited,
             });
           } catch (error) {
             return sendAdminError(error, request, reply);
           }
+        },
+      );
+    }
+
+    if (options.adminUserDetail) {
+      const adminUserDetail = options.adminUserDetail;
+
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/admin/users/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const detail = await adminUserDetail.getDetail(request.params.id, {
+              adminId: request.auth!.userId,
+              requestId: request.id,
+            });
+            return reply.send({
+              ...detail,
+              period: {
+                startsAt: detail.period.startsAt.toISOString(),
+                endsAt: detail.period.endsAt.toISOString(),
+              },
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.get<{
+        Params: { id: string };
+        Querystring: { cursor?: string; limit?: number };
+      }>(
+        "/api/v1/admin/users/:id/sessions",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            querystring: listAdminUserSessionsQuerySchema,
+          },
+        },
+        async (request, reply) => {
+          const { before, invalid } = decodeUserListCursor(
+            request.query.cursor,
+          );
+          if (invalid) {
+            return reply
+              .code(400)
+              .send(
+                applicationError(
+                  request.id,
+                  "VALIDATION_FAILED",
+                  "Invalid pagination cursor",
+                  false,
+                ),
+              );
+          }
+          const page = await adminUserDetail.listSessions(request.params.id, {
+            limit: request.query.limit ?? 50,
+            before,
+          });
+          return reply.send({
+            sessions: page.sessions.map((session) => ({
+              id: session.id,
+              title: session.title,
+              status: session.status,
+              agentKind: session.agentKind,
+              agentName: session.agentName,
+              agentVersion: session.agentVersion,
+              createdAt: session.createdAt.toISOString(),
+              lastEventAt: session.lastEventAt?.toISOString() ?? null,
+              archivedAt: session.archivedAt?.toISOString() ?? null,
+              deletionState: session.deletionState,
+              tokens: session.tokens,
+            })),
+            ...(page.nextCursor
+              ? {
+                  nextCursor: encodePageCursor({
+                    createdAt: page.nextCursor.createdAt,
+                    id: page.nextCursor.id,
+                  }),
+                }
+              : {}),
+          });
+        },
+      );
+    }
+
+    if (options.audit) {
+      const audit = options.audit;
+
+      app.get<{
+        Params: { id: string };
+        Querystring: { cursor?: string; limit?: number };
+      }>(
+        "/api/v1/admin/users/:id/audit",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            querystring: listAdminUserSessionsQuerySchema,
+          },
+        },
+        async (request, reply) => {
+          const { before, invalid } = decodeAuditCursor(request.query.cursor);
+          if (invalid) {
+            return reply
+              .code(400)
+              .send(
+                applicationError(
+                  request.id,
+                  "VALIDATION_FAILED",
+                  "Invalid pagination cursor",
+                  false,
+                ),
+              );
+          }
+          const page = await audit.listForUser(request.params.id, {
+            limit: request.query.limit ?? 50,
+            before,
+          });
+          return reply.send({
+            entries: page.entries.map((entry) => ({
+              id: entry.id,
+              actorUserId: entry.actorUserId,
+              actorEmail: entry.actorEmail,
+              ownerUserId: entry.ownerUserId,
+              ownerEmail: entry.ownerEmail,
+              action: entry.action,
+              resourceType: entry.resourceType,
+              resourceId: entry.resourceId,
+              result: entry.result,
+              errorCode: entry.errorCode,
+              requestId: entry.requestId,
+              arkRequestId: entry.arkRequestId,
+              metadata: entry.metadata ?? null,
+              createdAt: entry.createdAt.toISOString(),
+            })),
+            ...(page.nextCursor
+              ? {
+                  nextCursor: encodePageCursor({
+                    createdAt: page.nextCursor.createdAt,
+                    id: page.nextCursor.id,
+                  }),
+                }
+              : {}),
+          });
+        },
+      );
+    }
+
+    if (options.adminUsage) {
+      const adminUsage = options.adminUsage;
+
+      app.get<{ Querystring: { cursor?: string; limit?: number } }>(
+        "/api/v1/admin/usage/overview",
+        { schema: { querystring: listAdminUsageQuerySchema } },
+        async (request, reply) => {
+          const { before, invalid } = decodeUsageCursor(request.query.cursor);
+          if (invalid) {
+            return reply
+              .code(400)
+              .send(
+                applicationError(
+                  request.id,
+                  "VALIDATION_FAILED",
+                  "Invalid pagination cursor",
+                  false,
+                ),
+              );
+          }
+          const overview = await adminUsage.overview({
+            limit: request.query.limit ?? 50,
+            before,
+          });
+          return reply.send({
+            period: {
+              startsAt: overview.period.startsAt.toISOString(),
+              endsAt: overview.period.endsAt.toISOString(),
+            },
+            totals: overview.totals,
+            users: overview.users,
+            ...(overview.nextCursor
+              ? {
+                  nextCursor: encodePageCursor({
+                    tokens: overview.nextCursor.tokens,
+                    userId: overview.nextCursor.userId,
+                  }),
+                }
+              : {}),
+          });
+        },
+      );
+
+      app.get("/api/v1/admin/usage/agents", async (_request, reply) => {
+        const usage = await adminUsage.byAgents();
+        return reply.send(usage);
+      });
+    }
+
+    if (options.quotaPolicy) {
+      const quotaPolicy = options.quotaPolicy;
+      const context = (request: FastifyRequest) => ({
+        adminId: request.auth!.userId,
+        requestId: request.id,
+      });
+
+      app.get("/api/v1/admin/quota-policy", async (_request, reply) => {
+        const policy = await quotaPolicy.getDefault();
+        if (!policy) {
+          return reply.code(404).send(resourceNotFoundError(_request.id));
+        }
+        return reply.send({
+          personalAgentLimit: policy.personalAgentLimit,
+          concurrentSessionLimit: policy.concurrentSessionLimit,
+          dailySessionLimit: policy.dailySessionLimit,
+          monthlyTokenLimit: policy.monthlyTokenLimit,
+          updatedBy: policy.updatedBy,
+          updatedAt: policy.updatedAt.toISOString(),
+        });
+      });
+
+      app.put<{
+        Body: {
+          personalAgentLimit: number;
+          concurrentSessionLimit: number;
+          dailySessionLimit: number;
+          monthlyTokenLimit: number;
+        };
+      }>(
+        "/api/v1/admin/quota-policy",
+        { schema: { body: quotaPolicyBodySchema } },
+        async (request, reply) => {
+          try {
+            const result = await quotaPolicy.updateDefault(
+              request.body,
+              context(request),
+            );
+            return reply.send({
+              personalAgentLimit: result.updated.personalAgentLimit,
+              concurrentSessionLimit: result.updated.concurrentSessionLimit,
+              dailySessionLimit: result.updated.dailySessionLimit,
+              monthlyTokenLimit: result.updated.monthlyTokenLimit,
+              updatedBy: result.updated.updatedBy,
+              updatedAt: result.updated.updatedAt.toISOString(),
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+    }
+
+    if (options.audit) {
+      const audit = options.audit;
+
+      app.get<{
+        Querystring: {
+          since?: string;
+          until?: string;
+          actorId?: string;
+          action?: string;
+          resourceType?: string;
+          resourceId?: string;
+          result?: "succeeded" | "failed";
+          cursor?: string;
+          limit?: number;
+        };
+      }>(
+        "/api/v1/admin/audit-logs",
+        { schema: { querystring: listAuditLogsQuerySchema } },
+        async (request, reply) => {
+          const { before, invalid } = decodeAuditCursor(request.query.cursor);
+          if (invalid) {
+            return reply
+              .code(400)
+              .send(
+                applicationError(
+                  request.id,
+                  "VALIDATION_FAILED",
+                  "Invalid pagination cursor",
+                  false,
+                ),
+              );
+          }
+          const page = await audit.list({
+            since: request.query.since,
+            until: request.query.until,
+            actorId: request.query.actorId,
+            action: request.query.action,
+            resourceType: request.query.resourceType,
+            resourceId: request.query.resourceId,
+            result: request.query.result,
+            limit: request.query.limit ?? 50,
+            before,
+          });
+          return reply.send({
+            entries: page.entries.map((entry) => ({
+              id: entry.id,
+              actorUserId: entry.actorUserId,
+              actorEmail: entry.actorEmail,
+              ownerUserId: entry.ownerUserId,
+              ownerEmail: entry.ownerEmail,
+              action: entry.action,
+              resourceType: entry.resourceType,
+              resourceId: entry.resourceId,
+              result: entry.result,
+              errorCode: entry.errorCode,
+              requestId: entry.requestId,
+              arkRequestId: entry.arkRequestId,
+              metadata: entry.metadata ?? null,
+              createdAt: entry.createdAt.toISOString(),
+            })),
+            ...(page.nextCursor
+              ? {
+                  nextCursor: encodePageCursor({
+                    createdAt: page.nextCursor.createdAt,
+                    id: page.nextCursor.id,
+                  }),
+                }
+              : {}),
+          });
         },
       );
     }

@@ -6,3 +6,6 @@ specs
 .superpowers
 .vscode
 packages/db/migrations/*.sql
+
+# editor/agent scratch state
+.zcode

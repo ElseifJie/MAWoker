@@ -1,12 +1,10 @@
-import { posix } from "node:path";
 import type { ArkGateway } from "@pwa/ark-client";
-import type { ArtifactStorage } from "@pwa/storage";
 
 type CompletedSteps = {
   interruptRequested?: true;
   nonRunningObserved?: true;
   arkDeleted?: true;
-  artifactsDeleted?: true;
+  artifactsOrphaned?: true;
 };
 
 interface SessionDeletionPayload extends Record<string, unknown> {
@@ -21,6 +19,7 @@ export interface SessionDeletionJob {
     | "delete_session"
     | "delete_artifact"
     | "cleanup_artifact_object"
+    | "cleanup_drive_object"
     | "cleanup_upload"
     | "reconcile_session"
     | "reconcile_personal_agent";
@@ -68,7 +67,12 @@ interface SessionDeletionRepository {
       }
     | undefined
   >;
-  listArtifactObjectKeys(userId: string, id: string): PromiseLike<string[]>;
+  /**
+   * Marks drive objects that only this Session referenced as orphaned. The
+   * bytes are not deleted here: the drive GC reaps them after the configured
+   * retention, which is what allows a drive mode to keep Agent output.
+   */
+  orphanDriveFiles(userId: string, id: string, at: Date): PromiseLike<number>;
   removeLocal(
     userId: string,
     id: string,
@@ -107,7 +111,7 @@ function parsePayload(job: SessionDeletionJob): SessionDeletionPayload {
     "interruptRequested",
     "nonRunningObserved",
     "arkDeleted",
-    "artifactsDeleted",
+    "artifactsOrphaned",
   ]);
   const completedSteps = completed as Record<string, unknown>;
   if (
@@ -116,7 +120,7 @@ function parsePayload(job: SessionDeletionJob): SessionDeletionPayload {
     ) ||
     (completedSteps.arkDeleted === true &&
       completedSteps.nonRunningObserved !== true) ||
-    (completedSteps.artifactsDeleted === true &&
+    (completedSteps.artifactsOrphaned === true &&
       completedSteps.arkDeleted !== true)
   ) {
     throw new InvalidSessionDeletionJobError();
@@ -125,21 +129,6 @@ function parsePayload(job: SessionDeletionJob): SessionDeletionPayload {
     sessionId,
     completed: { ...(completedSteps as CompletedSteps) },
   };
-}
-
-function assertOwnedObjectKey(
-  objectKey: string,
-  ownerUserId: string,
-  sessionId: string,
-): void {
-  const prefix = `tenants/${ownerUserId}/sessions/${sessionId}/artifacts/`;
-  if (
-    posix.normalize(objectKey) !== objectKey ||
-    !objectKey.startsWith(prefix) ||
-    objectKey.length === prefix.length
-  ) {
-    throw new InvalidSessionDeletionJobError();
-  }
 }
 
 function retryError(error: unknown): string {
@@ -171,8 +160,8 @@ export class SessionDeletionProcessor {
       jobs: SessionDeletionJobs;
       repository: SessionDeletionRepository;
       ark: Pick<ArkGateway, "getSession" | "submitEvent" | "deleteSession">;
-      storage: Pick<ArtifactStorage, "delete">;
       workerId: string;
+      now?: () => Date;
       batchSize?: number;
       alert?: (event: SessionDeletionAlert) => void;
     },
@@ -263,17 +252,16 @@ export class SessionDeletionProcessor {
         await this.checkpoint(job, payload);
       }
 
-      if (!payload.completed.artifactsDeleted) {
-        const objectKeys =
-          await this.dependencies.repository.listArtifactObjectKeys(
-            ownerUserId,
-            payload.sessionId,
-          );
-        for (const objectKey of objectKeys) {
-          assertOwnedObjectKey(objectKey, ownerUserId, payload.sessionId);
-          await this.dependencies.storage.delete(objectKey);
-        }
-        payload.completed.artifactsDeleted = true;
+      if (!payload.completed.artifactsOrphaned) {
+        // Mark the bytes unreferenced; the drive GC owns the actual delete and
+        // honours the retention window. Must run while the associations still
+        // exist to identify which files this Session was the last to cover.
+        await this.dependencies.repository.orphanDriveFiles(
+          ownerUserId,
+          payload.sessionId,
+          (this.dependencies.now ?? (() => new Date()))(),
+        );
+        payload.completed.artifactsOrphaned = true;
         await this.checkpoint(job, payload);
       }
 

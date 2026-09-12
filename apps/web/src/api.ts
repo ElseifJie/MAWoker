@@ -141,6 +141,7 @@ export interface AdminUserSummary {
   status: "active" | "disabled";
   hasPassword: boolean;
   defaultAgentId: string | null;
+  createdAt: string;
   quota: AdminQuota;
 }
 
@@ -149,6 +150,140 @@ export interface AdminUserCreated {
   email: string;
   role: AdminUserRole;
   status: "active" | "disabled";
+}
+
+export interface AdminUserPage {
+  users: AdminUserSummary[];
+  nextCursor?: string | undefined;
+}
+
+export type AdminQuotaInheritance = Record<keyof AdminQuota, boolean>;
+
+export interface AdminUserEffectiveQuota extends AdminQuota {
+  userId: string;
+  inherited: AdminQuotaInheritance;
+}
+
+export interface AdminAuditEntry {
+  id: string;
+  actorUserId: string | null;
+  actorEmail: string | null;
+  ownerUserId: string | null;
+  ownerEmail: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  result: "succeeded" | "failed";
+  errorCode: string | null;
+  requestId: string;
+  arkRequestId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface AdminAuditLogPage {
+  entries: AdminAuditEntry[];
+  nextCursor?: string | undefined;
+}
+
+export interface AdminAuditLogQuery {
+  since?: string | undefined;
+  until?: string | undefined;
+  actorId?: string | undefined;
+  action?: string | undefined;
+  resourceType?: string | undefined;
+  resourceId?: string | undefined;
+  result?: "succeeded" | "failed" | undefined;
+  cursor?: string | undefined;
+  limit?: number | undefined;
+}
+
+export type AdminDimensionStatus = "ok" | "near" | "exhausted";
+
+export interface AdminUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  tokens: number;
+  activeUsers: number;
+  sessions: number;
+  exhaustedUsers: number;
+}
+
+export interface AdminUsageUserRow {
+  userId: string;
+  email: string;
+  role: AdminUserRole;
+  status: "active" | "disabled";
+  quota: AdminQuota;
+  usage: {
+    personalAgents: number;
+    concurrentSessions: number;
+    dailySessions: number;
+    inputTokens: number;
+    outputTokens: number;
+    tokens: number;
+    toolCalls: number;
+  };
+  dimensionStatus: {
+    personalAgents: AdminDimensionStatus;
+    concurrentSessions: AdminDimensionStatus;
+    dailySessions: AdminDimensionStatus;
+    monthlyTokens: AdminDimensionStatus;
+  };
+}
+
+export interface AdminUsageOverview {
+  period: { startsAt: string; endsAt: string };
+  totals: AdminUsageTotals;
+  users: AdminUsageUserRow[];
+  nextCursor?: string | undefined;
+}
+
+export interface AdminPlatformAgentUsage {
+  platformAgentId: string;
+  name: string;
+  status: string;
+  defaultAssignments: number;
+  inputTokens: number;
+  outputTokens: number;
+  tokens: number;
+}
+
+export interface AdminUsageByAgents {
+  platform: AdminPlatformAgentUsage[];
+  personal: { personalAgents: number; tokens: number };
+}
+
+export interface AdminQuotaPolicy extends AdminQuota {
+  updatedBy: string | null;
+  updatedAt: string;
+}
+
+export interface AdminUserDetail extends AdminUserSummary {
+  updatedAt: string;
+  inherited: AdminQuotaInheritance;
+  usage: UsageSummary["usage"];
+  exhausted: UsageSummary["exhausted"];
+  period: UsageSummary["period"];
+}
+
+export interface AdminUserSession {
+  id: string;
+  title: string;
+  status: SessionStatus;
+  agentKind: "platform" | "personal";
+  agentName: string;
+  agentVersion: string;
+  createdAt: string;
+  lastEventAt: string | null;
+  archivedAt: string | null;
+  deletionState: "none" | "pending" | "deletion_failed" | "deleted";
+  tokens: number;
+}
+
+export interface AdminUserSessionPage {
+  sessions: AdminUserSession[];
+  nextCursor?: string | undefined;
 }
 
 export interface UploadedInput {
@@ -267,7 +402,88 @@ export const apiClient = {
     request<void>(`/admin/platform-agents/${encodeURIComponent(id)}`, {
       method: "DELETE",
     }),
-  listAdminUsers: () => request<{ users: AdminUserSummary[] }>("/admin/users"),
+  listAdminUsers: (
+    params: {
+      cursor?: string | undefined;
+      limit?: number | undefined;
+      q?: string | undefined;
+    } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    if (params.q) search.set("q", params.q);
+    const query = search.toString();
+    return request<AdminUserPage>(`/admin/users${query ? `?${query}` : ""}`);
+  },
+  setAdminUserStatus: (userId: string, status: "active" | "disabled") =>
+    request<{ status: "active" | "disabled"; revokedSessions: number }>(
+      `/admin/users/${encodeURIComponent(userId)}/status`,
+      { method: "PATCH", body: JSON.stringify({ status }) },
+    ),
+  setAdminUserRole: (userId: string, role: AdminUserRole) =>
+    request<{ role: AdminUserRole; revokedSessions: number }>(
+      `/admin/users/${encodeURIComponent(userId)}/role`,
+      { method: "PATCH", body: JSON.stringify({ role }) },
+    ),
+  revokeAdminUserSessions: (userId: string) =>
+    request<{ revokedSessions: number }>(
+      `/admin/users/${encodeURIComponent(userId)}/sessions/revoke`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  getAdminUser: (userId: string) =>
+    request<AdminUserDetail>(`/admin/users/${encodeURIComponent(userId)}`),
+  listAdminUserSessions: (
+    userId: string,
+    params: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const query = search.toString();
+    return request<AdminUserSessionPage>(
+      `/admin/users/${encodeURIComponent(userId)}/sessions${query ? `?${query}` : ""}`,
+    );
+  },
+  listAdminUserAudit: (
+    userId: string,
+    params: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const query = search.toString();
+    return request<AdminAuditLogPage>(
+      `/admin/users/${encodeURIComponent(userId)}/audit${query ? `?${query}` : ""}`,
+    );
+  },
+  listAdminAuditLogs: (query: AdminAuditLogQuery = {}) => {
+    const search = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== "") search.set(key, String(value));
+    }
+    const qs = search.toString();
+    return request<AdminAuditLogPage>(`/admin/audit-logs${qs ? `?${qs}` : ""}`);
+  },
+  getAdminUsageOverview: (
+    params: { cursor?: string | undefined; limit?: number | undefined } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    const query = search.toString();
+    return request<AdminUsageOverview>(
+      `/admin/usage/overview${query ? `?${query}` : ""}`,
+    );
+  },
+  getAdminUsageByAgents: () =>
+    request<AdminUsageByAgents>("/admin/usage/agents"),
+  getAdminQuotaPolicy: () => request<AdminQuotaPolicy>("/admin/quota-policy"),
+  updateAdminQuotaPolicy: (quota: AdminQuota) =>
+    request<AdminQuotaPolicy>("/admin/quota-policy", {
+      method: "PUT",
+      body: JSON.stringify(quota),
+    }),
   createAdminUser: (input: {
     email: string;
     password: string;
@@ -291,8 +507,11 @@ export const apiClient = {
       method: "PUT",
       body: JSON.stringify({ platformAgentId }),
     }),
-  updateAdminUserQuota: (userId: string, quota: AdminQuota) =>
-    request<AdminQuota & { userId: string }>(
+  updateAdminUserQuota: (
+    userId: string,
+    quota: Partial<Record<keyof AdminQuota, number | null>>,
+  ) =>
+    request<AdminUserEffectiveQuota>(
       `/admin/users/${encodeURIComponent(userId)}/quota`,
       {
         method: "PUT",

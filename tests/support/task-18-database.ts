@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import { createRepositories } from "../../packages/db/src/index.js";
 import {
   ArtifactService,
+  DriveFileService,
   SessionService,
 } from "../../packages/domain/src/index.js";
 import { InMemoryArtifactStorage } from "../../packages/storage/src/index.js";
@@ -80,9 +81,8 @@ export async function createTask18DatabaseHarness() {
     const arkAgentId = `ark-agent-${ordinal}`;
     const arkSessionId = `ark-session-${ordinal}`;
     const arkFileId = `ark-file-${ordinal}`;
-    const objectKey =
-      `tenants/${tenant.userId}/sessions/${tenant.sessionId}` +
-      `/artifacts/${ordinal}/v1`;
+    const driveFileId = randomUUID();
+    const objectKey = `tenants/${tenant.userId}/drive/artifact/${driveFileId}/${ordinal}.txt`;
     const bytes = new TextEncoder().encode(`${ordinal} artifact`);
 
     await database.client.query(
@@ -125,8 +125,23 @@ export async function createTask18DatabaseHarness() {
       ],
     );
     await database.client.query(
+      `insert into drive_files
+         (id, owner_user_id, origin, tos_object_key, name, mime_type, size_bytes,
+          source_session_id, deletion_state, created_at, updated_at)
+       values ($1, $2, 'artifact', $3, 'result.txt', 'text/plain', $4, $5,
+               'none', $6, $6)`,
+      [
+        driveFileId,
+        tenant.userId,
+        objectKey,
+        bytes.byteLength,
+        tenant.sessionId,
+        now,
+      ],
+    );
+    await database.client.query(
       `insert into artifacts
-         (id, owner_user_id, session_id, ark_file_id, tos_object_key, name,
+         (id, owner_user_id, session_id, ark_file_id, drive_file_id, name,
           mime_type, size_bytes, generated_at)
        values ($1, $2, $3, $4, $5, 'result.txt', 'text/plain', $6, $7)`,
       [
@@ -134,7 +149,7 @@ export async function createTask18DatabaseHarness() {
         tenant.userId,
         tenant.sessionId,
         arkFileId,
-        objectKey,
+        driveFileId,
         bytes.byteLength,
         now,
       ],
@@ -169,8 +184,14 @@ export async function createTask18DatabaseHarness() {
     environmentId: "environment-1",
     createId: randomUUID,
   });
+  const drive = new DriveFileService({
+    repository: repositories.driveFiles,
+    storage,
+    createId: randomUUID,
+  });
   const artifacts = new ArtifactService({
     repository: repositories.artifacts,
+    drive,
     ark: {} as never,
     storage,
     createId: randomUUID,
@@ -180,6 +201,7 @@ export async function createTask18DatabaseHarness() {
     database,
     repositories,
     storage,
+    drive,
     sessions,
     artifacts,
     adminId,

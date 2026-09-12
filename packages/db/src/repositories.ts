@@ -133,6 +133,7 @@ interface ArtifactRecord {
   ownerUserId: string;
   sessionId: string;
   arkFileId: string;
+  driveFileId: string;
   tosObjectKey: string;
   name: string;
   mimeType: string;
@@ -181,13 +182,54 @@ const sessionInputSelection = sql`
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
+/**
+ * The object key lives on the owning drive row, so it is projected from there
+ * rather than stored on the association. Every query using this selection reads
+ * `from artifacts` un-aliased so the correlated reference resolves.
+ */
 const artifactSelection = sql`
-  id, owner_user_id as "ownerUserId", session_id as "sessionId",
-  ark_file_id as "arkFileId", tos_object_key as "tosObjectKey",
-  name, mime_type as "mimeType", size_bytes as "sizeBytes",
-  generated_at as "generatedAt", deletion_state as "deletionState",
+  artifacts.id, artifacts.owner_user_id as "ownerUserId",
+  artifacts.session_id as "sessionId",
+  artifacts.ark_file_id as "arkFileId",
+  artifacts.drive_file_id as "driveFileId",
+  (select drive.tos_object_key
+     from drive_files drive
+    where drive.id = artifacts.drive_file_id) as "tosObjectKey",
+  artifacts.name, artifacts.mime_type as "mimeType",
+  artifacts.size_bytes as "sizeBytes",
+  artifacts.generated_at as "generatedAt",
+  artifacts.deletion_state as "deletionState",
+  artifacts.last_error_code as "lastErrorCode",
+  artifacts.created_at as "createdAt", artifacts.updated_at as "updatedAt"`;
+
+const driveFileSelection = sql`
+  id, owner_user_id as "ownerUserId", origin,
+  tos_object_key as "tosObjectKey", name, mime_type as "mimeType",
+  size_bytes as "sizeBytes", content_hash as "contentHash",
+  source_session_id as "sourceSessionId", folder_id as "folderId",
+  deletion_state as "deletionState",
+  write_lease_until as "writeLeaseUntil", orphaned_at as "orphanedAt",
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
+
+interface DriveFileRecord extends Row {
+  id: string;
+  ownerUserId: string;
+  origin: "upload" | "artifact" | "import";
+  tosObjectKey: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  contentHash: string | null;
+  sourceSessionId: string | null;
+  folderId: string | null;
+  deletionState: "none" | "pending" | "deletion_failed" | "deleted";
+  writeLeaseUntil: Date | null;
+  orphanedAt: Date | null;
+  lastErrorCode: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
 
 const personalAgentSelection = sql`
   id, owner_user_id as "ownerUserId", ark_agent_id as "arkAgentId",
@@ -213,6 +255,7 @@ interface JobRecord extends Row {
     | "delete_session"
     | "delete_artifact"
     | "cleanup_artifact_object"
+    | "cleanup_drive_object"
     | "cleanup_upload"
     | "reconcile_session"
     | "reconcile_personal_agent";
@@ -250,12 +293,22 @@ const ARTIFACT_CLEANUP_ERROR_CODES = new Set([
   "ARTIFACT_CLEANUP_LEASE_EXPIRED",
   "STORAGE_UNAVAILABLE",
 ]);
+const DRIVE_CLEANUP_ERROR_CODES = new Set([
+  "DRIVE_CLEANUP_FAILED",
+  "DRIVE_CLEANUP_INVALID_JOB",
+  "DRIVE_CLEANUP_LEASE_EXPIRED",
+  "STORAGE_UNAVAILABLE",
+]);
 const SESSION_DELETION_ERROR_CODES = new Set([
   "SESSION_DELETE_FAILED",
   "SESSION_DELETE_INVALID_JOB",
   "SESSION_DELETE_LEASE_EXPIRED",
   "SESSION_DELETE_WAITING",
 ]);
+
+function driveCleanupErrorCode(error: string): string {
+  return DRIVE_CLEANUP_ERROR_CODES.has(error) ? error : "DRIVE_CLEANUP_FAILED";
+}
 
 function artifactDeletionErrorCode(error: string): string {
   return ARTIFACT_DELETION_ERROR_CODES.has(error)
@@ -396,6 +449,185 @@ function utcMonthWindow(now: Date): { start: Date; end: Date } {
   };
 }
 
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+async function lockAdminTarget(
+  database: DatabaseClient,
+  input: { userId: string; actorId: string },
+): Promise<{ id: string; role: string; status: string } | undefined> {
+  return first<{ id: string; role: string; status: string }>(
+    database,
+    sql`select target.id, target.role::text as role, target.status::text as status
+          from users target
+          join users administrator on administrator.id = ${input.actorId}
+         where target.id = ${input.userId}
+           and administrator.role = 'admin'
+           and administrator.status = 'active'
+         for update of target`,
+  );
+}
+
+/**
+ * Locks every other active administrator before counting, so two concurrent
+ * demotions cannot each observe the other as "one remaining admin".
+ */
+async function countOtherActiveAdmins(
+  database: DatabaseClient,
+  userId: string,
+): Promise<number> {
+  const others = await rows<{ id: string }>(
+    database,
+    sql`select id
+          from users
+         where role = 'admin'
+           and status = 'active'
+           and id <> ${userId}
+         for update`,
+  );
+  return others.length;
+}
+
+async function revokeAuthSessions(
+  database: DatabaseClient,
+  userId: string,
+): Promise<number> {
+  const revoked = await first<{ count: number }>(
+    database,
+    sql`with revoked as (
+          update auth_sessions
+             set revoked_at = now()
+           where user_id = ${userId}
+             and revoked_at is null
+           returning 1
+        )
+        select count(*)::integer as count from revoked`,
+  );
+  return revoked?.count ?? 0;
+}
+
+async function insertAuditRow(
+  database: DatabaseClient,
+  entry: {
+    actorUserId: string | null;
+    ownerUserId?: string | null;
+    action: string;
+    resourceType: string;
+    resourceId?: string | null;
+    result: "succeeded" | "failed";
+    requestId: string;
+    arkRequestId?: string | null;
+    errorCode?: string | null;
+    metadata?: Record<string, unknown> | null;
+  },
+): Promise<void> {
+  await database.execute(
+    sql`insert into audit_logs
+          (id, actor_user_id, owner_user_id, action, resource_type,
+           resource_id, result, request_id, ark_request_id, error_code,
+           metadata)
+        values
+          (${randomUUID()}, ${entry.actorUserId},
+           ${entry.ownerUserId ?? null}, ${entry.action},
+           ${entry.resourceType}, ${entry.resourceId ?? null},
+           ${entry.result}, ${entry.requestId},
+           ${entry.arkRequestId ?? null}, ${entry.errorCode ?? null},
+           ${entry.metadata ? JSON.stringify(entry.metadata) : null}::jsonb)`,
+  );
+}
+
+function buildAuditFilters(query: {
+  since?: string;
+  until?: string;
+  actorId?: string;
+  action?: string;
+  resourceType?: string;
+  resourceId?: string;
+  result?: "succeeded" | "failed";
+}): SQL[] {
+  const filters: SQL[] = [];
+  if (query.since) {
+    filters.push(sql`a.created_at >= ${query.since}::timestamptz`);
+  }
+  if (query.until) {
+    filters.push(sql`a.created_at < ${query.until}::timestamptz`);
+  }
+  if (query.actorId) filters.push(sql`a.actor_user_id = ${query.actorId}`);
+  if (query.action) filters.push(sql`a.action = ${query.action}`);
+  if (query.resourceType) {
+    filters.push(sql`a.resource_type = ${query.resourceType}`);
+  }
+  if (query.resourceId) filters.push(sql`a.resource_id = ${query.resourceId}`);
+  if (query.result) filters.push(sql`a.result = ${query.result}`);
+  return filters;
+}
+
+async function listAuditLogs(
+  database: DatabaseClient,
+  filters: SQL[],
+  query: { limit: number; before: { createdAt: string; id: string } | null },
+) {
+  if (query.before) {
+    filters.push(
+      sql`(a.created_at, a.id) < (${query.before.createdAt}::timestamptz, ${query.before.id}::uuid)`,
+    );
+  }
+  const where =
+    filters.length > 0 ? sql`where ${sql.join(filters, sql` and `)}` : sql``;
+  const results = await rows<{
+    id: string;
+    actorUserId: string | null;
+    actorEmail: string | null;
+    ownerUserId: string | null;
+    ownerEmail: string | null;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    result: "succeeded" | "failed";
+    requestId: string;
+    arkRequestId: string | null;
+    errorCode: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: Date;
+  }>(
+    database,
+    sql`select a.id,
+               a.actor_user_id as "actorUserId",
+               actor.email as "actorEmail",
+               a.owner_user_id as "ownerUserId",
+               owner.email as "ownerEmail",
+               a.action,
+               a.resource_type as "resourceType",
+               a.resource_id as "resourceId",
+               a.result,
+               a.request_id as "requestId",
+               a.ark_request_id as "arkRequestId",
+               a.error_code as "errorCode",
+               a.metadata,
+               a.created_at as "createdAt"
+          from audit_logs a
+          left join users actor on actor.id = a.actor_user_id
+          left join users owner on owner.id = a.owner_user_id
+          ${where}
+         order by a.created_at desc, a.id desc
+         limit ${query.limit + 1}`,
+  );
+  const hasMore = results.length > query.limit;
+  const entries = hasMore ? results.slice(0, query.limit) : results;
+  const last = entries[entries.length - 1];
+  return {
+    entries,
+    nextCursor:
+      hasMore && last
+        ? {
+            createdAt: new Date(last.createdAt).toISOString(),
+            id: last.id,
+          }
+        : null,
+  };
+}
+
 async function enqueueQuotaInterrupts(
   database: DatabaseClient,
   userId: string,
@@ -412,14 +644,30 @@ async function enqueueQuotaInterrupts(
          for update`,
   );
   for (const session of active) {
-    await database.execute(
+    const inserted = await first<{ id: string }>(
+      database,
       sql`insert into quota_interrupt_jobs
             (id, user_id, session_id, month_start, status, attempts, run_after)
           values
             (${randomUUID()}, ${userId}, ${session.sessionId}, ${monthStart},
              'pending', 0, ${now})
-          on conflict (user_id, session_id, month_start) do nothing`,
+          on conflict (user_id, session_id, month_start) do nothing
+          returning id`,
     );
+    if (!inserted) continue;
+    await insertAuditRow(database, {
+      actorUserId: null,
+      ownerUserId: userId,
+      action: "quota_interrupt.enqueue",
+      resourceType: "quota_interrupt",
+      resourceId: session.sessionId,
+      result: "succeeded",
+      requestId: "system:quota-interrupt",
+      metadata: {
+        monthStart: monthStart.toISOString(),
+        reason: "monthly_token_limit",
+      },
+    });
   }
 }
 
@@ -490,6 +738,271 @@ export function createRepositories(database: unknown) {
                  and expires_at > ${now}
                limit 1`,
         );
+      },
+    },
+
+    auditLogs: {
+      list(query: {
+        since?: string;
+        until?: string;
+        actorId?: string;
+        action?: string;
+        resourceType?: string;
+        resourceId?: string;
+        result?: "succeeded" | "failed";
+        limit: number;
+        before: { createdAt: string; id: string } | null;
+      }) {
+        return listAuditLogs(db, buildAuditFilters(query), query);
+      },
+      listForUser(
+        userId: string,
+        query: {
+          limit: number;
+          before: { createdAt: string; id: string } | null;
+        },
+      ) {
+        return listAuditLogs(
+          db,
+          [sql`(a.actor_user_id = ${userId} or a.owner_user_id = ${userId})`],
+          query,
+        );
+      },
+      record(entry: {
+        actorUserId: string | null;
+        ownerUserId?: string | null;
+        action: string;
+        resourceType: string;
+        resourceId?: string | null;
+        result: "succeeded" | "failed";
+        requestId: string;
+        arkRequestId?: string | null;
+        errorCode?: string | null;
+        metadata?: Record<string, unknown> | null;
+      }) {
+        return insertAuditRow(db, entry);
+      },
+    },
+
+    adminUsers: {
+      getUser(userId: string) {
+        return first<{
+          id: string;
+          email: string;
+          role: "user" | "admin";
+          status: "active" | "disabled";
+          hasPassword: boolean;
+          defaultAgentId: string | null;
+          createdAt: Date;
+          updatedAt: Date;
+          overridden: {
+            personalAgentLimit: boolean;
+            concurrentSessionLimit: boolean;
+            dailySessionLimit: boolean;
+            monthlyTokenLimit: boolean;
+          };
+        }>(
+          db,
+          sql`select u.id, u.email, u.role, u.status,
+                     (u.password_hash is not null) as "hasPassword",
+                     uda.platform_agent_id as "defaultAgentId",
+                     u.created_at as "createdAt", u.updated_at as "updatedAt",
+                     jsonb_build_object(
+                       'personalAgentLimit',
+                         coalesce(o.personal_agent_limit is not null, false),
+                       'concurrentSessionLimit',
+                         coalesce(o.concurrent_session_limit is not null, false),
+                       'dailySessionLimit',
+                         coalesce(o.daily_session_limit is not null, false),
+                       'monthlyTokenLimit',
+                         coalesce(o.monthly_token_limit is not null, false)
+                     ) as overridden
+                from users u
+                left join user_default_agents uda on uda.user_id = u.id
+                left join user_quota_overrides o on o.user_id = u.id
+               where u.id = ${userId}
+               limit 1`,
+        );
+      },
+      async listSessions(
+        userId: string,
+        input: {
+          limit: number;
+          before: { createdAt: string; id: string } | null;
+        },
+      ) {
+        const filters: SQL[] = [sql`s.owner_user_id = ${userId}`];
+        if (input.before) {
+          filters.push(
+            sql`(s.created_at, s.id) < (${input.before.createdAt}::timestamptz, ${input.before.id}::uuid)`,
+          );
+        }
+        const results = await rows<{
+          id: string;
+          title: string;
+          status: "idle" | "running" | "rescheduled" | "terminated";
+          agentKind: "platform" | "personal";
+          agentName: string;
+          agentVersion: string;
+          createdAt: Date;
+          lastEventAt: Date | null;
+          archivedAt: Date | null;
+          deletionState: "none" | "pending" | "deletion_failed" | "deleted";
+          tokens: number;
+        }>(
+          db,
+          sql`select s.id, s.title, s.status,
+                     s.agent_kind as "agentKind",
+                     s.agent_name as "agentName",
+                     s.agent_version as "agentVersion",
+                     s.created_at as "createdAt",
+                     s.last_event_at as "lastEventAt",
+                     s.archived_at as "archivedAt",
+                     s.deletion_state as "deletionState",
+                     coalesce((
+                       select sum(ul.quantity)
+                         from usage_ledger ul
+                        where ul.user_id = s.owner_user_id
+                          and ul.ark_session_id = s.ark_session_id
+                          and ul.metric_type in ('input_tokens', 'output_tokens')
+                     ), 0)::bigint as tokens
+                from sessions s
+               where ${sql.join(filters, sql` and `)}
+               order by s.created_at desc, s.id desc
+               limit ${input.limit + 1}`,
+        );
+        const hasMore = results.length > input.limit;
+        const sessions = hasMore ? results.slice(0, input.limit) : results;
+        const last = sessions[sessions.length - 1];
+        return {
+          sessions,
+          nextCursor:
+            hasMore && last
+              ? {
+                  createdAt: new Date(last.createdAt).toISOString(),
+                  id: last.id,
+                }
+              : null,
+        };
+      },
+    },
+
+    quotaPolicies: {
+      getDefault() {
+        return first<{
+          key: "default";
+          personalAgentLimit: number;
+          concurrentSessionLimit: number;
+          dailySessionLimit: number;
+          monthlyTokenLimit: number;
+          updatedBy: string | null;
+          updatedAt: Date;
+        }>(
+          db,
+          sql`select key, personal_agent_limit as "personalAgentLimit",
+                     concurrent_session_limit as "concurrentSessionLimit",
+                     daily_session_limit as "dailySessionLimit",
+                     monthly_token_limit::bigint as "monthlyTokenLimit",
+                     updated_by as "updatedBy", updated_at as "updatedAt"
+                from quota_policies where key = 'default'`,
+        );
+      },
+      updateDefault(input: {
+        quota: {
+          personalAgentLimit: number;
+          concurrentSessionLimit: number;
+          dailySessionLimit: number;
+          monthlyTokenLimit: number;
+        };
+        updatedBy: string;
+        now: Date;
+      }) {
+        return db.transaction(async (transaction) => {
+          const previous = await first<{
+            key: "default";
+            personalAgentLimit: number;
+            concurrentSessionLimit: number;
+            dailySessionLimit: number;
+            monthlyTokenLimit: number;
+            updatedBy: string | null;
+            updatedAt: Date;
+          }>(
+            transaction,
+            sql`select key, personal_agent_limit as "personalAgentLimit",
+                       concurrent_session_limit as "concurrentSessionLimit",
+                       daily_session_limit as "dailySessionLimit",
+                       monthly_token_limit::bigint as "monthlyTokenLimit",
+                       updated_by as "updatedBy", updated_at as "updatedAt"
+                  from quota_policies where key = 'default' for update`,
+          );
+          if (!previous) return undefined;
+          const updated = await first<{
+            key: "default";
+            personalAgentLimit: number;
+            concurrentSessionLimit: number;
+            dailySessionLimit: number;
+            monthlyTokenLimit: number;
+            updatedBy: string | null;
+            updatedAt: Date;
+          }>(
+            transaction,
+            sql`update quota_policies
+                   set personal_agent_limit = ${input.quota.personalAgentLimit},
+                       concurrent_session_limit = ${input.quota.concurrentSessionLimit},
+                       daily_session_limit = ${input.quota.dailySessionLimit},
+                       monthly_token_limit = ${input.quota.monthlyTokenLimit},
+                       updated_by = ${input.updatedBy},
+                       updated_at = now()
+                 where key = 'default'
+                 returning key, personal_agent_limit as "personalAgentLimit",
+                           concurrent_session_limit as "concurrentSessionLimit",
+                           daily_session_limit as "dailySessionLimit",
+                           monthly_token_limit::bigint as "monthlyTokenLimit",
+                           updated_by as "updatedBy", updated_at as "updatedAt"`,
+          );
+          if (!updated) return undefined;
+          const window = utcMonthWindow(input.now);
+          const overLimit = await rows<{ userId: string }>(
+            transaction,
+            sql`select u.id as "userId"
+                  from users u
+                  join quota_policies p on p.key = 'default'
+                  left join user_quota_overrides o on o.user_id = u.id
+                 where (
+                   select coalesce(sum(ul.quantity), 0)
+                     from usage_ledger ul
+                    where ul.user_id = u.id
+                      and ul.metric_type in ('input_tokens', 'output_tokens')
+                      and ul.recorded_at >= ${window.start}
+                      and ul.recorded_at < ${window.end}
+                 ) >= coalesce(o.monthly_token_limit, p.monthly_token_limit)`,
+          );
+          for (const { userId } of overLimit) {
+            await enqueueQuotaInterrupts(
+              transaction,
+              userId,
+              window.start,
+              input.now,
+            );
+          }
+          return {
+            previous,
+            updated,
+            overLimitUserIds: overLimit.map(({ userId }) => userId),
+          };
+        });
+      },
+      audit(entry: {
+        actorUserId: string;
+        action: string;
+        resourceType: string;
+        resourceId?: string;
+        result: "succeeded" | "failed";
+        requestId: string;
+        errorCode?: string;
+        metadata?: Record<string, unknown>;
+      }) {
+        return insertAuditRow(db, entry);
       },
     },
 
@@ -694,8 +1207,27 @@ export function createRepositories(database: unknown) {
           );
         });
       },
-      listUsers() {
-        return rows<AdminUserRecord>(
+      async listUsers(
+        query: {
+          limit: number;
+          search: string | null;
+          before: { createdAt: string; id: string } | null;
+        } = { limit: 50, search: null, before: null },
+      ) {
+        const filters: SQL[] = [];
+        if (query.search) {
+          filters.push(
+            sql`u.email ilike ${`%${escapeLikePattern(query.search)}%`}`,
+          );
+        }
+        if (query.before) {
+          filters.push(
+            sql`(u.created_at, u.id) < (${query.before.createdAt}::timestamptz, ${query.before.id}::uuid)`,
+          );
+        }
+        const results = await rows<
+          AdminUserRecord & { createdAt: Date; rawCreatedAt: Date }
+        >(
           db,
           sql`select u.id, u.email, u.role, u.status,
                      (u.password_hash is not null) as "hasPassword",
@@ -721,14 +1253,106 @@ export function createRepositories(database: unknown) {
                            override.monthly_token_limit,
                            policy.monthly_token_limit
                          )
-                     ) as quota
+                     ) as quota,
+                     u.created_at as "createdAt"
                 from users u
                 join quota_policies policy on policy.key = 'default'
                 left join user_default_agents uda on uda.user_id = u.id
                 left join user_quota_overrides override
                   on override.user_id = u.id
-               order by u.created_at asc, u.id asc`,
+                ${filters.length > 0 ? sql`where ${sql.join(filters, sql` and `)}` : sql``}
+               order by u.created_at desc, u.id desc
+               limit ${query.limit + 1}`,
         );
+        const hasMore = results.length > query.limit;
+        const users = hasMore ? results.slice(0, query.limit) : results;
+        const last = users[users.length - 1];
+        return {
+          users,
+          nextCursor:
+            hasMore && last
+              ? {
+                  createdAt: new Date(last.createdAt).toISOString(),
+                  id: last.id,
+                }
+              : null,
+        };
+      },
+      setUserStatus(input: {
+        userId: string;
+        status: "active" | "disabled";
+        actorId: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const target = await lockAdminTarget(transaction, input);
+          if (!target) return undefined;
+          if (
+            input.status === "disabled" &&
+            target.role === "admin" &&
+            target.status === "active" &&
+            (await countOtherActiveAdmins(transaction, input.userId)) === 0
+          ) {
+            return "last_active_admin" as const;
+          }
+          await transaction.execute(
+            sql`update users
+                   set status = ${input.status}, updated_at = now()
+                 where id = ${input.userId}`,
+          );
+          const revokedSessions =
+            input.status === "disabled"
+              ? await revokeAuthSessions(transaction, input.userId)
+              : 0;
+          return {
+            from: target.status,
+            to: input.status,
+            revokedSessions,
+          };
+        });
+      },
+      setUserRole(input: {
+        userId: string;
+        role: "user" | "admin";
+        actorId: string;
+      }) {
+        return db.transaction(async (transaction) => {
+          const target = await lockAdminTarget(transaction, input);
+          if (!target) return undefined;
+          if (
+            input.role === "user" &&
+            target.role === "admin" &&
+            target.status === "active" &&
+            (await countOtherActiveAdmins(transaction, input.userId)) === 0
+          ) {
+            return "last_active_admin" as const;
+          }
+          await transaction.execute(
+            sql`update users
+                   set role = ${input.role}, updated_at = now()
+                 where id = ${input.userId}`,
+          );
+          const revokedSessions = await revokeAuthSessions(
+            transaction,
+            input.userId,
+          );
+          return {
+            from: target.role,
+            to: input.role,
+            revokedSessions,
+          };
+        });
+      },
+      async revokeUserSessions(input: { userId: string; actorId: string }) {
+        return db.transaction(async (transaction) => {
+          const target = await lockAdminTarget(transaction, input);
+          if (!target) return undefined;
+          return {
+            revokedSessions: await revokeAuthSessions(
+              transaction,
+              input.userId,
+            ),
+          };
+        });
       },
       createUser(input: {
         id: string;
@@ -796,10 +1420,10 @@ export function createRepositories(database: unknown) {
       },
       updateUserQuota(input: {
         userId: string;
-        personalAgentLimit: number;
-        concurrentSessionLimit: number;
-        dailySessionLimit: number;
-        monthlyTokenLimit: number;
+        personalAgentLimit: number | null;
+        concurrentSessionLimit: number | null;
+        dailySessionLimit: number | null;
+        monthlyTokenLimit: number | null;
         updatedBy: string;
       }) {
         return db.transaction(async (transaction) => {
@@ -815,35 +1439,58 @@ export function createRepositories(database: unknown) {
                  for update of target`,
           );
           if (!eligible) return undefined;
-          const updated = await first<{
-            userId: string;
-            personalAgentLimit: number;
-            concurrentSessionLimit: number;
-            dailySessionLimit: number;
-            monthlyTokenLimit: number;
+          const previous = await effectiveQuota(transaction, input.userId);
+          const overrides = [
+            input.personalAgentLimit,
+            input.concurrentSessionLimit,
+            input.dailySessionLimit,
+            input.monthlyTokenLimit,
+          ];
+          if (overrides.every((value) => value === null)) {
+            await transaction.execute(
+              sql`delete from user_quota_overrides
+                   where user_id = ${input.userId}`,
+            );
+          } else {
+            await transaction.execute(
+              sql`insert into user_quota_overrides
+                    (user_id, personal_agent_limit, concurrent_session_limit,
+                     daily_session_limit, monthly_token_limit, updated_by)
+                  values
+                    (${input.userId}, ${input.personalAgentLimit},
+                     ${input.concurrentSessionLimit}, ${input.dailySessionLimit},
+                     ${input.monthlyTokenLimit}, ${input.updatedBy})
+                  on conflict (user_id) do update
+                    set personal_agent_limit = excluded.personal_agent_limit,
+                        concurrent_session_limit = excluded.concurrent_session_limit,
+                        daily_session_limit = excluded.daily_session_limit,
+                        monthly_token_limit = excluded.monthly_token_limit,
+                        updated_by = excluded.updated_by,
+                        updated_at = now()`,
+            );
+          }
+          const effective = await effectiveQuota(transaction, input.userId);
+          const overrideRow = await first<{
+            personalAgentLimit: boolean;
+            concurrentSessionLimit: boolean;
+            dailySessionLimit: boolean;
+            monthlyTokenLimit: boolean;
           }>(
             transaction,
-            sql`insert into user_quota_overrides
-                  (user_id, personal_agent_limit, concurrent_session_limit,
-                   daily_session_limit, monthly_token_limit, updated_by)
-                values
-                  (${input.userId}, ${input.personalAgentLimit},
-                   ${input.concurrentSessionLimit}, ${input.dailySessionLimit},
-                   ${input.monthlyTokenLimit}, ${input.updatedBy})
-                on conflict (user_id) do update
-                  set personal_agent_limit = excluded.personal_agent_limit,
-                      concurrent_session_limit = excluded.concurrent_session_limit,
-                      daily_session_limit = excluded.daily_session_limit,
-                      monthly_token_limit = excluded.monthly_token_limit,
-                      updated_by = excluded.updated_by,
-                      updated_at = now()
-                returning user_id as "userId",
-                          personal_agent_limit as "personalAgentLimit",
-                          concurrent_session_limit as "concurrentSessionLimit",
-                          daily_session_limit as "dailySessionLimit",
-                          monthly_token_limit::bigint as "monthlyTokenLimit"`,
+            sql`select personal_agent_limit is not null as "personalAgentLimit",
+                       concurrent_session_limit is not null
+                         as "concurrentSessionLimit",
+                       daily_session_limit is not null as "dailySessionLimit",
+                       monthly_token_limit is not null as "monthlyTokenLimit"
+                  from user_quota_overrides where user_id = ${input.userId}`,
           );
-          if (!updated) return undefined;
+          const overridden = {
+            personalAgentLimit: overrideRow?.personalAgentLimit ?? false,
+            concurrentSessionLimit:
+              overrideRow?.concurrentSessionLimit ?? false,
+            dailySessionLimit: overrideRow?.dailySessionLimit ?? false,
+            monthlyTokenLimit: overrideRow?.monthlyTokenLimit ?? false,
+          };
           const now = new Date();
           const window = utcMonthWindow(now);
           const usage = await first<{ total: number }>(
@@ -855,7 +1502,8 @@ export function createRepositories(database: unknown) {
                    and recorded_at >= ${window.start}
                    and recorded_at < ${window.end}`,
           );
-          if (Number(usage?.total ?? 0) >= input.monthlyTokenLimit) {
+          const monthTokens = Number(usage?.total ?? 0);
+          if (monthTokens >= effective.monthlyTokenLimit) {
             await enqueueQuotaInterrupts(
               transaction,
               input.userId,
@@ -863,7 +1511,7 @@ export function createRepositories(database: unknown) {
               now,
             );
           }
-          return updated;
+          return { previous, effective, overridden, monthTokens };
         });
       },
       async audit(input: {
@@ -878,19 +1526,7 @@ export function createRepositories(database: unknown) {
         errorCode?: string;
         metadata?: Record<string, unknown>;
       }) {
-        await db.execute(
-          sql`insert into audit_logs
-                (id, actor_user_id, owner_user_id, action, resource_type,
-                 resource_id, result, request_id, ark_request_id, error_code,
-                 metadata)
-              values
-                (${randomUUID()}, ${input.actorUserId},
-                 ${input.ownerUserId ?? null}, ${input.action},
-                 ${input.resourceType}, ${input.resourceId ?? null},
-                 ${input.result}, ${input.requestId},
-                 ${input.arkRequestId ?? null}, ${input.errorCode ?? null},
-                 ${input.metadata ? JSON.stringify(input.metadata) : null}::jsonb)`,
-        );
+        await insertAuditRow(db, input);
       },
     },
 
@@ -1378,34 +2014,34 @@ export function createRepositories(database: unknown) {
                limit 1`,
         );
       },
-      listArtifactObjectKeys(userId: string, id: string) {
-        return rows<{ objectKey: string }>(
+      /**
+       * Bytes outlive the Session row, so deletion cannot simply drop them.
+       * This marks every drive file that only this Session referenced as
+       * orphaned; the drive GC then reaps them according to the retention
+       * setting (immediately at the default of zero). Runs before the Session
+       * row is removed, while the associations still identify the files.
+       */
+      async orphanDriveFiles(userId: string, id: string, at: Date) {
+        const orphaned = await rows(
           db,
-          sql`select distinct source.object_key as "objectKey"
-                from (
-                  select artifact.tos_object_key as object_key
-                    from artifacts artifact
-                   where artifact.session_id = ${id}
-                     and artifact.owner_user_id = ${userId}
-                  union all
-                  select job.payload ->> 'objectKey' as object_key
-                    from background_jobs job
-                   where job.owner_user_id = ${userId}
-                     and job.type = 'cleanup_artifact_object'
-                     and job.payload ->> 'objectKey' like ${`tenants/${userId}/sessions/${id}/artifacts/%`}
-                ) source
-               where exists (
-                 select 1
-                   from sessions session
-                  where session.id = ${id}
-                    and session.owner_user_id = ${userId}
-                    and session.deletion_state in (
-                      'pending',
-                      'deletion_failed'
-                    )
-               )
-               order by source.object_key`,
-        ).then((records) => records.map(({ objectKey }) => objectKey));
+          sql`update drive_files drive
+                 set orphaned_at = coalesce(drive.orphaned_at, ${at}),
+                     updated_at = ${at}
+                from artifacts association
+               where association.drive_file_id = drive.id
+                 and association.session_id = ${id}
+                 and association.owner_user_id = ${userId}
+                 and drive.owner_user_id = ${userId}
+                 and drive.deletion_state = 'none'
+                 and not exists (
+                   select 1
+                     from artifacts other
+                    where other.drive_file_id = drive.id
+                      and other.session_id <> ${id}
+                 )
+              returning drive.id`,
+        );
+        return orphaned.length;
       },
       async removeLocal(userId: string, id: string) {
         return db.transaction(async (transaction) => {
@@ -1419,24 +2055,6 @@ export function createRepositories(database: unknown) {
                  for update`,
           );
           if (!session) return "missing" as const;
-          const cleanup = await first<{
-            pending: boolean;
-            failed: boolean;
-          }>(
-            transaction,
-            sql`select
-                  coalesce(
-                    bool_or(status in ('pending', 'running')),
-                    false
-                  ) as pending,
-                  coalesce(bool_or(status = 'failed'), false) as failed
-                from background_jobs
-               where owner_user_id = ${userId}
-                 and type = 'cleanup_artifact_object'
-                 and payload ->> 'objectKey' like ${`tenants/${userId}/sessions/${id}/artifacts/%`}`,
-          );
-          if (cleanup?.failed) return "cleanup_failed" as const;
-          if (cleanup?.pending) return "cleanup_pending" as const;
           await transaction.execute(
             sql`delete from quota_reservations
                  where id = ${id} and user_id = ${userId}`,
@@ -1899,16 +2517,6 @@ export function createRepositories(database: unknown) {
           );
           if (!session) return undefined;
 
-          await transaction.execute(
-            sql`update background_jobs
-                  set run_after = now(), updated_at = now()
-                where owner_user_id = ${userId}
-                  and type = 'cleanup_artifact_object'
-                  and status = 'pending'
-                  and payload ->> 'objectKey'
-                    like ${`tenants/${userId}/sessions/${id}/artifacts/%`}`,
-          );
-
           if (job?.type === "delete_session" && job.status !== "failed") {
             return session;
           }
@@ -2139,14 +2747,14 @@ export function createRepositories(database: unknown) {
           }>;
         },
       ) {
-        await db.transaction(async (transaction) => {
+        return db.transaction(async (transaction) => {
           const owner = await first(
             transaction,
             sql`select id from users
                  where id = ${userId}
                  for update`,
           );
-          if (!owner) return;
+          if (!owner) return false;
           await transaction.execute(
             sql`insert into session_event_cursors
                   (session_id, recent_event_ids)
@@ -2171,7 +2779,7 @@ export function createRepositories(database: unknown) {
                  for update of cursor`,
           );
           if (!cursor || cursor.recentEventIds.includes(projection.eventId)) {
-            return;
+            return false;
           }
 
           const lastObservedAt =
@@ -2207,11 +2815,19 @@ export function createRepositories(database: unknown) {
               transaction,
               sql`insert into usage_ledger
                     (id, user_id, ark_session_id, ark_event_id, metric_type,
-                     quantity, recorded_at)
+                     quantity, recorded_at, agent_kind, platform_agent_id,
+                     personal_agent_id, model_id)
                   select ${randomUUID()}, ${userId}, session.ark_session_id,
                          ${projection.eventId}, ${metric.metricType},
-                         ${metric.quantity}, ${projection.observedAt}
+                         ${metric.quantity}, ${projection.observedAt},
+                         session.agent_kind, session.platform_agent_id,
+                         session.personal_agent_id,
+                         coalesce(pa.model_id, pr.model_id)
                     from sessions session
+                    left join platform_agents pa
+                      on pa.id = session.platform_agent_id
+                    left join personal_agents pr
+                      on pr.id = session.personal_agent_id
                    where session.id = ${id}
                      and session.owner_user_id = ${userId}
                   on conflict
@@ -2316,6 +2932,8 @@ export function createRepositories(database: unknown) {
                       updated_at = now()
                 where id = ${id} and owner_user_id = ${userId}`,
           );
+
+          return tokenUsageInserted;
         });
       },
       listRunningForQuota(userId: string) {
@@ -2526,235 +3144,293 @@ export function createRepositories(database: unknown) {
           db,
           sql`select ${artifactSelection}
                 from artifacts
-               where owner_user_id = ${userId}
-                 and session_id = ${sessionId}
-                 and ark_file_id = ${arkFileId}
+               where artifacts.owner_user_id = ${userId}
+                 and artifacts.session_id = ${sessionId}
+                 and artifacts.ark_file_id = ${arkFileId}
                limit 1`,
         );
       },
-      async stageCleanup(input: {
+      /**
+       * Records that this Session produced this drive file. Conflict target is
+       * the (owner, session, ark file) key, so a repeated sync refreshes the
+       * snapshot instead of duplicating the association.
+       */
+      upsertAssociation(input: ArtifactRecord) {
+        return requiredFirst<ArtifactRecord & Row>(
+          db,
+          sql`insert into artifacts
+                (id, owner_user_id, session_id, ark_file_id, drive_file_id,
+                 name, mime_type, size_bytes, generated_at, deletion_state,
+                 last_error_code, created_at, updated_at)
+              values
+                (${input.id}, ${input.ownerUserId}, ${input.sessionId},
+                 ${input.arkFileId}, ${input.driveFileId}, ${input.name},
+                 ${input.mimeType}, ${input.sizeBytes}, ${input.generatedAt},
+                 'none', null, ${input.createdAt}, ${input.updatedAt})
+              on conflict (owner_user_id, session_id, ark_file_id) do update
+                set drive_file_id = excluded.drive_file_id,
+                    name = excluded.name,
+                    mime_type = excluded.mime_type,
+                    size_bytes = excluded.size_bytes,
+                    generated_at = excluded.generated_at,
+                    deletion_state = 'none',
+                    last_error_code = null,
+                    updated_at = excluded.updated_at
+              returning ${artifactSelection}`,
+        );
+      },
+      listOwned(userId: string, sessionId?: string) {
+        return rows<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where artifacts.owner_user_id = ${userId}
+                 and (${sessionId ?? null}::uuid is null
+                      or artifacts.session_id = ${sessionId ?? null})
+                 and artifacts.deletion_state = 'none'
+               order by artifacts.generated_at desc, artifacts.id desc`,
+        );
+      },
+      findOwned(userId: string, id: string) {
+        return first<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where artifacts.id = ${id}
+                 and artifacts.owner_user_id = ${userId}
+                 and artifacts.deletion_state <> 'deleted'
+               limit 1`,
+        );
+      },
+      /**
+       * Deleting the association does not delete the bytes: the drive row is
+       * left to the GC, which reaps it after the configured retention. This is
+       * what lets a future drive mode keep Agent output while the Session goes.
+       */
+      requestDelete(id: string, userId: string, at: Date) {
+        return db.transaction(async (transaction) => {
+          const association = await first<ArtifactRecord & Row>(
+            transaction,
+            sql`update artifacts
+                  set deletion_state = 'pending',
+                      last_error_code = null,
+                      updated_at = ${at}
+                where artifacts.id = ${id}
+                  and artifacts.owner_user_id = ${userId}
+                  and artifacts.deletion_state <> 'deleted'
+                returning ${artifactSelection}`,
+          );
+          if (!association) return undefined;
+          await transaction.execute(
+            sql`update drive_files
+                  set orphaned_at = coalesce(orphaned_at, ${at}),
+                      updated_at = ${at}
+                where id = ${association.driveFileId}
+                  and owner_user_id = ${userId}
+                  and deletion_state <> 'deleted'`,
+          );
+          return association;
+        });
+      },
+      findDeleting(userId: string, id: string) {
+        return first<ArtifactRecord & Row>(
+          db,
+          sql`select ${artifactSelection}
+                from artifacts
+               where artifacts.id = ${id}
+                 and artifacts.owner_user_id = ${userId}
+                 and artifacts.deletion_state in (
+                   'pending',
+                   'deletion_failed',
+                   'deleted'
+                 )
+               limit 1`,
+        );
+      },
+      async markDeleted(id: string, userId: string) {
+        const removed = await rows(
+          db,
+          sql`update artifacts
+                 set name = '',
+                     mime_type = 'application/octet-stream',
+                     size_bytes = 0,
+                     deletion_state = 'deleted',
+                     last_error_code = null,
+                     updated_at = now()
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and deletion_state in (
+                   'pending',
+                   'deletion_failed',
+                   'deleted'
+                 )
+               returning id, drive_file_id as "driveFileId"`,
+        );
+        // Keep the drive row consistent with its bytes: an explicit artifact
+        // delete removed the object, so the drive must not later enqueue a
+        // second cleanup for it.
+        if (removed.length === 1) {
+          await db.execute(
+            sql`update drive_files
+                   set deletion_state = 'deleted',
+                       name = '',
+                       mime_type = 'application/octet-stream',
+                       size_bytes = 0,
+                       write_lease_until = null,
+                       last_error_code = null,
+                       updated_at = now()
+                 where id = ${(removed[0] as { driveFileId: string }).driveFileId}
+                   and owner_user_id = ${userId}
+                   and deletion_state <> 'deleted'`,
+          );
+        }
+        return removed.length === 1;
+      },
+    },
+
+    driveFiles: {
+      /**
+       * Reserves a drive row in `pending` with a write lease and a delayed
+       * cleanup intent. A crash before commit leaves the intent behind, so the
+       * half-written object is still reclaimed.
+       */
+      async stage(input: {
         id: string;
         ownerUserId: string;
-        sessionId: string;
+        origin: "upload" | "artifact" | "import";
         objectKey: string;
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+        contentHash?: string;
+        sourceSessionId?: string;
         runAfter: Date;
-        uploadInProgressUntil?: Date;
+        writeLeaseUntil: Date;
       }) {
         return db.transaction(async (transaction) => {
-          const session = await first(
-            transaction,
-            sql`select id
-                  from sessions
-                 where id = ${input.sessionId}
-                   and owner_user_id = ${input.ownerUserId}
-                   and deletion_state = 'none'
-                 for update`,
+          // Fence: a sync that passed authorization earlier must not stage
+          // bytes once the owning Session is already being deleted, or the
+          // object would leak past the deletion saga's orphaning pass.
+          if (input.sourceSessionId) {
+            const session = await first(
+              transaction,
+              sql`select id
+                    from sessions
+                   where id = ${input.sourceSessionId}
+                     and owner_user_id = ${input.ownerUserId}
+                     and deletion_state = 'none'
+                   for update`,
+            );
+            if (!session) return false;
+          }
+          await transaction.execute(
+            sql`insert into drive_files
+                  (id, owner_user_id, origin, tos_object_key, name, mime_type,
+                   size_bytes, content_hash, source_session_id, deletion_state,
+                   write_lease_until, created_at, updated_at)
+                values
+                  (${input.id}, ${input.ownerUserId}, ${input.origin},
+                   ${input.objectKey}, ${input.name}, ${input.mimeType},
+                   ${input.sizeBytes}, ${input.contentHash ?? null},
+                   ${input.sourceSessionId ?? null}, 'pending',
+                   ${input.writeLeaseUntil}, now(), now())`,
           );
-          if (!session) return false;
           await transaction.execute(
             sql`insert into background_jobs
                   (id, owner_user_id, type, status, priority, payload,
                    attempts, run_after)
                 values
-                  (${input.id}, ${input.ownerUserId}, 'cleanup_artifact_object',
+                  (${input.id}, ${input.ownerUserId}, 'cleanup_drive_object',
                    'pending', 90,
                    ${JSON.stringify({
-                     objectKey: input.objectKey,
+                     driveFileId: input.id,
                      cleanupGeneration: 0,
-                     ...(input.uploadInProgressUntil
-                       ? {
-                           uploadInProgressUntil:
-                             input.uploadInProgressUntil.toISOString(),
-                         }
-                       : {}),
+                     uploadInProgressUntil: input.writeLeaseUntil.toISOString(),
                    })}::jsonb,
                    0, ${input.runAfter})`,
           );
           return true;
         });
       },
-      commitCandidate(input: {
-        record: ArtifactRecord;
-        stagingCleanupJobId: string;
-        replacementCleanupJobId: string;
-      }) {
+      /**
+       * Promotes a staged row to `none` and retires its cleanup intent, unless
+       * a later stage re-armed it (generation changed) or the row was already
+       * deleted — in which case the caller must not treat the write as live.
+       */
+      commit(input: { id: string; ownerUserId: string }) {
         return db.transaction(async (transaction) => {
-          const session = await first<{ deletionState: string }>(
+          const record = await first<DriveFileRecord & Row>(
             transaction,
-            sql`select deletion_state as "deletionState"
-                  from sessions
-                 where id = ${input.record.sessionId}
-                   and owner_user_id = ${input.record.ownerUserId}
-                   for update`,
-          );
-          const stagingCleanup = await first<{
-            status: "pending" | "running" | "succeeded" | "failed";
-            uploadInProgressUntil: string | null;
-          }>(
-            transaction,
-            sql`select status,
-                       payload ->> 'uploadInProgressUntil'
-                         as "uploadInProgressUntil"
-                  from background_jobs
-                 where id = ${input.stagingCleanupJobId}
-                   and owner_user_id = ${input.record.ownerUserId}
-                   and type = 'cleanup_artifact_object'
-                   and payload ->> 'objectKey' = ${input.record.tosObjectKey}
+            sql`select ${driveFileSelection}
+                  from drive_files
+                 where id = ${input.id}
+                   and owner_user_id = ${input.ownerUserId}
                  for update`,
           );
-          if (!stagingCleanup) {
-            throw new Error("Artifact staging cleanup intent was not found");
+          if (!record) {
+            throw new Error("Drive file staging was not found");
           }
-          const rearmStagingCleanup = () =>
-            transaction.execute(
-              sql`update background_jobs
-                    set payload =
-                          (payload - 'uploadInProgressUntil')
-                          || jsonb_build_object(
-                            'cleanupGeneration',
-                            coalesce(
-                              (payload ->> 'cleanupGeneration')::integer,
-                              0
-                            ) + 1
-                          ),
-                        status = case
-                          when status = 'running' then status
-                          else 'pending'
-                        end,
-                        attempts = 0,
-                        run_after = case
-                          when status = 'running' then run_after
-                          else now()
-                        end,
-                        locked_at = case
-                          when status = 'running' then locked_at
-                          else null
-                        end,
-                        locked_by = case
-                          when status = 'running' then locked_by
-                          else null
-                        end,
-                        last_error = null,
-                        updated_at = now()
-                  where id = ${input.stagingCleanupJobId}
-                    and owner_user_id = ${input.record.ownerUserId}
-                    and type = 'cleanup_artifact_object'`,
+          if (record.deletionState !== "pending") {
+            return { record, activated: false };
+          }
+          // Fence the commit too: if the owning Session started deleting after
+          // this object was staged, its orphaning pass already ran and would
+          // miss this row. Leave it pending so the staged cleanup intent reaps
+          // the bytes instead of leaking them.
+          if (record.sourceSessionId) {
+            const session = await first(
+              transaction,
+              sql`select id
+                    from sessions
+                   where id = ${record.sourceSessionId}
+                     and owner_user_id = ${input.ownerUserId}
+                     and deletion_state = 'none'
+                   for update`,
             );
-          if (!session || session.deletionState !== "none") {
-            await rearmStagingCleanup();
-            return { artifact: input.record, activated: false };
-          }
-          const existing = await first<ArtifactRecord & Row>(
-            transaction,
-            sql`select ${artifactSelection}
-                  from artifacts
-                 where owner_user_id = ${input.record.ownerUserId}
-                   and session_id = ${input.record.sessionId}
-                   and ark_file_id = ${input.record.arkFileId}
-                 limit 1`,
-          );
-          if (
-            existing?.deletionState !== undefined &&
-            existing.deletionState !== "none"
-          ) {
-            if (
-              stagingCleanup.uploadInProgressUntil ||
-              stagingCleanup.status === "failed"
-            ) {
-              await rearmStagingCleanup();
+            if (!session) {
+              return { record, activated: false };
             }
-            await transaction.execute(
-              sql`update background_jobs
-                    set status = 'pending',
-                        attempts = 0,
-                        run_after = now(),
-                        locked_at = null,
-                        locked_by = null,
-                        last_error = null,
-                        updated_at = now()
-                  where id = ${existing.id}
-                    and owner_user_id = ${existing.ownerUserId}
-                    and type = 'delete_artifact'
-                    and status = 'failed'`,
-            );
-            return { artifact: existing, activated: false };
           }
-          if (stagingCleanup.status !== "pending") {
-            await rearmStagingCleanup();
-            return { artifact: existing ?? input.record, activated: false };
-          }
-          const artifact = await requiredFirst<ArtifactRecord & Row>(
+          const activated = await first<DriveFileRecord & Row>(
             transaction,
-            sql`insert into artifacts
-                (id, owner_user_id, session_id, ark_file_id, tos_object_key,
-                 name, mime_type, size_bytes, generated_at, deletion_state,
-                 last_error_code, created_at, updated_at)
-              values
-                (${input.record.id}, ${input.record.ownerUserId},
-                 ${input.record.sessionId}, ${input.record.arkFileId},
-                 ${input.record.tosObjectKey}, ${input.record.name},
-                 ${input.record.mimeType}, ${input.record.sizeBytes},
-                 ${input.record.generatedAt}, ${input.record.deletionState},
-                 ${input.record.lastErrorCode}, ${input.record.createdAt},
-                 ${input.record.updatedAt})
-              on conflict (owner_user_id, session_id, ark_file_id) do update
-                set tos_object_key = excluded.tos_object_key,
-                    name = excluded.name,
-                    mime_type = excluded.mime_type,
-                    size_bytes = excluded.size_bytes,
-                    generated_at = excluded.generated_at,
-                    updated_at = excluded.updated_at
-              returning ${artifactSelection}`,
+            sql`update drive_files
+                   set deletion_state = 'none',
+                       write_lease_until = null,
+                       last_error_code = null,
+                       updated_at = now()
+                 where id = ${input.id}
+                   and owner_user_id = ${input.ownerUserId}
+                   and deletion_state = 'pending'
+                 returning ${driveFileSelection}`,
           );
-          const retired = await rows(
-            transaction,
+          if (!activated) {
+            return { record, activated: false };
+          }
+          await transaction.execute(
             sql`update background_jobs
-                  set status = 'succeeded',
-                      payload = payload - 'uploadInProgressUntil',
-                      locked_at = null,
-                      locked_by = null,
-                      last_error = null,
-                      updated_at = now()
-                where id = ${input.stagingCleanupJobId}
-                  and owner_user_id = ${input.record.ownerUserId}
-                  and type = 'cleanup_artifact_object'
-                  and status = 'pending'
-                  and payload ->> 'objectKey' = ${input.record.tosObjectKey}
-                returning id`,
+                   set status = 'succeeded',
+                       payload = payload - 'uploadInProgressUntil',
+                       locked_at = null,
+                       locked_by = null,
+                       last_error = null,
+                       updated_at = now()
+                 where id = ${input.id}
+                   and owner_user_id = ${input.ownerUserId}
+                   and type = 'cleanup_drive_object'
+                   and status = 'pending'`,
           );
-          if (retired.length !== 1) {
-            throw new Error("Artifact staging cleanup intent was not active");
-          }
-          if (existing && existing.tosObjectKey !== input.record.tosObjectKey) {
-            await transaction.execute(
-              sql`insert into background_jobs
-                    (id, owner_user_id, type, status, priority, payload,
-                     attempts, run_after)
-                  values
-                    (${input.replacementCleanupJobId},
-                     ${input.record.ownerUserId}, 'cleanup_artifact_object',
-                     'pending', 90,
-                     ${JSON.stringify({
-                       objectKey: existing.tosObjectKey,
-                       cleanupGeneration: 0,
-                     })}::jsonb,
-                     0, now())`,
-            );
-          }
-          return { artifact, activated: true };
+          return { record: activated, activated: true };
         });
       },
-      async releaseCleanup(id: string, userId: string) {
+      async release(id: string, userId: string) {
         await db.execute(
           sql`update background_jobs
                 set payload =
                       (payload - 'uploadInProgressUntil')
                       || jsonb_build_object(
                         'cleanupGeneration',
-                        coalesce(
-                          (payload ->> 'cleanupGeneration')::integer,
-                          0
-                        ) + 1
+                        coalesce((payload ->> 'cleanupGeneration')::integer, 0)
+                          + 1
                       ),
                     status = case
                       when status = 'running' then status
@@ -2777,109 +3453,127 @@ export function createRepositories(database: unknown) {
                     updated_at = now()
               where id = ${id}
                 and owner_user_id = ${userId}
-                and type = 'cleanup_artifact_object'`,
-        );
-      },
-      listOwned(userId: string, sessionId?: string) {
-        return rows<ArtifactRecord & Row>(
-          db,
-          sql`select ${artifactSelection}
-                from artifacts
-               where owner_user_id = ${userId}
-                 and (${sessionId ?? null}::uuid is null
-                      or session_id = ${sessionId ?? null})
-                 and deletion_state = 'none'
-               order by generated_at desc, id desc`,
+                and type = 'cleanup_drive_object'`,
         );
       },
       findOwned(userId: string, id: string) {
-        return first<ArtifactRecord & Row>(
+        return first<DriveFileRecord & Row>(
           db,
-          sql`select ${artifactSelection}
-                from artifacts
+          sql`select ${driveFileSelection}
+                from drive_files
                where id = ${id}
                  and owner_user_id = ${userId}
-                 and deletion_state <> 'deleted'
                limit 1`,
         );
       },
-      beginDelete(id: string, userId: string) {
-        return db.transaction(async (transaction) => {
-          const candidate = await first<{ sessionId: string }>(
-            transaction,
-            sql`select session_id as "sessionId"
-                  from artifacts
-                 where id = ${id}
-                   and owner_user_id = ${userId}
-                 limit 1`,
-          );
-          if (!candidate) return undefined;
-          await transaction.execute(
-            sql`select id
-                  from sessions
-                 where id = ${candidate.sessionId}
-                   and owner_user_id = ${userId}
-                   for update`,
-          );
-          const artifact = await first<ArtifactRecord & Row>(
-            transaction,
-            sql`update artifacts
-                  set deletion_state = 'pending',
-                      last_error_code = null,
-                      updated_at = now()
-                where id = ${id}
-                  and owner_user_id = ${userId}
-                  and deletion_state <> 'deleted'
-                returning ${artifactSelection}`,
-          );
-          if (!artifact) return undefined;
-          await transaction.execute(
-            sql`insert into background_jobs
-                  (id, owner_user_id, type, status, priority, payload,
-                   attempts, run_after)
-                values
-                  (${id}, ${userId}, 'delete_artifact', 'pending', 100,
-                   ${JSON.stringify({ artifactId: id })}::jsonb, 0, now())
-                on conflict (id) do update
-                  set status = 'pending',
-                      attempts = 0,
-                      run_after = now(),
-                      locked_at = null,
-                      locked_by = null,
-                      last_error = null,
-                      updated_at = now()
-                where background_jobs.status = 'failed'`,
-          );
-          return artifact;
-        });
-      },
-      findDeleting(userId: string, id: string) {
-        return first<ArtifactRecord & Row>(
+      async orphan(id: string, userId: string, at: Date) {
+        const updated = await rows(
           db,
-          sql`select ${artifactSelection}
-                from artifacts
-               where id = ${id}
-                 and owner_user_id = ${userId}
-                 and deletion_state in ('pending', 'deletion_failed', 'deleted')
-               limit 1`,
-        );
-      },
-      async markDeleted(id: string, userId: string) {
-        const removed = await rows(
-          db,
-          sql`update artifacts
-                 set name = '',
-                     mime_type = 'application/octet-stream',
-                     size_bytes = 0,
-                     deletion_state = 'deleted',
-                     last_error_code = null,
+          sql`update drive_files
+                 set orphaned_at = coalesce(orphaned_at, ${at}),
                      updated_at = now()
                where id = ${id}
                  and owner_user_id = ${userId}
-                 and deletion_state in ('pending', 'deletion_failed', 'deleted')
+                 and deletion_state = 'none'
                returning id`,
         );
-        return removed.length === 1;
+        return updated.length === 1;
+      },
+      /**
+       * Selects committed, orphaned rows past the retention window and enqueues
+       * `cleanup_drive_object` for each. The orphaned flag stays set so the job
+       * is the single reaper; a row already carrying a live job is skipped.
+       */
+      claimOrphans(input: { limit: number; retentionMs: number; now: Date }) {
+        return db.transaction(async (transaction) => {
+          const cutoff = new Date(input.now.getTime() - input.retentionMs);
+          const candidates = await rows<{ id: string; ownerUserId: string }>(
+            transaction,
+            sql`select drive.id, drive.owner_user_id as "ownerUserId"
+                  from drive_files drive
+                 where drive.deletion_state = 'none'
+                   and drive.orphaned_at is not null
+                   and drive.orphaned_at <= ${cutoff}
+                   and (drive.write_lease_until is null
+                        or drive.write_lease_until <= ${input.now})
+                   and not exists (
+                     select 1
+                       from background_jobs job
+                      where job.id = drive.id
+                        and job.status in ('pending', 'running')
+                   )
+                 order by drive.orphaned_at asc, drive.id asc
+                 for update skip locked
+                 limit ${input.limit}`,
+          );
+          for (const candidate of candidates) {
+            // The drive id doubles as the cleanup job id, so the row usually
+            // already exists — the retired staging intent. Re-arm it rather
+            // than inserting, or the orphan would never be reaped.
+            await transaction.execute(
+              sql`insert into background_jobs
+                    (id, owner_user_id, type, status, priority, payload,
+                     attempts, run_after)
+                  values
+                    (${candidate.id}, ${candidate.ownerUserId},
+                     'cleanup_drive_object', 'pending', 90,
+                     ${JSON.stringify({
+                       driveFileId: candidate.id,
+                       cleanupGeneration: 0,
+                     })}::jsonb,
+                     0, ${input.now})
+                  on conflict (id) do update
+                    set type = 'cleanup_drive_object',
+                        status = 'pending',
+                        priority = 90,
+                        payload = excluded.payload,
+                        attempts = 0,
+                        run_after = excluded.run_after,
+                        locked_at = null,
+                        locked_by = null,
+                        last_error = null,
+                        updated_at = ${input.now}
+                  where background_jobs.status in ('succeeded', 'failed')`,
+            );
+          }
+          return candidates.length;
+        });
+      },
+      async markDeleted(id: string, userId: string) {
+        return db.transaction(async (transaction) => {
+          const removed = await rows(
+            transaction,
+            sql`update drive_files
+                   set deletion_state = 'deleted',
+                       name = '',
+                       mime_type = 'application/octet-stream',
+                       size_bytes = 0,
+                       write_lease_until = null,
+                       last_error_code = null,
+                       updated_at = now()
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and deletion_state <> 'deleted'
+                 returning id`,
+          );
+          if (removed.length !== 1) return false;
+          // The bytes are gone, so any association that pointed at them must
+          // stop being visible. Associations are dropped with their Session
+          // normally, but an explicit artifact delete leaves the row behind.
+          await transaction.execute(
+            sql`update artifacts
+                   set name = '',
+                       mime_type = 'application/octet-stream',
+                       size_bytes = 0,
+                       deletion_state = 'deleted',
+                       last_error_code = null,
+                       updated_at = now()
+                 where drive_file_id = ${id}
+                   and owner_user_id = ${userId}
+                   and deletion_state <> 'deleted'`,
+          );
+          return true;
+        });
       },
     },
 
@@ -3108,6 +3802,249 @@ export function createRepositories(database: unknown) {
                  and recorded_at < ${window.end}`,
         ).then((row) => Number(row?.total ?? 0));
       },
+      async monthlyTokenState(userId: string, now: Date) {
+        const window = utcMonthWindow(now);
+        const [quota, usage] = await Promise.all([
+          effectiveQuota(db, userId),
+          first<{ total: number }>(
+            db,
+            sql`select coalesce(sum(quantity), 0)::bigint as total
+                  from usage_ledger
+                 where user_id = ${userId}
+                   and metric_type in ('input_tokens', 'output_tokens')
+                   and recorded_at >= ${window.start}
+                   and recorded_at < ${window.end}`,
+          ),
+        ]);
+        return {
+          used: Number(usage?.total ?? 0),
+          limit: quota.monthlyTokenLimit,
+        };
+      },
+      async adminOverview(input: {
+        now: Date;
+        limit: number;
+        before: { tokens: number; userId: string } | null;
+      }) {
+        const window = utcMonthWindow(input.now);
+        const dayStart = new Date(
+          Date.UTC(
+            input.now.getUTCFullYear(),
+            input.now.getUTCMonth(),
+            input.now.getUTCDate(),
+          ),
+        );
+        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+        const snap = sql`
+          with monthly as (
+            select user_id,
+                   coalesce(sum(quantity) filter (
+                     where metric_type = 'input_tokens'), 0)::bigint as input_tokens,
+                   coalesce(sum(quantity) filter (
+                     where metric_type = 'output_tokens'), 0)::bigint as output_tokens,
+                   coalesce(sum(quantity) filter (
+                     where metric_type = 'tool_calls'), 0)::bigint as tool_calls
+              from usage_ledger
+             where recorded_at >= ${window.start} and recorded_at < ${window.end}
+             group by user_id
+          ),
+          snap as (
+            select u.id, u.email, u.role, u.status,
+                   coalesce(o.personal_agent_limit, p.personal_agent_limit)::integer
+                     as "personalAgentLimit",
+                   coalesce(o.concurrent_session_limit, p.concurrent_session_limit)::integer
+                     as "concurrentSessionLimit",
+                   coalesce(o.daily_session_limit, p.daily_session_limit)::integer
+                     as "dailySessionLimit",
+                   coalesce(o.monthly_token_limit, p.monthly_token_limit)::bigint
+                     as "monthlyTokenLimit",
+                   (select count(*)::integer from personal_agents pa
+                     where pa.owner_user_id = u.id
+                       and not (pa.status = 'failed' and pa.ark_version = '0'
+                                and pa.ark_agent_id like 'pending:%'))
+                     as "personalAgents",
+                   (select count(*)::integer from sessions s
+                     where s.owner_user_id = u.id
+                       and s.status in ('running', 'rescheduled')
+                       and s.deletion_state <> 'deleted')
+                     as "concurrentSessions",
+                   (select count(*)::integer from sessions s
+                     where s.owner_user_id = u.id
+                       and s.created_at >= ${dayStart}
+                       and s.created_at < ${dayEnd})
+                     as "dailySessions",
+                   coalesce(m.input_tokens, 0)::bigint as "inputTokens",
+                   coalesce(m.output_tokens, 0)::bigint as "outputTokens",
+                   coalesce(m.tool_calls, 0)::bigint as "toolCalls"
+              from users u
+              join quota_policies p on p.key = 'default'
+              left join user_quota_overrides o on o.user_id = u.id
+              left join monthly m on m.user_id = u.id
+          )`;
+        const totals = await first<{
+          inputTokens: number;
+          outputTokens: number;
+          sessions: number;
+          activeUsers: number;
+          exhaustedUsers: number;
+        }>(
+          db,
+          sql`${snap}
+              select
+                (select coalesce(sum("inputTokens"), 0)::bigint from snap) as "inputTokens",
+                (select coalesce(sum("outputTokens"), 0)::bigint from snap) as "outputTokens",
+                (select count(*)::integer from sessions s
+                  where s.created_at >= ${window.start}
+                    and s.created_at < ${window.end}) as "sessions",
+                (select count(*)::integer from snap
+                  where "inputTokens" > 0 or "outputTokens" > 0) as "activeUsers",
+                (select count(*)::integer from snap
+                  where "personalAgents" >= "personalAgentLimit"
+                     or "concurrentSessions" >= "concurrentSessionLimit"
+                     or "dailySessions" >= "dailySessionLimit"
+                     or ("inputTokens" + "outputTokens") >= "monthlyTokenLimit")
+                  as "exhaustedUsers"`,
+        );
+        const rowsFilter = input.before
+          ? sql`where ("inputTokens" + "outputTokens", id)
+                    < (${input.before.tokens}::bigint, ${input.before.userId}::uuid)`
+          : sql``;
+        const userRows = await rows<{
+          userId: string;
+          email: string;
+          role: "user" | "admin";
+          status: "active" | "disabled";
+          personalAgentLimit: number;
+          concurrentSessionLimit: number;
+          dailySessionLimit: number;
+          monthlyTokenLimit: number;
+          personalAgents: number;
+          concurrentSessions: number;
+          dailySessions: number;
+          inputTokens: number;
+          outputTokens: number;
+          toolCalls: number;
+          tokens: number;
+        }>(
+          db,
+          sql`${snap}
+              select id as "userId", email, role, status,
+                     "personalAgentLimit", "concurrentSessionLimit",
+                     "dailySessionLimit", "monthlyTokenLimit",
+                     "personalAgents", "concurrentSessions", "dailySessions",
+                     "inputTokens", "outputTokens", "toolCalls",
+                     ("inputTokens" + "outputTokens")::bigint as tokens
+                from snap
+                ${rowsFilter}
+               order by tokens desc, id desc
+               limit ${input.limit + 1}`,
+        );
+        const hasMore = userRows.length > input.limit;
+        const users = (hasMore ? userRows.slice(0, input.limit) : userRows).map(
+          (row) => ({
+            userId: row.userId,
+            email: row.email,
+            role: row.role,
+            status: row.status,
+            quota: {
+              personalAgentLimit: Number(row.personalAgentLimit),
+              concurrentSessionLimit: Number(row.concurrentSessionLimit),
+              dailySessionLimit: Number(row.dailySessionLimit),
+              monthlyTokenLimit: Number(row.monthlyTokenLimit),
+            },
+            usage: {
+              personalAgents: row.personalAgents,
+              concurrentSessions: row.concurrentSessions,
+              dailySessions: row.dailySessions,
+              inputTokens: Number(row.inputTokens),
+              outputTokens: Number(row.outputTokens),
+              tokens: Number(row.tokens),
+              toolCalls: Number(row.toolCalls),
+            },
+          }),
+        );
+        const last = users[users.length - 1];
+        return {
+          period: { startsAt: window.start, endsAt: window.end },
+          totals: {
+            inputTokens: Number(totals?.inputTokens ?? 0),
+            outputTokens: Number(totals?.outputTokens ?? 0),
+            tokens:
+              Number(totals?.inputTokens ?? 0) +
+              Number(totals?.outputTokens ?? 0),
+            activeUsers: totals?.activeUsers ?? 0,
+            sessions: totals?.sessions ?? 0,
+            exhaustedUsers: totals?.exhaustedUsers ?? 0,
+          },
+          users,
+          nextCursor:
+            hasMore && last
+              ? { tokens: last.usage.tokens, userId: last.userId }
+              : null,
+        };
+      },
+      async byAgents(input: { now: Date }) {
+        const window = utcMonthWindow(input.now);
+        const platform = await rows<{
+          platformAgentId: string;
+          name: string;
+          status: string;
+          defaultAssignments: number;
+          inputTokens: number;
+          outputTokens: number;
+        }>(
+          db,
+          sql`select pa.id as "platformAgentId", pa.name, pa.status::text as status,
+                     (select count(*)::integer from user_default_agents uda
+                       where uda.platform_agent_id = pa.id) as "defaultAssignments",
+                     coalesce(sum(ul.quantity) filter (
+                       where ul.metric_type = 'input_tokens'), 0)::bigint as "inputTokens",
+                     coalesce(sum(ul.quantity) filter (
+                       where ul.metric_type = 'output_tokens'), 0)::bigint as "outputTokens"
+                from platform_agents pa
+                left join usage_ledger ul
+                  on ul.platform_agent_id = pa.id
+                 and ul.recorded_at >= ${window.start}
+                 and ul.recorded_at < ${window.end}
+               group by pa.id, pa.name, pa.status
+               order by pa.name`,
+        );
+        const personal = await first<{
+          personalAgents: number;
+          inputTokens: number;
+          outputTokens: number;
+        }>(
+          db,
+          sql`select (select count(*)::integer from personal_agents pa
+                       where not (pa.status = 'failed' and pa.ark_version = '0'
+                                  and pa.ark_agent_id like 'pending:%'))
+                     as "personalAgents",
+                     coalesce(sum(ul.quantity) filter (
+                       where ul.metric_type = 'input_tokens'), 0)::bigint as "inputTokens",
+                     coalesce(sum(ul.quantity) filter (
+                       where ul.metric_type = 'output_tokens'), 0)::bigint as "outputTokens"
+                from usage_ledger ul
+               where ul.agent_kind = 'personal'
+                 and ul.recorded_at >= ${window.start}
+                 and ul.recorded_at < ${window.end}`,
+        );
+        return {
+          platform: platform.map((agent) => ({
+            platformAgentId: agent.platformAgentId,
+            name: agent.name,
+            status: agent.status,
+            defaultAssignments: agent.defaultAssignments,
+            inputTokens: Number(agent.inputTokens),
+            outputTokens: Number(agent.outputTokens),
+          })),
+          personal: {
+            personalAgents: personal?.personalAgents ?? 0,
+            tokens:
+              Number(personal?.inputTokens ?? 0) +
+              Number(personal?.outputTokens ?? 0),
+          },
+        };
+      },
       async summary(userId: string, now: Date) {
         const month = utcMonthWindow(now);
         const dayStart = new Date(
@@ -3322,6 +4259,7 @@ export function createRepositories(database: unknown) {
           "delete_session",
           "delete_artifact",
           "cleanup_artifact_object",
+          "cleanup_drive_object",
           "cleanup_upload",
           "reconcile_session",
           "reconcile_personal_agent",
@@ -3353,6 +4291,8 @@ export function createRepositories(database: unknown) {
                            then 'ARTIFACT_DELETE_LEASE_EXPIRED'
                          when job.type = 'cleanup_artifact_object'
                            then 'ARTIFACT_CLEANUP_LEASE_EXPIRED'
+                         when job.type = 'cleanup_drive_object'
+                           then 'DRIVE_CLEANUP_LEASE_EXPIRED'
                          else coalesce(
                            job.last_error,
                            'Job lease expired after final attempt'
@@ -3385,6 +4325,18 @@ export function createRepositories(database: unknown) {
                      and artifact.id = job.id
                      and artifact.owner_user_id = job.owner_user_id
                   returning artifact.id
+                ),
+                failed_drive_files as (
+                  update drive_files drive
+                     set deletion_state = 'deletion_failed',
+                         write_lease_until = null,
+                         last_error_code = 'DRIVE_CLEANUP_LEASE_EXPIRED',
+                         updated_at = ${now}
+                    from failed_jobs job
+                   where job.type = 'cleanup_drive_object'
+                     and drive.id = job.id
+                     and drive.owner_user_id = job.owner_user_id
+                  returning drive.id
                 ),
                 failed_delete_sessions as (
                   update sessions session
@@ -3581,6 +4533,131 @@ export function createRepositories(database: unknown) {
           return updated.length === 1;
         });
       },
+      async succeedDriveCleanup(
+        id: string,
+        workerId: string,
+        cleanupGeneration: number,
+      ) {
+        const updated = await rows(
+          db,
+          sql`update background_jobs
+                set status = 'succeeded',
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = null,
+                    updated_at = now()
+              where id = ${id}
+                and type = 'cleanup_drive_object'
+                and status = 'running'
+                and locked_by = ${workerId}
+                and coalesce(
+                      (payload ->> 'cleanupGeneration')::integer,
+                      0
+                    ) = ${cleanupGeneration}
+              returning id`,
+        );
+        return updated.length === 1;
+      },
+      async deferDriveCleanup(
+        id: string,
+        workerId: string,
+        cleanupGeneration: number,
+      ) {
+        const updated = await rows(
+          db,
+          sql`update background_jobs
+                set status = 'pending',
+                    attempts = greatest(attempts - 1, 0),
+                    run_after = case
+                      when payload ? 'uploadInProgressUntil'
+                        then greatest(
+                          now(),
+                          (payload ->> 'uploadInProgressUntil')::timestamptz
+                        )
+                      else now()
+                    end,
+                    locked_at = null,
+                    locked_by = null,
+                    last_error = null,
+                    updated_at = now()
+              where id = ${id}
+                and type = 'cleanup_drive_object'
+                and status = 'running'
+                and locked_by = ${workerId}
+                and coalesce(
+                      (payload ->> 'cleanupGeneration')::integer,
+                      0
+                    ) = ${cleanupGeneration}
+              returning id`,
+        );
+        return updated.length === 1;
+      },
+      async retryDriveCleanup(
+        id: string,
+        workerId: string,
+        cleanupGeneration: number,
+        error: string,
+        final: boolean,
+        now = new Date(),
+      ) {
+        return db.transaction(async (transaction) => {
+          const leased = await first<{ attempts: number }>(
+            transaction,
+            sql`select attempts
+                  from background_jobs
+                 where id = ${id}
+                   and type = 'cleanup_drive_object'
+                   and status = 'running'
+                   and locked_by = ${workerId}
+                   and coalesce(
+                         (payload ->> 'cleanupGeneration')::integer,
+                         0
+                       ) = ${cleanupGeneration}
+                 for update`,
+          );
+          if (!leased) return false;
+          const runAfter = new Date(
+            now.getTime() + Math.min(60_000, 2 ** leased.attempts * 100),
+          );
+          const updated = await rows(
+            transaction,
+            sql`update background_jobs
+                  set status = ${final ? "failed" : "pending"}::background_job_status,
+                      run_after = ${runAfter},
+                      locked_at = null,
+                      locked_by = null,
+                      last_error = ${driveCleanupErrorCode(error)},
+                      updated_at = ${now}
+                where id = ${id}
+                  and type = 'cleanup_drive_object'
+                  and status = 'running'
+                  and locked_by = ${workerId}
+                  and coalesce(
+                        (payload ->> 'cleanupGeneration')::integer,
+                        0
+                      ) = ${cleanupGeneration}
+                returning id`,
+          );
+          if (updated.length !== 1) return false;
+          if (final) {
+            await transaction.execute(
+              sql`update drive_files
+                    set deletion_state = 'deletion_failed',
+                        write_lease_until = null,
+                        last_error_code = ${driveCleanupErrorCode(error)},
+                        updated_at = ${now}
+                  where id = ${id}
+                    and owner_user_id = (
+                      select owner_user_id
+                        from background_jobs
+                       where id = ${id}
+                    )
+                    and deletion_state <> 'deleted'`,
+            );
+          }
+          return true;
+        });
+      },
       async updatePayload(
         id: string,
         workerId: string,
@@ -3607,6 +4684,7 @@ export function createRepositories(database: unknown) {
       ) {
         const artifactError = artifactDeletionErrorCode(error);
         const artifactCleanupError = artifactCleanupErrorCode(error);
+        const driveCleanupError = driveCleanupErrorCode(error);
         const sessionError = sessionDeletionErrorCode(error);
         await db.transaction(async (transaction) => {
           const leased = await first<{ attempts: number }>(
@@ -3638,6 +4716,8 @@ export function createRepositories(database: unknown) {
                         when type = 'delete_artifact' then ${artifactError}
                         when type = 'cleanup_artifact_object'
                           then ${artifactCleanupError}
+                        when type = 'cleanup_drive_object'
+                          then ${driveCleanupError}
                         else ${error}
                       end,
                       updated_at = ${now}
@@ -3646,6 +4726,19 @@ export function createRepositories(database: unknown) {
                   and locked_by = ${workerId}
                 returning id, owner_user_id as "ownerUserId", type`,
           );
+          if (updated?.type === "cleanup_drive_object" && final) {
+            await transaction.execute(
+              sql`update drive_files
+                    set deletion_state = 'deletion_failed',
+                        write_lease_until = null,
+                        last_error_code = ${driveCleanupError},
+                        updated_at = ${now}
+                  where id = ${updated.id}
+                    and owner_user_id = ${updated.ownerUserId}
+                    and deletion_state <> 'deleted'`,
+            );
+            return;
+          }
           if (updated?.type === "cleanup_upload" && updated.ownerUserId) {
             await transaction.execute(
               sql`update session_inputs

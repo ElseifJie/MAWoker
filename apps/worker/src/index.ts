@@ -4,6 +4,8 @@ import { parseServerConfig } from "@pwa/config";
 import { createDatabase, createRepositories } from "@pwa/db";
 import {
   ArtifactService,
+  DriveFileService,
+  LoggingNotifier,
   SessionInputService,
   SessionService,
   UserAgentService,
@@ -11,6 +13,8 @@ import {
 import { createTosArtifactStorage } from "@pwa/storage";
 import { ArtifactDeletionProcessor } from "./artifact-deletion.js";
 import { ArtifactObjectCleanupProcessor } from "./artifact-object-cleanup.js";
+import { DriveObjectCleanupProcessor } from "./drive-object-cleanup.js";
+import { DriveOrphanGcProcessor } from "./drive-orphan-gc.js";
 import { startWorkerLivenessServer } from "./health.js";
 import { createWorkerLogger, logWorkerFailure } from "./logger.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
@@ -59,11 +63,15 @@ const sessionProcessor = new SessionReconciliationProcessor({
   }),
   workerId: `session-worker:${process.pid}:${randomUUID()}`,
 });
+const driveFiles = new DriveFileService({
+  repository: repositories.driveFiles,
+  storage: artifactStorage,
+  createId: randomUUID,
+});
 const sessionDeletionProcessor = new SessionDeletionProcessor({
   jobs: repositories.jobs,
   repository: repositories.sessionDeletion,
   ark,
-  storage: artifactStorage,
   workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
   alert: (event) =>
     logger.error(
@@ -71,15 +79,20 @@ const sessionDeletionProcessor = new SessionDeletionProcessor({
       "Terminal deletion failure",
     ),
 });
+const notifier = new LoggingNotifier((fields, message) =>
+  logger.warn(fields, message),
+);
 const usageProcessor = new UsageReconciliationProcessor({
   repository: {
     listReconcilable: repositories.usage.listReconcilable,
     markReconciled: repositories.usage.markReconciled,
     projectEvent: repositories.sessionLifecycle.projectEvent,
+    monthlyTokenState: repositories.usage.monthlyTokenState,
   },
   ark,
   workerId: `usage-worker:${process.pid}:${randomUUID()}`,
   reportError: reportWorkerError,
+  notifier,
 });
 const quotaInterruptProcessor = new QuotaInterruptProcessor({
   jobs: repositories.quotaInterrupts,
@@ -99,6 +112,7 @@ const artifactDeletionProcessor = new ArtifactDeletionProcessor({
   jobs: repositories.jobs,
   service: new ArtifactService({
     repository: repositories.artifacts,
+    drive: driveFiles,
     ark,
     storage: artifactStorage,
     createId: randomUUID,
@@ -114,11 +128,21 @@ const artifactObjectCleanupProcessor = new ArtifactObjectCleanupProcessor({
   jobs: repositories.jobs,
   service: new ArtifactService({
     repository: repositories.artifacts,
+    drive: driveFiles,
     ark,
     storage: artifactStorage,
     createId: randomUUID,
   }),
   workerId: `artifact-object-cleanup-worker:${process.pid}:${randomUUID()}`,
+});
+const driveObjectCleanupProcessor = new DriveObjectCleanupProcessor({
+  jobs: repositories.jobs,
+  service: driveFiles,
+  workerId: `drive-object-cleanup-worker:${process.pid}:${randomUUID()}`,
+});
+const driveOrphanGcProcessor = new DriveOrphanGcProcessor({
+  service: driveFiles,
+  retentionMs: config.driveOrphanRetentionMs,
 });
 const health = startWorkerLivenessServer({
   host: config.worker.healthHost,
@@ -143,6 +167,8 @@ await new Promise<void>((resolve) => {
           uploadCleanup: uploadCleanupProcessor,
           artifactDeletion: artifactDeletionProcessor,
           artifactCleanup: artifactObjectCleanupProcessor,
+          driveCleanup: driveObjectCleanupProcessor,
+          driveOrphanGc: driveOrphanGcProcessor,
         },
         reportWorkerError,
       );

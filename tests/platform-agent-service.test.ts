@@ -98,10 +98,35 @@ function createRepository() {
       };
     },
     async listUsers() {
-      return [];
+      return { users: [], nextCursor: null };
+    },
+    async setUserStatus() {
+      return undefined;
+    },
+    async setUserRole() {
+      return undefined;
+    },
+    async revokeUserSessions() {
+      return undefined;
     },
     async updateUserQuota(quota) {
-      return quota;
+      const effective = {
+        personalAgentLimit: quota.personalAgentLimit ?? 10,
+        concurrentSessionLimit: quota.concurrentSessionLimit ?? 2,
+        dailySessionLimit: quota.dailySessionLimit ?? 25,
+        monthlyTokenLimit: quota.monthlyTokenLimit ?? 1000,
+      };
+      return {
+        previous: effective,
+        effective,
+        overridden: {
+          personalAgentLimit: quota.personalAgentLimit != null,
+          concurrentSessionLimit: quota.concurrentSessionLimit != null,
+          dailySessionLimit: quota.dailySessionLimit != null,
+          monthlyTokenLimit: quota.monthlyTokenLimit != null,
+        },
+        monthTokens: 0,
+      };
     },
     async audit(entry) {
       audits.push(entry);
@@ -291,6 +316,33 @@ describe("PlatformAgentService", () => {
     state.setReferences({ assignments: 0, sessions: 0 });
     await service.delete(agentId, { adminId, requestId });
     expect(state.records.has(agentId)).toBe(false);
+  });
+
+  it("removes a failed never-provisioned Agent without calling Ark", async () => {
+    const state = createRepository();
+    const { service, ark } = createService(state.repository);
+    ark.failNext("createAgent", "connection_failure");
+
+    await expect(
+      service.create(input, { adminId, requestId }),
+    ).rejects.toMatchObject({ category: "unknown_write_outcome" });
+    expect(state.records.get(agentId)).toMatchObject({
+      arkAgentId: `pending:${agentId}`,
+      arkVersion: "0",
+    });
+
+    await service.delete(agentId, { adminId, requestId });
+
+    expect(state.records.has(agentId)).toBe(false);
+    expect(
+      ark.calls.filter(({ operation }) => operation === "deleteAgent"),
+    ).toHaveLength(0);
+    expect(state.audits).toContainEqual(
+      expect.objectContaining({
+        action: "platform_agent.delete",
+        result: "succeeded",
+      }),
+    );
   });
 
   it("assigns only active Agents and rejects missing Agents", async () => {

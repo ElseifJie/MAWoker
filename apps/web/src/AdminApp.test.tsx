@@ -67,6 +67,7 @@ const adminUsers = {
       status: "active",
       hasPassword: true,
       defaultAgentId: agentId,
+      createdAt: "2026-09-01T00:00:00.000Z",
       quota: {
         personalAgentLimit: 10,
         concurrentSessionLimit: 2,
@@ -79,6 +80,49 @@ const adminUsers = {
     },
   ],
 };
+
+const zeroUsage = {
+  personalAgents: 0,
+  concurrentSessions: 0,
+  dailySessions: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  tokens: 0,
+  runtimeMs: 0,
+  toolCalls: 0,
+};
+
+const noDimensionsExhausted = {
+  personalAgents: false,
+  concurrentSessions: false,
+  dailySessions: false,
+  monthlyTokens: false,
+};
+
+const adminUserDetail = () => ({
+  id: userId,
+  email: "user@example.com",
+  role: "user",
+  status: "active",
+  hasPassword: true,
+  defaultAgentId: agentId,
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:00:00.000Z",
+  quota: adminUsers.users[0]!.quota,
+  inherited: {
+    personalAgentLimit: false,
+    concurrentSessionLimit: false,
+    dailySessionLimit: false,
+    monthlyTokenLimit: false,
+  },
+  usage: zeroUsage,
+  exhausted: noDimensionsExhausted,
+  period: {
+    startsAt: "2026-09-01T00:00:00.000Z",
+    endsAt: "2026-10-01T00:00:00.000Z",
+  },
+  authSubject: "must-not-render",
+});
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -112,8 +156,9 @@ function requestPath(input: RequestInfo | URL) {
 }
 
 function adminHandler() {
-  return async (input: RequestInfo | URL) => {
+  return async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = requestPath(input);
+    const method = init?.method ?? "GET";
     if (path === "/api/v1/me") {
       return json({
         user: {
@@ -126,7 +171,12 @@ function adminHandler() {
     if (path === "/api/v1/admin/platform-agents") {
       return json(platformAgents);
     }
-    if (path === "/api/v1/admin/users") return json(adminUsers);
+    if (path === "/api/v1/admin/users" && method === "GET") {
+      return json(adminUsers);
+    }
+    if (path === `/api/v1/admin/users/${userId}` && method === "GET") {
+      return json(adminUserDetail());
+    }
     if (path === "/api/v1/capabilities") {
       return json({
         skills: { available: false },
@@ -135,6 +185,36 @@ function adminHandler() {
         memoryStores: { available: false },
         personalAgentModels: [longModelId, "model-a", "model-b", "model-c"],
       });
+    }
+    if (path === "/api/v1/admin/quota-policy") {
+      return json({
+        ...adminUsers.users[0]!.quota,
+        updatedBy: null,
+        updatedAt: "2026-09-01T00:00:00.000Z",
+      });
+    }
+    if (path === "/api/v1/admin/usage/overview") {
+      return json({
+        period: {
+          startsAt: "2026-09-01T00:00:00.000Z",
+          endsAt: "2026-10-01T00:00:00.000Z",
+        },
+        totals: {
+          inputTokens: 0,
+          outputTokens: 0,
+          tokens: 0,
+          activeUsers: 0,
+          sessions: 0,
+          exhaustedUsers: 0,
+        },
+        users: [],
+      });
+    }
+    if (path === "/api/v1/admin/usage/agents") {
+      return json({ platform: [], personal: { personalAgents: 0, tokens: 0 } });
+    }
+    if (path === "/api/v1/admin/audit-logs") {
+      return json({ entries: [] });
     }
     throw new Error(`Unexpected request: ${path}`);
   };
@@ -234,8 +314,9 @@ describe("administrator role routing", () => {
     renderApp("/files");
 
     expect(
-      await screen.findByRole("heading", { name: "Platform Agents" }),
+      await screen.findByRole("heading", { name: "Users" }),
     ).toBeInTheDocument();
+    await screen.findByText("user@example.com");
     expect(document.querySelector(".ui-app-shell")).toBeInTheDocument();
     const navigation = screen.getByRole("navigation", {
       name: "Administration",
@@ -258,8 +339,8 @@ describe("administrator role routing", () => {
     expect(requestedPaths).toEqual([
       "/api/v1/me",
       "/api/v1/admin/platform-agents",
-      "/api/v1/admin/users",
       "/api/v1/capabilities",
+      "/api/v1/admin/users",
     ]);
     expect(requestedPaths).not.toContain("/api/v1/sessions");
     expect(requestedPaths).not.toContain("/api/v1/artifacts");
@@ -294,9 +375,8 @@ describe("administrator role routing", () => {
     expect(
       await screen.findByRole("heading", { name: "Users" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("user@example.com")).toBeInTheDocument();
+    expect(await screen.findByText("user@example.com")).toBeInTheDocument();
     expect(screen.getByText("Research assistant")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("100000")).toBeInTheDocument();
     expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
     expect(screen.queryByText("must-not-render.txt")).not.toBeInTheDocument();
     expect(
@@ -307,48 +387,49 @@ describe("administrator role routing", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("groups every user record into visible management sections", async () => {
+  it("groups the account detail into visible management sections", async () => {
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
 
-    const record = await screen.findByRole("region", {
+    await screen.findByRole("heading", {
       name: "user@example.com",
+      level: 1,
     });
     expect(
-      within(record).getByRole("region", { name: "Identity" }),
+      screen.getByRole("region", { name: "Identity" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Quotas" })).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Default Agent for user@example.com"),
     ).toBeInTheDocument();
     expect(
-      within(record).getByRole("region", { name: "Default Agent" }),
+      screen.getByLabelText("Monthly token limit for user@example.com"),
     ).toBeInTheDocument();
-    expect(
-      within(record).getByRole("region", { name: "Quotas" }),
-    ).toBeInTheDocument();
-    expect(
-      within(record).getByLabelText("Default Agent for user@example.com"),
-    ).toBeInTheDocument();
-    expect(
-      within(record).getByLabelText("Monthly token limit for user@example.com"),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Sessions" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Audit" })).toBeInTheDocument();
   });
 
-  it("orders each user heading before its subordinate management groups", async () => {
+  it("orders the account heading before its subordinate management groups", async () => {
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
 
-    const record = await screen.findByRole("region", {
+    await screen.findByRole("heading", {
       name: "user@example.com",
+      level: 1,
     });
+    const page = document.querySelector(".admin-page");
+    expect(page).not.toBeNull();
     expect(
-      Array.from(record.querySelectorAll("h2, h3")).map(
+      Array.from(page!.querySelectorAll("h1, h2, h3")).map(
         (heading) => `${heading.tagName}:${heading.textContent}`,
       ),
     ).toEqual([
-      "H2:user@example.com",
-      "H3:Identity",
+      "H1:user@example.com",
+      "H2:Identity",
       "H3:Default Agent",
-      "H3:Quotas",
+      "H2:Quotas",
     ]);
   });
 
@@ -752,12 +833,91 @@ describe("platform Agent administration", () => {
 });
 
 describe("user administration", () => {
+  function detailStateHandler(
+    overrides: {
+      users?: typeof adminUsers.users;
+      detail?: Partial<ReturnType<typeof adminUserDetail>>;
+      onDefaultAgent?: (platformAgentId: string) => void;
+      onQuota?: (
+        body: Partial<Record<string, number | null>> | undefined,
+      ) => void;
+    } = {},
+  ) {
+    const users = overrides.users ?? structuredClone(adminUsers.users);
+    const detail = {
+      ...adminUserDetail(),
+      ...overrides.detail,
+    };
+    const calls: Array<{ method: string; path: string; body: unknown }> = [];
+    const base = adminHandler();
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const path = requestPath(input);
+        const method = init?.method ?? "GET";
+        const body =
+          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        calls.push({ method, path, body });
+        if (path === "/api/v1/admin/users" && method === "GET") {
+          return json({ users });
+        }
+        if (path === `/api/v1/admin/users/${userId}` && method === "GET") {
+          return json(detail);
+        }
+        if (
+          path === `/api/v1/admin/users/${userId}/default-agent` &&
+          method === "PUT"
+        ) {
+          const platformAgentId = (body as { platformAgentId: string })
+            .platformAgentId;
+          detail.defaultAgentId = platformAgentId;
+          users[0]!.defaultAgentId = platformAgentId;
+          overrides.onDefaultAgent?.(platformAgentId);
+          return json({
+            userId,
+            platformAgentId,
+            assignedAt: "2026-09-07T10:00:00.000Z",
+          });
+        }
+        if (
+          path === `/api/v1/admin/users/${userId}/quota` &&
+          method === "PUT"
+        ) {
+          const values = body as Record<string, number | null>;
+          detail.quota = {
+            personalAgentLimit:
+              values.personalAgentLimit ?? detail.quota.personalAgentLimit,
+            concurrentSessionLimit:
+              values.concurrentSessionLimit ??
+              detail.quota.concurrentSessionLimit,
+            dailySessionLimit:
+              values.dailySessionLimit ?? detail.quota.dailySessionLimit,
+            monthlyTokenLimit:
+              values.monthlyTokenLimit ?? detail.quota.monthlyTokenLimit,
+          };
+          detail.inherited = {
+            personalAgentLimit: values.personalAgentLimit == null,
+            concurrentSessionLimit: values.concurrentSessionLimit == null,
+            dailySessionLimit: values.dailySessionLimit == null,
+            monthlyTokenLimit: values.monthlyTokenLimit == null,
+          };
+          overrides.onQuota?.(values);
+          return json({ userId, ...detail.quota, inherited: detail.inherited });
+        }
+        return base(input, init);
+      },
+    );
+    return { calls, fetchMock };
+  }
+
   it("reserves both user save button loading icon slots while idle", async () => {
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
 
-    await screen.findByRole("heading", { name: "Users" });
+    await screen.findByRole("heading", {
+      name: "user@example.com",
+      level: 1,
+    });
     const saveButtons = [
       screen.getByRole("button", {
         name: "Save default Agent for user@example.com",
@@ -775,35 +935,12 @@ describe("user administration", () => {
   });
 
   it("preserves a quota draft when the Default Agent is saved", async () => {
-    const users = structuredClone(adminUsers.users).map((user) => ({
-      ...user,
-      defaultAgentId: null as string | null,
-    }));
-    const base = adminHandler();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = requestPath(input);
-        const method = init?.method ?? "GET";
-        if (path === "/api/v1/admin/users" && method === "GET") {
-          return json({ users });
-        }
-        if (
-          path === `/api/v1/admin/users/${userId}/default-agent` &&
-          method === "PUT"
-        ) {
-          users[0]!.defaultAgentId = agentId;
-          return json({
-            userId,
-            platformAgentId: agentId,
-            assignedAt: "2026-09-07T10:00:00.000Z",
-          });
-        }
-        return base(input);
-      }),
-    );
+    const { fetchMock } = detailStateHandler({
+      detail: { defaultAgentId: null },
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
     const user = userEvent.setup();
     const quotaInput = await screen.findByLabelText(
       "Personal Agent limit for user@example.com",
@@ -825,38 +962,22 @@ describe("user administration", () => {
   });
 
   it("preserves a Default Agent draft when quotas are saved", async () => {
-    const users = structuredClone(adminUsers.users);
     const agents = structuredClone(platformAgents.agents);
     agents[1]!.status = "active";
-    const base = adminHandler();
+    const { fetchMock } = detailStateHandler();
+    const base = fetchMock;
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const path = requestPath(input);
-        const method = init?.method ?? "GET";
-        if (path === "/api/v1/admin/platform-agents" && method === "GET") {
+        if (path === "/api/v1/admin/platform-agents") {
           return json({ agents });
         }
-        if (path === "/api/v1/admin/users" && method === "GET") {
-          return json({ users });
-        }
-        if (
-          path === `/api/v1/admin/users/${userId}/quota` &&
-          method === "PUT"
-        ) {
-          const body =
-            typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-          users[0]!.quota = {
-            ...(body as (typeof users)[number]["quota"]),
-            personalAgentLimit: 79,
-          };
-          return json({ userId, ...users[0]!.quota });
-        }
-        return base(input);
+        return base(input, init);
       }),
     );
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
     const user = userEvent.setup();
     const agentSelect = await screen.findByLabelText(
       "Default Agent for user@example.com",
@@ -875,56 +996,32 @@ describe("user administration", () => {
 
     expect(await screen.findByText("Quotas saved.")).toBeInTheDocument();
     expect(agentSelect).toHaveValue(disabledAgentId);
-    expect(quotaInput).toHaveValue(79);
+    // The refreshed effective value replaces the saved dimension.
+    expect(quotaInput).toHaveValue(78);
   });
 
-  it("assigns only active platform Agents and updates all four quotas", async () => {
-    const users = structuredClone(adminUsers.users).map((user) => ({
-      ...user,
-      defaultAgentId: null as string | null,
-    }));
-    const calls: Array<{ method: string; path: string; body: unknown }> = [];
-    const base = adminHandler();
+  it("assigns only active platform Agents and sends sparse quota overrides", async () => {
+    const agents = structuredClone(platformAgents.agents);
+    const { calls, fetchMock } = detailStateHandler({
+      detail: { defaultAgentId: null },
+    });
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const path = requestPath(input);
-        const method = init?.method ?? "GET";
-        const body =
-          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-        calls.push({ method, path, body });
-        if (path === "/api/v1/admin/users" && method === "GET") {
-          return json({ users });
+        if (path === "/api/v1/admin/platform-agents") {
+          return json({ agents });
         }
-        if (
-          path === `/api/v1/admin/users/${userId}/default-agent` &&
-          method === "PUT"
-        ) {
-          users[0]!.defaultAgentId = (
-            body as {
-              platformAgentId: string;
-            }
-          ).platformAgentId;
-          return json({
-            userId,
-            platformAgentId: users[0]!.defaultAgentId,
-            assignedAt: "2026-09-07T10:00:00.000Z",
-          });
-        }
-        if (
-          path === `/api/v1/admin/users/${userId}/quota` &&
-          method === "PUT"
-        ) {
-          users[0]!.quota = body as (typeof users)[number]["quota"];
-          return json({ userId, ...users[0]!.quota });
-        }
-        return base(input);
+        return fetchMock(input, init);
       }),
     );
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Users" });
+    await screen.findByRole("heading", {
+      name: "user@example.com",
+      level: 1,
+    });
 
     const agentSelect = screen.getByLabelText(
       "Default Agent for user@example.com",
@@ -940,18 +1037,15 @@ describe("user administration", () => {
     );
     expect(await screen.findByText("Default Agent saved.")).toBeInTheDocument();
     expect(
-      calls.filter((call) => call.path.endsWith("/default-agent")),
+      calls.filter(
+        (call) => call.method === "PUT" && call.path.endsWith("/default-agent"),
+      ),
     ).toHaveLength(1);
     expect(calls.some((call) => call.path.endsWith("/quota"))).toBe(false);
 
     const saveQuotas = screen.getByRole("button", {
       name: "Save quotas for user@example.com",
     });
-    await user.clear(
-      screen.getByLabelText("Personal Agent limit for user@example.com"),
-    );
-    expect(saveQuotas).toBeDisabled();
-
     const quotaValues = [
       ["Personal Agent limit for user@example.com", "12"],
       ["Concurrent Session limit for user@example.com", "3"],
@@ -965,10 +1059,11 @@ describe("user administration", () => {
     }
     await user.click(saveQuotas);
     expect(await screen.findByText("Quotas saved.")).toBeInTheDocument();
-    expect(calls.filter((call) => call.path.endsWith("/quota"))).toHaveLength(
-      1,
-    );
-
+    expect(
+      calls.filter(
+        (call) => call.method === "PUT" && call.path.endsWith("/quota"),
+      ),
+    ).toHaveLength(1);
     expect(
       calls.find((call) => call.path.endsWith("/default-agent"))?.body,
     ).toEqual({ platformAgentId: agentId });
@@ -978,14 +1073,28 @@ describe("user administration", () => {
       dailySessionLimit: 30,
       monthlyTokenLimit: 200_000,
     });
-    expect(
-      calls.some(
-        (call) =>
-          call.path.endsWith("/default-agent") &&
-          (call.body as { platformAgentId?: string }).platformAgentId ===
-            disabledAgentId,
-      ),
-    ).toBe(false);
+
+    // Clearing a dimension back to empty means "inherit the default policy".
+    await user.clear(
+      screen.getByLabelText("Monthly token limit for user@example.com"),
+    );
+    await user.click(saveQuotas);
+    await waitFor(() =>
+      expect(
+        calls.filter(
+          (call) => call.method === "PUT" && call.path.endsWith("/quota"),
+        ),
+      ).toHaveLength(2),
+    );
+    const quotaCalls = calls.filter(
+      (call) => call.method === "PUT" && call.path.endsWith("/quota"),
+    );
+    expect(quotaCalls[1]!.body).toEqual({
+      personalAgentLimit: 12,
+      concurrentSessionLimit: 3,
+      dailySessionLimit: 30,
+      monthlyTokenLimit: null,
+    });
   });
 });
 
@@ -1021,6 +1130,7 @@ describe("user account administration", () => {
             status: "active",
             hasPassword: true,
             defaultAgentId: null,
+            createdAt: "2026-09-08T00:00:00.000Z",
             quota: adminUsers.users[0]!.quota,
           });
           return json(
@@ -1058,9 +1168,7 @@ describe("user account administration", () => {
     );
     await user.click(screen.getByRole("button", { name: "Create user" }));
 
-    expect(
-      await screen.findByRole("heading", { name: "newcomer@example.com" }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("newcomer@example.com")).toBeInTheDocument();
     const createCall = calls.find(
       (call) => call.path === "/api/v1/admin/users" && call.method === "POST",
     );
@@ -1087,10 +1195,10 @@ describe("user account administration", () => {
     expect(calls.some((call) => call.method === "POST")).toBe(false);
   });
 
-  it("resets a password from the account record", async () => {
+  it("resets a password from the account detail", async () => {
     const { calls } = await createUserHandler();
 
-    renderApp("/admin/users");
+    renderApp(`/admin/users/${userId}`);
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", {

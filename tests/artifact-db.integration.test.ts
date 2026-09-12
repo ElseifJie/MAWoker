@@ -4,6 +4,7 @@ import type { ArtifactRecord } from "../packages/domain/src/index.js";
 import { createTestDatabase, id } from "./support/test-database.js";
 
 const now = new Date("2026-09-06T00:00:00.000Z");
+const later = new Date("2030-09-06T00:00:00.000Z");
 
 async function seed(
   client: Awaited<ReturnType<typeof createTestDatabase>>["client"],
@@ -42,17 +43,38 @@ async function seed(
   return { userId, otherUserId, sessionId };
 }
 
+function driveFile(
+  ownerUserId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const driveFileId = id();
+  return {
+    id: driveFileId,
+    ownerUserId,
+    origin: "artifact" as const,
+    objectKey: `tenants/${ownerUserId}/drive/artifact/${driveFileId}/report.txt`,
+    name: "report.txt",
+    mimeType: "text/plain",
+    sizeBytes: 5,
+    runAfter: later,
+    writeLeaseUntil: later,
+    ...overrides,
+  };
+}
+
 function artifact(
   ownerUserId: string,
   sessionId: string,
+  driveFileId: string,
   overrides: Partial<ArtifactRecord> = {},
 ): ArtifactRecord {
   return {
     id: id(),
     ownerUserId,
     sessionId,
-    arkFileId: "ark-output-1",
-    tosObjectKey: `private/${ownerUserId}/${sessionId}/ark-output-1`,
+    arkFileId: `ark-output-${id()}`,
+    driveFileId,
+    tosObjectKey: `tenants/${ownerUserId}/drive/artifact/${driveFileId}/report.txt`,
     name: "report.txt",
     mimeType: "text/plain",
     sizeBytes: 5,
@@ -65,68 +87,46 @@ function artifact(
   };
 }
 
-async function commitArtifact(
-  repository: ReturnType<typeof createRepositories>["artifacts"],
-  record: ArtifactRecord,
+/** Stages and commits a drive object, returning the committed association. */
+async function commit(
+  repositories: ReturnType<typeof createRepositories>,
+  userId: string,
+  sessionId: string,
 ) {
-  const stagingCleanupJobId = id();
-  await repository.stageCleanup({
-    id: stagingCleanupJobId,
-    ownerUserId: record.ownerUserId,
-    sessionId: record.sessionId,
-    objectKey: record.tosObjectKey,
-    runAfter: new Date("2030-09-06T00:00:00.000Z"),
+  const staged = driveFile(userId);
+  await repositories.driveFiles.stage({
+    id: staged.id,
+    ownerUserId: staged.ownerUserId,
+    origin: staged.origin,
+    objectKey: staged.objectKey,
+    name: staged.name,
+    mimeType: staged.mimeType,
+    sizeBytes: staged.sizeBytes,
+    sourceSessionId: sessionId,
+    runAfter: staged.runAfter,
+    writeLeaseUntil: staged.writeLeaseUntil,
   });
-  return repository.commitCandidate({
-    record,
-    stagingCleanupJobId,
-    replacementCleanupJobId: id(),
+  await repositories.driveFiles.commit({
+    id: staged.id,
+    ownerUserId: staged.ownerUserId,
   });
+  const association = artifact(userId, sessionId, staged.id, {
+    tosObjectKey: staged.objectKey,
+  });
+  await repositories.artifacts.upsertAssociation(association);
+  return association;
 }
 
-describe("Artifact database integration", () => {
-  it("upserts Session-scoped metadata and lists only owned artifacts", async () => {
+describe("Drive and artifact database integration", () => {
+  it("commits a staged drive object and retires its cleanup intent", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
-    const { userId, otherUserId, sessionId } = await seed(database.client);
-    const initial = artifact(userId, sessionId);
+    const { userId, sessionId } = await seed(database.client);
 
-    await commitArtifact(repositories.artifacts, initial);
-    const refreshedKey = `${initial.tosObjectKey}/refresh`;
-    const updated = await commitArtifact(repositories.artifacts, {
-      ...initial,
-      id: id(),
-      tosObjectKey: refreshedKey,
-      name: "renamed.md",
-      mimeType: "text/markdown",
-      sizeBytes: 7,
-      generatedAt: new Date("2026-09-06T01:00:00.000Z"),
-    });
-
-    expect(updated).toMatchObject({
-      activated: true,
-      artifact: {
-        id: initial.id,
-        tosObjectKey: refreshedKey,
-        name: "renamed.md",
-        mimeType: "text/markdown",
-        sizeBytes: 7,
-      },
-    });
-    const oldKeyCleanup = await database.client.query<{
-      status: string;
-      object_key: string;
-    }>(
-      `select status::text, payload ->> 'objectKey' as object_key
-         from background_jobs
-        where type = 'cleanup_artifact_object'
-          and status = 'pending'
-          and payload ->> 'objectKey' = $1`,
-      [initial.tosObjectKey],
-    );
-    expect(oldKeyCleanup.rows).toEqual([
-      { status: "pending", object_key: initial.tosObjectKey },
-    ]);
+    const association = await commit(repositories, userId, sessionId);
+    await expect(
+      repositories.driveFiles.findOwned(userId, association.driveFileId),
+    ).resolves.toMatchObject({ deletionState: "none", writeLeaseUntil: null });
     await expect(
       repositories.artifacts.listOwned(userId),
     ).resolves.toHaveLength(1);
@@ -136,717 +136,331 @@ describe("Artifact database integration", () => {
     await expect(
       repositories.artifacts.listOwned(userId, id()),
     ).resolves.toEqual([]);
-    await expect(
-      repositories.artifacts.listOwned(otherUserId),
-    ).resolves.toEqual([]);
+
+    const jobs = await database.client.query<{ status: string }>(
+      `select status::text from background_jobs
+        where id = $1 and type = 'cleanup_drive_object'`,
+      [association.driveFileId],
+    );
+    expect(jobs.rows).toEqual([{ status: "succeeded" }]);
     await database.close();
   });
 
-  it("queues one deletion job and exposes retry/final-failure state", async () => {
+  it("keeps a staged row and its cleanup intent when the write never commits", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
     const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
+    const staged = driveFile(userId);
 
-    await repositories.artifacts.beginDelete(record.id, userId);
-    await repositories.artifacts.beginDelete(record.id, userId);
+    await repositories.driveFiles.stage({
+      id: staged.id,
+      ownerUserId: userId,
+      origin: "artifact",
+      objectKey: staged.objectKey,
+      name: staged.name,
+      mimeType: staged.mimeType,
+      sizeBytes: staged.sizeBytes,
+      sourceSessionId: sessionId,
+      runAfter: later,
+      writeLeaseUntil: later,
+    });
+    // A crash here leaves the row pending, never visible as a live object.
+    await expect(repositories.artifacts.listOwned(userId)).resolves.toEqual([]);
+    const rows = await database.client.query<{ deletion_state: string }>(
+      `select deletion_state::text from drive_files where id = $1`,
+      [staged.id],
+    );
+    expect(rows.rows).toEqual([{ deletion_state: "pending" }]);
+    await database.close();
+  });
+
+  it("clears the write lease when a failed write releases its claim", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const staged = driveFile(userId);
+    await repositories.driveFiles.stage({
+      id: staged.id,
+      ownerUserId: userId,
+      origin: "artifact",
+      objectKey: staged.objectKey,
+      name: staged.name,
+      mimeType: staged.mimeType,
+      sizeBytes: staged.sizeBytes,
+      sourceSessionId: sessionId,
+      runAfter: later,
+      writeLeaseUntil: later,
+    });
+    await repositories.driveFiles.release(staged.id, userId);
+
+    const job = await database.client.query<{
+      generation: number;
+      lease: string | null;
+      status: string;
+    }>(
+      `select (payload ->> 'cleanupGeneration')::integer as generation,
+              payload ->> 'uploadInProgressUntil' as lease,
+              status::text as status
+         from background_jobs where id = $1`,
+      [staged.id],
+    );
+    expect(job.rows[0]).toEqual({
+      generation: 1,
+      lease: null,
+      status: "pending",
+    });
+    await database.close();
+  });
+
+  it("tombstones an artifact and refuses to resurrect it while hidden", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const association = await commit(repositories, userId, sessionId);
+
+    await repositories.artifacts.requestDelete(association.id, userId, now);
+    await expect(
+      repositories.artifacts.markDeleted(association.id, userId),
+    ).resolves.toBe(true);
+    await expect(
+      repositories.artifacts.findDeleting(userId, association.id),
+    ).resolves.toMatchObject({ deletionState: "deleted" });
+    await expect(repositories.artifacts.listOwned(userId)).resolves.toEqual([]);
+
+    // Re-syncing the same Ark file must not bring the tombstone back to life.
+    await repositories.artifacts.upsertAssociation({
+      ...association,
+      deletionState: "deleted",
+      name: "",
+    });
+    const retained = await database.client.query<{ deletion_state: string }>(
+      `select deletion_state::text from artifacts where id = $1`,
+      [association.id],
+    );
+    expect(retained.rows[0]!.deletion_state).toBe("none");
+    await database.close();
+  });
+
+  it("orphans a drive object on requestDelete and leaves its bytes addressable", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const association = await commit(repositories, userId, sessionId);
+
+    await repositories.artifacts.requestDelete(association.id, userId, now);
+    const drive = await repositories.driveFiles.findOwned(
+      userId,
+      association.driveFileId,
+    );
+    expect(drive).toMatchObject({ deletionState: "none" });
+    expect(drive!.orphanedAt).not.toBeNull();
+    await database.close();
+  });
+
+  it("reaps an explicitly deleted artifact and tombstones both rows", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const association = await commit(repositories, userId, sessionId);
+    await repositories.artifacts.requestDelete(association.id, userId, now);
+
+    // The GC enqueues the cleanup, which deletes the bytes and tombstones the
+    // drive row plus every association that pointed at it.
+    await repositories.driveFiles.claimOrphans({
+      limit: 10,
+      retentionMs: 0,
+      now,
+    });
+    const [claimed] = await repositories.jobs.claim({
+      workerId: "drive-worker",
+      limit: 1,
+      now,
+      types: ["cleanup_drive_object"],
+    });
+    expect(claimed).toBeDefined();
+    await expect(
+      repositories.driveFiles.markDeleted(association.driveFileId, userId),
+    ).resolves.toBe(true);
+
+    await expect(
+      repositories.driveFiles.findOwned(userId, association.driveFileId),
+    ).resolves.toMatchObject({ deletionState: "deleted" });
+    const associations = await database.client.query<{
+      deletion_state: string;
+    }>(`select deletion_state::text from artifacts where id = $1`, [
+      association.id,
+    ]);
+    expect(associations.rows[0]!.deletion_state).toBe("deleted");
+    await expect(repositories.artifacts.listOwned(userId)).resolves.toEqual([]);
+    await database.close();
+  });
+
+  it("enqueues each orphan exactly once and skips a live cleanup job", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const association = await commit(repositories, userId, sessionId);
+    await repositories.artifacts.requestDelete(association.id, userId, now);
+
+    await expect(
+      repositories.driveFiles.claimOrphans({
+        limit: 10,
+        retentionMs: 60_000,
+        now,
+      }),
+    ).resolves.toBe(0);
+    await expect(
+      repositories.driveFiles.claimOrphans({ limit: 10, retentionMs: 0, now }),
+    ).resolves.toBe(1);
+    // The re-armed job now counts as live, so a second scan is a no-op.
+    await expect(
+      repositories.driveFiles.claimOrphans({ limit: 10, retentionMs: 0, now }),
+    ).resolves.toBe(0);
+
     const jobs = await database.client.query<{
       count: number;
       status: string;
     }>(
       `select count(*)::integer as count, min(status::text) as status
-         from background_jobs where id = $1 group by id`,
-      [record.id],
+         from background_jobs where id = $1`,
+      [association.driveFileId],
     );
     expect(jobs.rows[0]).toEqual({ count: 1, status: "pending" });
+    await database.close();
+  });
+
+  it("does not reap an object that is still referenced by another Session", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const secondSessionId = id();
+    const agentId = id();
+    await database.client.query(
+      `insert into personal_agents
+        (id, owner_user_id, ark_agent_id, name, model_id, system_prompt,
+         ark_version, status)
+       values ($1, $2, 'ark-agent-2', 'Agent 2', 'model-a', 'Prompt', '1',
+               'active')`,
+      [agentId, userId],
+    );
+    await database.client.query(
+      `insert into sessions
+        (id, owner_user_id, ark_session_id, agent_kind, personal_agent_id,
+         ark_agent_id, agent_name, agent_version, environment_id)
+       values ($1, $2, 'ark-session-2', 'personal', $3, 'ark-agent-2',
+               'Agent 2', '1', 'environment-1')`,
+      [secondSessionId, userId, agentId],
+    );
+    const association = await commit(repositories, userId, sessionId);
+    // A second Session associates with the same drive object.
+    await repositories.artifacts.upsertAssociation({
+      ...association,
+      id: id(),
+      sessionId: secondSessionId,
+      arkFileId: "ark-output-second",
+    });
+
+    await repositories.sessionDeletion.orphanDriveFiles(userId, sessionId, now);
+    const drive = await repositories.driveFiles.findOwned(
+      userId,
+      association.driveFileId,
+    );
+    // Another Session still references it, so it must not be orphaned.
+    expect(drive!.orphanedAt).toBeNull();
+    await database.close();
+  });
+
+  it("orphans every drive object once its only Session is removed", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const association = await commit(repositories, userId, sessionId);
+
+    const orphaned = await repositories.sessionDeletion.orphanDriveFiles(
+      userId,
+      sessionId,
+      now,
+    );
+    expect(orphaned).toBe(1);
+    // The saga only marks local removal once the Session is mid-deletion.
+    await database.client.query(
+      `update sessions set deletion_state = 'pending' where id = $1`,
+      [sessionId],
+    );
+    await expect(
+      repositories.sessionDeletion.removeLocal(userId, sessionId),
+    ).resolves.toBe("removed");
+
+    // The association cascaded away but the drive row survives for the GC.
+    await expect(
+      repositories.driveFiles.findOwned(userId, association.driveFileId),
+    ).resolves.toMatchObject({ deletionState: "none" });
+    const drive = await repositories.driveFiles.findOwned(
+      userId,
+      association.driveFileId,
+    );
+    expect(drive!.orphanedAt).not.toBeNull();
+    await expect(
+      repositories.driveFiles.claimOrphans({ limit: 10, retentionMs: 0, now }),
+    ).resolves.toBe(1);
+    await database.close();
+  });
+
+  it("fails a drive cleanup after its lease expires on the final attempt", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, sessionId } = await seed(database.client);
+    const association = await commit(repositories, userId, sessionId);
+    await repositories.artifacts.requestDelete(association.id, userId, now);
+    await repositories.driveFiles.claimOrphans({
+      limit: 10,
+      retentionMs: 0,
+      now,
+    });
 
     const [claimed] = await repositories.jobs.claim({
-      workerId: "artifact-worker",
+      workerId: "drive-worker",
       limit: 1,
-      now: new Date("2030-09-06T00:00:00.000Z"),
-      types: ["delete_artifact"],
+      now,
+      types: ["cleanup_drive_object"],
     });
     expect(claimed).toBeDefined();
     await repositories.jobs.retry(
-      record.id,
-      "artifact-worker",
-      "provider leaked private/object/key",
+      claimed!.id,
+      "drive-worker",
+      "provider leaked a secret",
       true,
-      new Date("2030-09-06T00:00:00.000Z"),
+      now,
     );
-
-    await expect(
-      repositories.artifacts.findOwned(userId, record.id),
-    ).resolves.toMatchObject({
+    const drive = await repositories.driveFiles.findOwned(
+      userId,
+      association.driveFileId,
+    );
+    expect(drive).toMatchObject({
       deletionState: "deletion_failed",
-      lastErrorCode: "ARTIFACT_DELETE_FAILED",
-    });
-    const failedJob = await database.client.query<{ last_error: string }>(
-      `select last_error from background_jobs where id = $1`,
-      [record.id],
-    );
-    expect(failedJob.rows[0]?.last_error).toBe("ARTIFACT_DELETE_FAILED");
-    await database.close();
-  });
-
-  it("retains a minimal tombstone that rejects later artifact upserts", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
-    await repositories.artifacts.beginDelete(record.id, userId);
-
-    await expect(
-      repositories.artifacts.markDeleted(record.id, userId),
-    ).resolves.toBe(true);
-    await database.client.query(
-      `update background_jobs
-          set status = 'succeeded',
-              locked_at = null,
-              locked_by = null
-        where id = $1`,
-      [record.id],
-    );
-    await expect(
-      commitArtifact(repositories.artifacts, {
-        ...record,
-        id: id(),
-        tosObjectKey: `${record.tosObjectKey}/staging`,
-        name: "resurrected.txt",
-        updatedAt: new Date("2030-09-06T00:00:00.000Z"),
-      }),
-    ).resolves.toMatchObject({
-      activated: false,
-      artifact: {
-        id: record.id,
-        deletionState: "deleted",
-        name: "",
-        sizeBytes: 0,
-      },
-    });
-    await expect(
-      repositories.artifacts.findDeleting(userId, record.id),
-    ).resolves.toMatchObject({ deletionState: "deleted" });
-    await expect(repositories.artifacts.listOwned(userId)).resolves.toEqual([]);
-
-    const retained = await database.client.query<{
-      owner_user_id: string;
-      session_id: string;
-      ark_file_id: string;
-      deletion_state: string;
-      job_status: string;
-    }>(
-      `select artifact.owner_user_id, artifact.session_id,
-              artifact.ark_file_id, artifact.deletion_state,
-              job.status as job_status
-         from artifacts artifact
-         join background_jobs job on job.id = artifact.id
-        where artifact.id = $1`,
-      [record.id],
-    );
-    expect(retained.rows[0]).toEqual({
-      owner_user_id: userId,
-      session_id: sessionId,
-      ark_file_id: record.arkFileId,
-      deletion_state: "deleted",
-      job_status: "succeeded",
+      lastErrorCode: "DRIVE_CLEANUP_FAILED",
     });
     await database.close();
   });
 
-  it("rearms only failed repeated deletion requests", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
-    await repositories.artifacts.beginDelete(record.id, userId);
-    await database.client.query(
-      `update background_jobs
-          set attempts = 3,
-              run_after = '2040-09-06T00:00:00.000Z',
-              last_error = 'retry failure'
-        where id = $1`,
-      [record.id],
-    );
-    const pending = await database.client.query<{
-      status: string;
-      attempts: number;
-      run_after: Date;
-      locked_at: Date | null;
-      locked_by: string | null;
-      last_error: string | null;
-    }>(
-      `select status::text, attempts, run_after, locked_at, locked_by,
-              last_error
-         from background_jobs
-        where id = $1`,
-      [record.id],
-    );
-
-    await repositories.artifacts.beginDelete(record.id, userId);
-    const unchanged = await database.client.query<{
-      status: string;
-      attempts: number;
-      run_after: Date;
-      locked_at: Date | null;
-      locked_by: string | null;
-      last_error: string | null;
-    }>(
-      `select status::text, attempts, run_after, locked_at, locked_by,
-              last_error
-         from background_jobs
-        where id = $1`,
-      [record.id],
-    );
-    expect(unchanged.rows).toEqual(pending.rows);
-
-    await database.client.query(
-      `update background_jobs
-          set status = 'failed',
-              attempts = max_attempts,
-              locked_at = '2030-09-06T00:00:00.000Z',
-              locked_by = 'terminal-worker',
-              last_error = 'terminal failure'
-        where id = $1`,
-      [record.id],
-    );
-    await repositories.artifacts.beginDelete(record.id, userId);
-    const rearmed = await database.client.query<{
-      status: string;
-      attempts: number;
-      locked_at: Date | null;
-      locked_by: string | null;
-      last_error: string | null;
-    }>(
-      `select status::text, attempts, locked_at, locked_by, last_error
-         from background_jobs
-        where id = $1`,
-      [record.id],
-    );
-    expect(rearmed.rows[0]).toEqual({
-      status: "pending",
-      attempts: 0,
-      locked_at: null,
-      locked_by: null,
-      last_error: null,
-    });
-    await database.close();
-  });
-
-  it("rearms exhausted tombstone cleanup and deletion jobs from attempt zero", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
-    await repositories.artifacts.beginDelete(record.id, userId);
-
-    const stagingCleanupJobId = id();
-    const stagedObjectKey = `${record.tosObjectKey}/tombstone-race`;
-    await repositories.artifacts.stageCleanup({
-      id: stagingCleanupJobId,
-      ownerUserId: userId,
-      sessionId,
-      objectKey: stagedObjectKey,
-      runAfter: new Date("2040-09-06T00:00:00.000Z"),
-    });
-    await database.client.query(
-      `update background_jobs
-          set status = 'failed',
-              attempts = max_attempts,
-              locked_at = '2030-09-06T00:00:00.000Z',
-              locked_by = 'terminal-worker',
-              last_error = 'terminal failure'
-        where id in ($1, $2)`,
-      [record.id, stagingCleanupJobId],
-    );
-
-    await expect(
-      repositories.artifacts.commitCandidate({
-        record: {
-          ...record,
-          id: id(),
-          tosObjectKey: stagedObjectKey,
-        },
-        stagingCleanupJobId,
-        replacementCleanupJobId: id(),
-      }),
-    ).resolves.toMatchObject({ activated: false });
-
-    const rearmed = await database.client.query<{
-      id: string;
-      status: string;
-      attempts: number;
-      locked_at: Date | null;
-      locked_by: string | null;
-      last_error: string | null;
-    }>(
-      `select id, status::text, attempts, locked_at, locked_by, last_error
-         from background_jobs
-        where id in ($1, $2)
-        order by id`,
-      [record.id, stagingCleanupJobId],
-    );
-    expect(rearmed.rows).toEqual(
-      [record.id, stagingCleanupJobId].sort().map((jobId) => ({
-        id: jobId,
-        status: "pending",
-        attempts: 0,
-        locked_at: null,
-        locked_by: null,
-        last_error: null,
-      })),
-    );
-
-    const claimed = await repositories.jobs.claim({
-      workerId: "rearmed-worker",
-      limit: 2,
-      now: new Date("2035-09-06T00:00:00.000Z"),
-      types: ["delete_artifact", "cleanup_artifact_object"],
-    });
-    expect(claimed).toEqual([
-      expect.objectContaining({ id: stagingCleanupJobId, attempts: 1 }),
-      expect.objectContaining({ id: record.id, attempts: 1 }),
-    ]);
-    await database.close();
-  });
-
-  it("does not alter pending cleanup or actively leased deletion jobs", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
-    await repositories.artifacts.beginDelete(record.id, userId);
-    await repositories.jobs.claim({
-      workerId: "active-deletion-worker",
-      limit: 1,
-      now: new Date("2030-09-06T00:00:00.000Z"),
-      types: ["delete_artifact"],
-    });
-
-    const stagingCleanupJobId = id();
-    const stagedObjectKey = `${record.tosObjectKey}/pending-cleanup`;
-    await repositories.artifacts.stageCleanup({
-      id: stagingCleanupJobId,
-      ownerUserId: userId,
-      sessionId,
-      objectKey: stagedObjectKey,
-      runAfter: new Date("2040-09-06T00:00:00.000Z"),
-    });
-    const before = await database.client.query<{
-      id: string;
-      status: string;
-      attempts: number;
-      run_after: Date;
-      locked_at: Date | null;
-      locked_by: string | null;
-      last_error: string | null;
-    }>(
-      `select id, status::text, attempts, run_after, locked_at, locked_by,
-              last_error
-         from background_jobs
-        where id in ($1, $2)
-        order by id`,
-      [record.id, stagingCleanupJobId],
-    );
-
-    await repositories.artifacts.commitCandidate({
-      record: {
-        ...record,
-        id: id(),
-        tosObjectKey: stagedObjectKey,
-      },
-      stagingCleanupJobId,
-      replacementCleanupJobId: id(),
-    });
-
-    const after = await database.client.query<{
-      id: string;
-      status: string;
-      attempts: number;
-      run_after: Date;
-      locked_at: Date | null;
-      locked_by: string | null;
-      last_error: string | null;
-    }>(
-      `select id, status::text, attempts, run_after, locked_at, locked_by,
-              last_error
-         from background_jobs
-        where id in ($1, $2)
-        order by id`,
-      [record.id, stagingCleanupJobId],
-    );
-    expect(after.rows).toEqual(before.rows);
-    await database.close();
-  });
-
-  it("converges when tombstone rearm races a deletion claim", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
-    await repositories.artifacts.beginDelete(record.id, userId);
-
-    const stagingCleanupJobId = id();
-    const stagedObjectKey = `${record.tosObjectKey}/concurrent-rearm`;
-    await repositories.artifacts.stageCleanup({
-      id: stagingCleanupJobId,
-      ownerUserId: userId,
-      sessionId,
-      objectKey: stagedObjectKey,
-      runAfter: new Date("2040-09-06T00:00:00.000Z"),
-    });
-    await database.client.query(
-      `update background_jobs
-          set status = 'failed',
-              attempts = max_attempts,
-              last_error = 'terminal failure'
-        where id in ($1, $2)`,
-      [record.id, stagingCleanupJobId],
-    );
-    const candidate = {
-      record: {
-        ...record,
-        id: id(),
-        tosObjectKey: stagedObjectKey,
-      },
-      stagingCleanupJobId,
-      replacementCleanupJobId: id(),
-    };
-    const claimAt = new Date("2035-09-06T00:00:00.000Z");
-
-    const [, racedClaims] = await Promise.all([
-      repositories.artifacts.commitCandidate(candidate),
-      repositories.jobs.claim({
-        workerId: "claim-worker",
-        limit: 1,
-        now: claimAt,
-        types: ["delete_artifact"],
-      }),
-    ]);
-    const claims =
-      racedClaims.length > 0
-        ? racedClaims
-        : await repositories.jobs.claim({
-            workerId: "claim-worker",
-            limit: 1,
-            now: claimAt,
-            types: ["delete_artifact"],
-          });
-    expect(claims).toEqual([
-      expect.objectContaining({
-        id: record.id,
-        attempts: 1,
-        lockedBy: "claim-worker",
-      }),
-    ]);
-
-    const [, rivalClaims] = await Promise.all([
-      repositories.artifacts.commitCandidate(candidate),
-      repositories.jobs.claim({
-        workerId: "rival-worker",
-        limit: 1,
-        now: new Date("2035-09-06T00:01:00.000Z"),
-        types: ["delete_artifact"],
-      }),
-    ]);
-    expect(rivalClaims).toEqual([]);
-    const leased = await database.client.query<{
-      status: string;
-      attempts: number;
-      locked_by: string | null;
-    }>(
-      `select status::text, attempts, locked_by
-         from background_jobs
-        where id = $1`,
-      [record.id],
-    );
-    expect(leased.rows[0]).toEqual({
-      status: "running",
-      attempts: 1,
-      locked_by: "claim-worker",
-    });
-    await database.close();
-  });
-
-  it("replaces leaked errors when an artifact deletion lease expires", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
-    await repositories.artifacts.beginDelete(record.id, userId);
-    await repositories.jobs.claim({
-      workerId: "crashed-worker",
-      limit: 1,
-      now: new Date("2030-09-06T00:00:00.000Z"),
-      types: ["delete_artifact"],
-    });
-    await database.client.query(
-      `update background_jobs
-          set attempts = max_attempts,
-              locked_at = $2,
-              last_error = 'provider leaked a secret'
-        where id = $1`,
-      [record.id, new Date("2020-09-06T00:00:00.000Z")],
-    );
-
-    await repositories.jobs.claim({
-      workerId: "recovery-worker",
-      limit: 1,
-      now: new Date("2031-09-06T00:00:00.000Z"),
-      types: ["delete_artifact"],
-    });
-
-    const failed = await database.client.query<{
-      last_error: string;
-    }>(`select last_error from background_jobs where id = $1`, [record.id]);
-    expect(failed.rows[0]?.last_error).toBe("ARTIFACT_DELETE_LEASE_EXPIRED");
-    await expect(
-      repositories.artifacts.findOwned(userId, record.id),
-    ).resolves.toMatchObject({
-      deletionState: "deletion_failed",
-      lastErrorCode: "ARTIFACT_DELETE_LEASE_EXPIRED",
-    });
-    await database.close();
-  });
-
-  it("leases, retries, and reclaims durable artifact object cleanup", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const cleanupId = id();
-    const firstClaimAt = new Date("2030-09-06T00:00:00.000Z");
-    await repositories.artifacts.stageCleanup({
-      id: cleanupId,
-      ownerUserId: userId,
-      sessionId,
-      objectKey: `tenants/${userId}/sessions/${sessionId}/artifacts/file/version`,
-      runAfter: firstClaimAt,
-    });
-
-    await expect(
-      repositories.jobs.claim({
-        workerId: "cleanup-worker-1",
-        limit: 1,
-        now: firstClaimAt,
-        types: ["cleanup_artifact_object"],
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: cleanupId, attempts: 1 }),
-    ]);
-    await expect(
-      repositories.jobs.claim({
-        workerId: "cleanup-worker-2",
-        limit: 1,
-        now: new Date("2030-09-06T00:04:59.000Z"),
-        types: ["cleanup_artifact_object"],
-      }),
-    ).resolves.toEqual([]);
-
-    const [reclaimed] = await repositories.jobs.claim({
-      workerId: "cleanup-worker-2",
-      limit: 1,
-      now: new Date("2030-09-06T00:05:01.000Z"),
-      types: ["cleanup_artifact_object"],
-    });
-    expect(reclaimed).toMatchObject({ id: cleanupId, attempts: 2 });
-    await repositories.jobs.retry(
-      cleanupId,
-      "cleanup-worker-2",
-      "provider leaked a private object key",
-      false,
-      new Date("2030-09-06T00:05:01.000Z"),
-    );
-
-    const retry = await database.client.query<{
-      status: string;
-      last_error: string;
-    }>(
-      `select status::text, last_error
-         from background_jobs
-        where id = $1`,
-      [cleanupId],
-    );
-    expect(retry.rows[0]).toEqual({
-      status: "pending",
-      last_error: "ARTIFACT_CLEANUP_FAILED",
-    });
-    await expect(
-      repositories.jobs.claim({
-        workerId: "cleanup-worker-3",
-        limit: 1,
-        now: new Date("2030-09-06T00:06:02.000Z"),
-        types: ["cleanup_artifact_object"],
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: cleanupId, attempts: 3 }),
-    ]);
-    await database.close();
-  });
-
-  it("rejects stale cleanup completion without releasing its lease", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const cleanupId = id();
-    const objectKey = `tenants/${userId}/sessions/${sessionId}/artifacts/file/late`;
-    const claimedAt = new Date("2030-09-06T00:00:00.000Z");
-    await repositories.artifacts.stageCleanup({
-      id: cleanupId,
-      ownerUserId: userId,
-      sessionId,
-      objectKey,
-      runAfter: claimedAt,
-      uploadInProgressUntil: new Date("2030-09-06T00:05:00.000Z"),
-    });
-    const [claimed] = await repositories.jobs.claim({
-      workerId: "stale-cleanup-worker",
-      limit: 1,
-      now: claimedAt,
-      types: ["cleanup_artifact_object"],
-    });
-    await repositories.sessionLifecycle.beginDelete(userId, sessionId);
-    await repositories.artifacts.commitCandidate({
-      record: artifact(userId, sessionId, { tosObjectKey: objectKey }),
-      stagingCleanupJobId: cleanupId,
-      replacementCleanupJobId: id(),
-    });
-
-    await expect(
-      repositories.jobs.succeedArtifactCleanup(
-        cleanupId,
-        "stale-cleanup-worker",
-        0,
-      ),
-    ).resolves.toBe(false);
-    await expect(
-      repositories.jobs.deferArtifactCleanup(
-        cleanupId,
-        "stale-cleanup-worker",
-        0,
-      ),
-    ).resolves.toBe(false);
-    await expect(
-      repositories.jobs.retryArtifactCleanup(
-        cleanupId,
-        "stale-cleanup-worker",
-        0,
-        "stale failure",
-        true,
-        claimedAt,
-      ),
-    ).resolves.toBe(false);
-
-    const stored = await database.client.query<{
-      status: string;
-      attempts: number;
-      locked_at: Date;
-      locked_by: string;
-      cleanup_generation: number;
-    }>(
-      `select status::text, attempts, locked_at, locked_by,
-              (payload ->> 'cleanupGeneration')::integer cleanup_generation
-         from background_jobs
-        where id = $1`,
-      [cleanupId],
-    );
-    await database.close();
-
-    expect(claimed).toMatchObject({
-      lockedBy: "stale-cleanup-worker",
-      payload: { cleanupGeneration: 0 },
-    });
-    expect(new Date(claimed!.lockedAt).getTime()).toBe(claimedAt.getTime());
-    expect(stored.rows[0]).toEqual({
-      status: "running",
-      attempts: 0,
-      locked_at: claimedAt,
-      locked_by: "stale-cleanup-worker",
-      cleanup_generation: 1,
-    });
-  });
-
-  it("derives retry delay from the current attempt and caps exponential backoff", async () => {
-    const database = await createTestDatabase();
-    const repositories = createRepositories(database.db);
-    const { userId, sessionId } = await seed(database.client);
-    const retriedAt = new Date("2030-09-06T00:00:00.123Z");
-    const cases = [
-      { attempts: 1, delayMs: 200 },
-      { attempts: 4, delayMs: 1_600 },
-      { attempts: 10, delayMs: 60_000 },
-    ];
-    const jobIds: string[] = [];
-
-    for (const testCase of cases) {
-      const jobId = id();
-      jobIds.push(jobId);
-      await repositories.artifacts.stageCleanup({
-        id: jobId,
-        ownerUserId: userId,
-        sessionId,
-        objectKey: `tenants/${userId}/sessions/${sessionId}/artifacts/${jobId}/version`,
-        runAfter: retriedAt,
-      });
-      await database.client.query(
-        `update background_jobs
-            set status = 'running', attempts = $2, max_attempts = 20,
-                locked_at = $3, locked_by = 'retry-worker'
-          where id = $1`,
-        [jobId, testCase.attempts, retriedAt],
-      );
-
-      await repositories.jobs.retry(
-        jobId,
-        "retry-worker",
-        "temporary failure",
-        false,
-        retriedAt,
-      );
-    }
-
-    const scheduled = await database.client.query<{
-      id: string;
-      run_after: Date;
-    }>(
-      `select id, run_after
-         from background_jobs
-        where id = any($1::uuid[])`,
-      [jobIds],
-    );
-    await database.close();
-
-    expect(
-      jobIds.map((jobId, index) => ({
-        attempts: cases[index]!.attempts,
-        delayMs:
-          new Date(
-            scheduled.rows.find(({ id: storedId }) => storedId === jobId)!
-              .run_after,
-          ).getTime() - retriedAt.getTime(),
-      })),
-    ).toEqual(cases);
-  });
-
-  it("does not mutate another tenant's artifact", async () => {
+  it("does not mutate another tenant's drive file", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
     const { userId, otherUserId, sessionId } = await seed(database.client);
-    const record = artifact(userId, sessionId);
-    await commitArtifact(repositories.artifacts, record);
+    const association = await commit(repositories, userId, sessionId);
 
     await expect(
-      repositories.artifacts.beginDelete(record.id, otherUserId),
+      repositories.driveFiles.findOwned(otherUserId, association.driveFileId),
     ).resolves.toBeUndefined();
     await expect(
-      repositories.artifacts.findOwned(userId, record.id),
-    ).resolves.toMatchObject({ deletionState: "none" });
+      repositories.driveFiles.orphan(association.driveFileId, otherUserId, now),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.driveFiles.markDeleted(association.driveFileId, otherUserId),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.artifacts.findOwned(otherUserId, association.id),
+    ).resolves.toBeUndefined();
     await database.close();
   });
 });

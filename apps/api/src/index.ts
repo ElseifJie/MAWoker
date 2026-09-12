@@ -5,8 +5,14 @@ import { ApplicationSessionService, hashPassword } from "@pwa/auth";
 import { parseServerConfig } from "@pwa/config";
 import { createAuthStore, createDatabase, createRepositories } from "@pwa/db";
 import {
+  AdminUsageService,
+  AdminUserDetailService,
   ArtifactService,
+  AuditService,
+  DriveFileService,
+  LoggingNotifier,
   PlatformAgentService,
+  QuotaPolicyService,
   QuotaUsageService,
   SessionInputService,
   SessionService,
@@ -40,15 +46,36 @@ const userAgents = new UserAgentService({
   modelAllowlist: config.modelAllowlist,
   createId: randomUUID,
 });
+const notifier = new LoggingNotifier();
 const admin = new PlatformAgentService({
   repository: repositories.platformAgents as unknown as PlatformAgentRepository,
   ark,
   modelAllowlist: config.modelAllowlist,
   createId: randomUUID,
   passwordHasher: { hash: hashPassword },
+  notifier,
+});
+const adminUsage = new AdminUsageService({
+  repository: {
+    overview: (input) => repositories.usage.adminOverview(input),
+    byAgents: (input) => repositories.usage.byAgents(input),
+  },
+});
+const quotaPolicy = new QuotaPolicyService({
+  repository: repositories.quotaPolicies,
+  notifier,
 });
 const quotaUsage = new QuotaUsageService({
   repository: repositories.usage,
+});
+const audit = new AuditService({ repository: repositories.auditLogs });
+const adminUserDetail = new AdminUserDetailService({
+  repository: {
+    getUser: repositories.adminUsers.getUser,
+    listSessions: repositories.adminUsers.listSessions,
+    summary: repositories.usage.summary,
+  },
+  audit,
 });
 const sessions = new SessionService({
   repository: repositories.sessionLifecycle,
@@ -62,8 +89,14 @@ const inputs = new SessionInputService({
   ark,
   createId: randomUUID,
 });
+const driveFiles = new DriveFileService({
+  repository: repositories.driveFiles,
+  storage: artifactStorage,
+  createId: randomUUID,
+});
 const artifacts = new ArtifactService({
   repository: repositories.artifacts,
+  drive: driveFiles,
   ark,
   storage: artifactStorage,
   createId: randomUUID,
@@ -71,6 +104,10 @@ const artifacts = new ArtifactService({
 const app = buildApp({
   auth,
   admin,
+  audit,
+  adminUsage,
+  quotaPolicy,
+  adminUserDetail,
   userAgents,
   sessions,
   inputs,

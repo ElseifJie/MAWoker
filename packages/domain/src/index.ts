@@ -75,7 +75,15 @@ export class TenantAuthorizationService {
 }
 
 export * from "./platform-agents.js";
+export * from "./permissions.js";
+export * from "./audit.js";
+export * from "./notifications.js";
+export * from "./admin-usage.js";
+export * from "./admin-users.js";
+export * from "./quota-policy.js";
 export * from "./artifacts.js";
+export * from "./drive-files.js";
+export * from "./storage-keys.js";
 export * from "./session-inputs.js";
 export * from "./sessions.js";
 export * from "./usage.js";

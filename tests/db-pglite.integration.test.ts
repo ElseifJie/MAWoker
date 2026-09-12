@@ -71,6 +71,7 @@ describe("database schema in PGlite", () => {
     expect(result.rows.map(({ table_name }) => table_name)).toEqual(
       expect.arrayContaining([
         "artifacts",
+        "drive_files",
         "audit_logs",
         "auth_sessions",
         "background_jobs",
@@ -309,13 +310,21 @@ describe("database schema in PGlite", () => {
         [id(), otherUserId, session.sessionId],
       ),
     ).rejects.toMatchObject({ code: "23503" });
+    const driveFileId = id();
+    await database.client.query(
+      `insert into drive_files
+         (id, owner_user_id, origin, tos_object_key, name, mime_type, size_bytes,
+          deletion_state)
+       values ($1, $2, 'artifact', $3, 'output.txt', 'text/plain', 1, 'none')`,
+      [driveFileId, otherUserId, `object-${driveFileId}`],
+    );
     await expect(
       database.client.query(
         `insert into artifacts
-          (id, owner_user_id, session_id, ark_file_id, tos_object_key, name,
+          (id, owner_user_id, session_id, ark_file_id, drive_file_id, name,
            mime_type, size_bytes, generated_at)
          values ($1, $2, $3, 'ark-file-1', $4, 'output.txt', 'text/plain', 1, now())`,
-        [id(), otherUserId, session.sessionId, `object-${id()}`],
+        [id(), otherUserId, session.sessionId, driveFileId],
       ),
     ).rejects.toMatchObject({ code: "23503" });
     await database.close();
@@ -403,13 +412,21 @@ describe("repositories in PGlite", () => {
                '/mnt/session/input.txt', 'bound', now() + interval '1 hour')`,
       [inputId, ownerId, session.sessionId],
     );
+    const driveFileId = id();
+    await database.client.query(
+      `insert into drive_files
+        (id, owner_user_id, origin, tos_object_key, name, mime_type, size_bytes,
+         source_session_id, deletion_state)
+       values ($1, $2, 'artifact', $3, 'result.txt', 'text/plain', 1, $4, 'none')`,
+      [driveFileId, ownerId, `tenant/${driveFileId}`, session.sessionId],
+    );
     await database.client.query(
       `insert into artifacts
-        (id, owner_user_id, session_id, ark_file_id, tos_object_key, name,
+        (id, owner_user_id, session_id, ark_file_id, drive_file_id, name,
          mime_type, size_bytes, generated_at)
        values ($1, $2, $3, 'ark-artifact-authz', $4, 'result.txt',
                'text/plain', 1, now())`,
-      [artifactId, ownerId, session.sessionId, `tenant/${artifactId}`],
+      [artifactId, ownerId, session.sessionId, driveFileId],
     );
     await database.client.query(
       `insert into usage_ledger

@@ -1,17 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
-import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { createRepositories } from "../packages/db/src/index.js";
 import {
   ArtifactService,
+  DriveFileService,
   ResourceNotFoundError,
-  type ArtifactRecord,
-  type ArtifactRepository,
 } from "../packages/domain/src/index.js";
 import { InMemoryArtifactStorage } from "../packages/storage/src/index.js";
+import { createTestDatabase } from "./support/test-database.js";
 
-const userId = "00000000-0000-4000-8000-000000000001";
-const otherUserId = "00000000-0000-4000-8000-000000000002";
-const sessionId = "00000000-0000-4000-8000-000000000003";
-const artifactId = "00000000-0000-4000-8000-000000000004";
+const exportBucket = "ark-exports";
+const arkSessionId = "ark-session-1";
 const now = new Date("2026-09-06T00:00:00.000Z");
 
 async function collect(stream: NodeJS.ReadableStream): Promise<Uint8Array> {
@@ -20,9 +19,6 @@ async function collect(stream: NodeJS.ReadableStream): Promise<Uint8Array> {
   return new Uint8Array(Buffer.concat(chunks));
 }
 
-const exportBucket = "ark-exports";
-
-/** The TOS location Ark reports for an export; mirrors `ArkArtifact.tos`. */
 function exportLocation(arkFileId: string): {
   bucket: string;
   objectKey: string;
@@ -38,7 +34,7 @@ function exportEntry(
 ) {
   return {
     id: arkFileId,
-    sessionId: overrides.sessionId ?? "ark-session-1",
+    sessionId: overrides.sessionId ?? arkSessionId,
     name,
     contentType: overrides.contentType ?? "text/plain",
     size,
@@ -47,597 +43,384 @@ function exportEntry(
   };
 }
 
-function setup() {
-  let nextId = 0;
-  const records = new Map<string, ArtifactRecord>();
-  const cleanupJobs = new Map<
-    string,
-    {
-      ownerUserId: string;
-      objectKey: string;
-      runAfter: Date;
-      status: "pending" | "succeeded";
-    }
-  >();
-  const stageCleanup = vi.fn(
-    async (input: {
-      id: string;
-      ownerUserId: string;
-      sessionId: string;
-      objectKey: string;
-      runAfter: Date;
-    }) => {
-      cleanupJobs.set(input.id, { ...input, status: "pending" });
-      return true;
-    },
+/**
+ * Seeds one tenant (user + personal agent + Session) so ArtifactService can run
+ * against the real repositories. Only the columns the flows actually touch are
+ * populated; everything else takes its default.
+ */
+async function seedTenant(
+  database: Awaited<ReturnType<typeof createTestDatabase>>,
+  index: string,
+) {
+  const userId = randomUUID();
+  const personalAgentId = randomUUID();
+  const sessionId = randomUUID();
+  await database.client.query(
+    `insert into users (id, auth_subject, email) values ($1, $2, $3)`,
+    [userId, `managed:${userId}`, `${index}@example.com`],
   );
-  const releaseCleanup = vi.fn(async (id: string, ownerUserId: string) => {
-    const cleanup = cleanupJobs.get(id);
-    if (cleanup?.ownerUserId === ownerUserId) {
-      cleanup.runAfter = now;
-    }
-  });
-  const commitCandidate = vi.fn(
-    async (input: {
-      record: ArtifactRecord;
-      stagingCleanupJobId: string;
-      replacementCleanupJobId: string;
-    }) => {
-      const existing = [...records.values()].find(
-        (record) =>
-          record.ownerUserId === input.record.ownerUserId &&
-          record.sessionId === input.record.sessionId &&
-          record.arkFileId === input.record.arkFileId,
-      );
-      const stagingCleanup = cleanupJobs.get(input.stagingCleanupJobId)!;
-      if (existing && existing.deletionState !== "none") {
-        stagingCleanup.runAfter = now;
-        return { artifact: existing, activated: false };
-      }
-      const record: ArtifactRecord = {
-        ...input.record,
-        id: existing?.id ?? input.record.id,
-        createdAt: existing?.createdAt ?? input.record.createdAt,
-      };
-      records.set(record.id, record);
-      stagingCleanup.status = "succeeded";
-      if (existing && existing.tosObjectKey !== record.tosObjectKey) {
-        cleanupJobs.set(input.replacementCleanupJobId, {
-          ownerUserId: record.ownerUserId,
-          objectKey: existing.tosObjectKey,
-          runAfter: now,
-          status: "pending",
-        });
-      }
-      return { artifact: record, activated: true };
-    },
+  await database.client.query(
+    `insert into personal_agents
+       (id, owner_user_id, ark_agent_id, name, description, model_id,
+        system_prompt, ark_version, status)
+     values ($1, $2, $3, $4, '', 'model-a', 'Prompt', '1', 'active')`,
+    [personalAgentId, userId, `ark-agent-${index}`, `${index} Agent`],
   );
-  const repository: ArtifactRepository = {
-    async findSessionOwned(ownerUserId, id) {
-      return ownerUserId === userId && id === sessionId
-        ? { id, arkSessionId: "ark-session-1" }
-        : undefined;
-    },
-    async listInputFileIds(ownerUserId, sourceSessionId) {
-      return ownerUserId === userId && sourceSessionId === sessionId
-        ? ["ark-input-1"]
-        : [];
-    },
-    async findBySource(ownerUserId, sourceSessionId, arkFileId) {
-      return [...records.values()].find(
-        (record) =>
-          record.ownerUserId === ownerUserId &&
-          record.sessionId === sourceSessionId &&
-          record.arkFileId === arkFileId,
-      );
-    },
-    stageCleanup,
-    commitCandidate,
-    releaseCleanup,
-    async listOwned(ownerUserId, sourceSessionId) {
-      return [...records.values()].filter(
-        (record) =>
-          record.ownerUserId === ownerUserId &&
-          record.deletionState === "none" &&
-          (!sourceSessionId || record.sessionId === sourceSessionId),
-      );
-    },
-    async findOwned(ownerUserId, id) {
-      const record = records.get(id);
-      return record?.ownerUserId === ownerUserId ? record : undefined;
-    },
-    async beginDelete(id, ownerUserId) {
-      const record = records.get(id);
-      if (!record || record.ownerUserId !== ownerUserId) return undefined;
-      const pending = { ...record, deletionState: "pending" as const };
-      records.set(id, pending);
-      return pending;
-    },
-    async findDeleting(ownerUserId, id) {
-      const record = records.get(id);
-      return record?.ownerUserId === ownerUserId &&
-        (record.deletionState === "pending" ||
-          record.deletionState === "deletion_failed")
-        ? record
-        : undefined;
-    },
-    async markDeleted(id, ownerUserId) {
-      const record = records.get(id);
-      if (!record || record.ownerUserId !== ownerUserId) return false;
-      records.set(id, {
-        ...record,
-        name: "",
-        mimeType: "application/octet-stream",
-        sizeBytes: 0,
-        deletionState: "deleted",
-        lastErrorCode: null,
-      });
-      return true;
-    },
-  };
-  const ark = {
-    listArtifacts: vi.fn(async () => [
-      exportEntry("ark-output-1", "report.txt", 5),
-      // A Session input: same purpose, but recorded as an input for the Session.
-      exportEntry("ark-input-1", "private.txt", 6),
-      // Ark reported an export with no storage location, so it is unreachable.
-      {
-        id: "ark-unlocated-1",
-        sessionId: "ark-session-1",
-        name: "lost.txt",
-        contentType: "text/plain",
-        size: 0,
-        createdAt: now.toISOString(),
-        tos: null,
-      },
-      // Belongs to another Session and must never sync into this one.
-      exportEntry("ark-other-session-1", "elsewhere.txt", 1, {
-        sessionId: "ark-session-2",
-      }),
-    ]),
-  };
+  await database.client.query(
+    `insert into sessions
+       (id, owner_user_id, ark_session_id, agent_kind, personal_agent_id,
+        ark_agent_id, agent_name, agent_version, environment_id, title, status)
+     values ($1, $2, $3, 'personal', $4, $5, $6, '1', 'environment-1',
+             $7, 'idle')`,
+    [
+      sessionId,
+      userId,
+      `${arkSessionId}-${index}`,
+      personalAgentId,
+      `ark-agent-${index}`,
+      `${index} Agent`,
+      `${index} Session`,
+    ],
+  );
+  return { userId, sessionId, arkSessionId: `${arkSessionId}-${index}` };
+}
+
+async function setup() {
+  const database = await createTestDatabase();
+  const repositories = createRepositories(database.db);
   const storage = new InMemoryArtifactStorage();
-  storage.putExternal(
-    exportLocation("ark-output-1"),
-    new TextEncoder().encode("hello"),
-    "text/plain",
-  );
-  storage.putExternal(
-    exportLocation("ark-input-1"),
-    new TextEncoder().encode("secret"),
-    "text/plain",
-  );
-  const service = new ArtifactService({
-    repository,
-    ark,
+  let nextId = 0;
+  const createId = () => {
+    nextId += 1;
+    return `00000000-0000-4000-8000-${String(nextId).padStart(12, "0")}`;
+  };
+  const drive = new DriveFileService({
+    repository: repositories.driveFiles,
     storage,
-    createId: () =>
-      nextId++ === 0
-        ? artifactId
-        : `00000000-0000-4000-8000-${String(nextId).padStart(12, "0")}`,
-    objectKey: (input) =>
-      `private/${input.ownerUserId}/${input.sessionId}/${input.arkFileId}/${
-        (input as typeof input & { versionId?: string }).versionId
-      }`,
+    createId,
+    now: () => now,
+  });
+  let artifacts: ReturnType<typeof exportEntry>[] = [];
+  const artifactService = new ArtifactService({
+    repository: repositories.artifacts,
+    drive,
+    ark: {
+      async listArtifacts(session) {
+        // Ark scopes exports to the Session, so the reported sessionId is the
+        // Ark session id the service asked about.
+        return artifacts.map((entry) => ({ ...entry, sessionId: session }));
+      },
+    },
+    storage,
+    createId,
+    now: () => now,
   });
   return {
-    service,
-    repository,
-    ark,
+    database,
+    repositories,
     storage,
-    readExternal: vi.spyOn(storage, "readExternal"),
-    records,
-    stageCleanup,
-    commitCandidate,
-    releaseCleanup,
-    cleanupJobs,
+    drive,
+    artifacts: artifactService,
+    setArtifacts(entries: ReturnType<typeof exportEntry>[]) {
+      artifacts = entries;
+    },
+    close: () => database.close(),
   };
 }
 
 describe("ArtifactService", () => {
-  it("syncs only Session outputs and idempotently refreshes metadata", async () => {
-    const state = setup();
-
-    await expect(
-      state.service.syncSession(sessionId, {
-        userId,
-        requestId: "request-1",
-      }),
-    ).resolves.toEqual([expect.objectContaining({ id: artifactId })]);
-    state.ark.listArtifacts.mockResolvedValueOnce([
-      exportEntry("ark-output-1", "report-renamed.txt", 7, {
-        contentType: "text/markdown",
-      }),
-    ]);
+  it("syncs Session outputs into a drive-sized object and refreshes idempotently", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("report body");
+    state.setArtifacts([exportEntry("ark-file-1", "report.txt", bytes.length)]);
     state.storage.putExternal(
-      exportLocation("ark-output-1"),
-      new TextEncoder().encode("updated"),
-      "text/markdown",
-    );
-
-    const synced = await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-2",
-    });
-
-    expect(synced).toEqual([
-      expect.objectContaining({
-        id: artifactId,
-        name: "report-renamed.txt",
-        mimeType: "text/markdown",
-        sizeBytes: 7,
-      }),
-    ]);
-    expect(state.records).toHaveLength(1);
-    expect(state.readExternal).toHaveBeenCalledTimes(2);
-    expect(
-      await collect(
-        await state.storage.openRead(
-          [...state.records.values()][0]!.tosObjectKey,
-        ),
-      ),
-    ).toEqual(new TextEncoder().encode("updated"));
-  });
-
-  it("rejects cross-tenant Session sync before calling Ark or storage", async () => {
-    const state = setup();
-
-    await expect(
-      state.service.syncSession(sessionId, {
-        userId: otherUserId,
-        requestId: "request-1",
-      }),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError);
-
-    expect(state.ark.listArtifacts).not.toHaveBeenCalled();
-    expect(state.storage.keys()).toEqual([]);
-  });
-
-  it("streams a large Ark artifact to storage with length and cancellation", async () => {
-    const state = setup();
-    const chunk = Buffer.alloc(1024 * 1024, 7);
-    const chunkCount = 32;
-    let produced = 0;
-    const source = Readable.from(
-      (async function* () {
-        while (produced < chunkCount) {
-          produced += 1;
-          yield chunk;
-        }
-      })(),
-    );
-    const readExternal = vi.fn(async () => source);
-    const controller = new AbortController();
-    state.ark.listArtifacts.mockResolvedValueOnce([
-      exportEntry("ark-output-1", "huge.bin", chunk.length * chunkCount, {
-        contentType: "application/octet-stream",
-      }),
-    ]);
-    const write = vi.fn(
-      async (
-        _key: string,
-        stream: Readable,
-        metadata: { contentType: string; contentLength?: number },
-        signal?: AbortSignal,
-      ) => {
-        // The length comes from Ark's own metadata, not from the stream.
-        expect(metadata.contentLength).toBe(chunk.length * chunkCount);
-        expect(signal).toBe(controller.signal);
-        let consumed = 0;
-        for await (const value of stream) {
-          consumed += Buffer.byteLength(value);
-        }
-        expect(consumed).toBe(chunk.length * chunkCount);
-      },
-    );
-    const service = new ArtifactService({
-      repository: state.repository,
-      ark: state.ark,
-      storage: {
-        write,
-        openRead: state.storage.openRead.bind(state.storage),
-        readExternal,
-        delete: state.storage.delete.bind(state.storage),
-      },
-      createId: () => artifactId,
-    });
-
-    await service.syncSession(sessionId, {
-      userId,
-      requestId: "request-large",
-      signal: controller.signal,
-    });
-
-    expect(write).toHaveBeenCalledOnce();
-    expect(produced).toBe(chunkCount);
-    expect(readExternal).toHaveBeenCalledWith(
-      exportLocation("ark-output-1"),
-      controller.signal,
-    );
-  });
-
-  it("cancels an in-flight Ark-to-storage transfer", async () => {
-    const state = setup();
-    const source = new Readable({ read() {} });
-    const controller = new AbortController();
-    const write = vi.fn(
-      async (
-        _key: string,
-        stream: Readable,
-        _metadata: unknown,
-        signal?: AbortSignal,
-      ) =>
-        new Promise<void>((_resolve, reject) => {
-          signal?.addEventListener(
-            "abort",
-            () => {
-              stream.destroy();
-              reject(new DOMException("aborted", "AbortError"));
-            },
-            { once: true },
-          );
-        }),
-    );
-    const storage = {
-      write,
-      openRead: state.storage.openRead.bind(state.storage),
-      readExternal: vi.fn(async () => source),
-      delete: state.storage.delete.bind(state.storage),
-    };
-    const service = new ArtifactService({
-      repository: state.repository,
-      ark: state.ark,
-      storage,
-      createId: () => artifactId,
-    });
-
-    const sync = service.syncSession(sessionId, {
-      userId,
-      requestId: "request-cancel",
-      signal: controller.signal,
-    });
-    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
-    controller.abort();
-
-    await expect(sync).rejects.toMatchObject({ name: "AbortError" });
-    expect(source.destroyed).toBe(true);
-  });
-
-  it("lists owned artifacts by source Session and proxies private bytes", async () => {
-    const state = setup();
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-1",
-    });
-
-    await expect(state.service.list(userId, sessionId)).resolves.toHaveLength(
-      1,
-    );
-    await expect(state.service.list(otherUserId)).resolves.toEqual([]);
-    const download = await state.service.download(artifactId, userId);
-    expect(download).toMatchObject({
-      name: "report.txt",
-      mimeType: "text/plain",
-      sizeBytes: 5,
-    });
-    await expect(collect(download.stream)).resolves.toEqual(
-      new TextEncoder().encode("hello"),
-    );
-    await expect(
-      state.service.download(artifactId, otherUserId),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError);
-  });
-
-  it("rejects cleanup of another tenant's private object key", async () => {
-    const state = setup();
-    const objectKey = `tenants/${userId}/sessions/${sessionId}/artifacts/file/version`;
-    await state.storage.write(objectKey, Readable.from(["private"]), {
-      contentType: "text/plain",
-    });
-
-    await expect(
-      state.service.cleanupStoredObject(objectKey, otherUserId),
-    ).rejects.toBeInstanceOf(ResourceNotFoundError);
-    expect(state.storage.keys()).toContain(objectKey);
-  });
-
-  it("retains a hidden tombstone and prevents sequential sync resurrection", async () => {
-    const state = setup();
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-1",
-    });
-
-    await expect(
-      state.service.requestDelete(artifactId, userId),
-    ).resolves.toMatchObject({ deletionState: "pending" });
-    await expect(
-      state.service.requestDelete(artifactId, userId),
-    ).resolves.toMatchObject({ deletionState: "pending" });
-
-    await state.service.deleteStored(artifactId, userId);
-    expect(state.storage.keys()).toEqual([]);
-    expect(state.records.get(artifactId)).toMatchObject({
-      ownerUserId: userId,
-      sessionId,
-      arkFileId: "ark-output-1",
-      name: "",
-      sizeBytes: 0,
-      deletionState: "deleted",
-    });
-    await expect(state.service.list(userId)).resolves.toEqual([]);
-
-    state.readExternal.mockClear();
-    await expect(
-      state.service.syncSession(sessionId, {
-        userId,
-        requestId: "request-after-delete",
-      }),
-    ).resolves.toEqual([]);
-    expect(state.readExternal).not.toHaveBeenCalled();
-    expect(state.storage.keys()).toEqual([]);
-    await expect(
-      state.service.deleteStored(artifactId, userId),
-    ).resolves.toBeUndefined();
-  });
-
-  it("lets deletion win a controlled concurrent sync and removes its TOS write", async () => {
-    const state = setup();
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-initial",
-    });
-
-    let releaseWrite!: () => void;
-    const writeReached = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let continueWrite!: () => void;
-    const writeReleased = new Promise<void>((resolve) => {
-      continueWrite = resolve;
-    });
-    const originalWrite = state.storage.write.bind(state.storage);
-    state.storage.write = vi.fn(async (key, stream, metadata, signal) => {
-      await originalWrite(key, stream, metadata, signal);
-      releaseWrite();
-      await writeReleased;
-    });
-
-    const sync = state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-racing-sync",
-    });
-    await writeReached;
-    await state.service.requestDelete(artifactId, userId);
-    continueWrite();
-
-    await expect(sync).resolves.toEqual([]);
-    expect(state.records.get(artifactId)?.deletionState).toBe("pending");
-    expect(state.storage.keys()).toHaveLength(2);
-
-    await state.service.deleteStored(artifactId, userId);
-    expect(state.records.get(artifactId)?.deletionState).toBe("deleted");
-    const stagedCleanup = [...state.cleanupJobs.values()].find(
-      (cleanup) => cleanup.status === "pending",
-    );
-    expect(stagedCleanup).toBeDefined();
-    await state.storage.delete(stagedCleanup!.objectKey);
-    expect(state.storage.keys()).toEqual([]);
-  });
-
-  it("retains durable cleanup when initial persistence and cleanup release fail", async () => {
-    const state = setup();
-    state.repository.commitCandidate = vi.fn(async () => {
-      throw new Error("database unavailable");
-    });
-    state.repository.releaseCleanup = vi.fn(async () => {
-      throw new Error("database still unavailable");
-    });
-
-    await expect(
-      state.service.syncSession(sessionId, {
-        userId,
-        requestId: "request-failed-persistence",
-      }),
-    ).rejects.toThrow("database unavailable");
-    expect(state.stageCleanup).toHaveBeenCalledOnce();
-    expect(state.repository.releaseCleanup).toHaveBeenCalledOnce();
-    expect([...state.cleanupJobs.values()]).toEqual([
-      expect.objectContaining({ status: "pending" }),
-    ]);
-    expect(state.storage.keys()).toHaveLength(1);
-  });
-
-  it("preserves the indexed object when a refresh metadata swap fails", async () => {
-    const state = setup();
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-initial",
-    });
-    const indexed = state.records.get(artifactId)!;
-    const oldKey = indexed.tosObjectKey;
-
-    state.ark.listArtifacts.mockResolvedValueOnce([
-      exportEntry("ark-output-1", "report.txt", 7),
-    ]);
-    state.storage.putExternal(
-      exportLocation("ark-output-1"),
-      new TextEncoder().encode("updated"),
+      exportLocation("ark-file-1"),
+      bytes,
       "text/plain",
     );
-    state.repository.commitCandidate = vi.fn(async () => {
-      throw new Error("database unavailable");
+
+    const first = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
     });
-
-    await expect(
-      state.service.syncSession(sessionId, {
-        userId,
-        requestId: "request-refresh",
-      }),
-    ).rejects.toThrow("database unavailable");
-
-    expect(state.records.get(artifactId)?.tosObjectKey).toBe(oldKey);
-    await expect(
-      collect(await state.storage.openRead(oldKey)),
-    ).resolves.toEqual(new TextEncoder().encode("hello"));
-    expect(state.storage.keys()).toHaveLength(2);
-  });
-
-  it("atomically schedules the old key for cleanup after a successful refresh", async () => {
-    const state = setup();
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-initial",
-    });
-    const oldKey = state.records.get(artifactId)!.tosObjectKey;
-
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-refresh",
-    });
-
-    const oldKeyCleanup = [...state.cleanupJobs.values()].find(
-      (cleanup) => cleanup.objectKey === oldKey && cleanup.status === "pending",
+    expect(first).toHaveLength(1);
+    expect(first[0]!.name).toBe("report.txt");
+    expect(first[0]!.tosObjectKey).toContain(
+      `tenants/${tenant.userId}/drive/artifact/`,
     );
-    expect(oldKeyCleanup).toBeDefined();
-    await state.storage.delete(oldKeyCleanup!.objectKey);
-    expect(state.storage.keys()).toEqual([
-      state.records.get(artifactId)!.tosObjectKey,
-    ]);
+    // The key must not leak the Session: bytes have to outlive it.
+    expect(first[0]!.tosObjectKey).not.toContain(tenant.sessionId);
+    expect(
+      await collect(await state.storage.openRead(first[0]!.tosObjectKey)),
+    ).toEqual(bytes);
+
+    const second = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-2",
+    });
+    expect(second).toHaveLength(1);
+    expect(second[0]!.id).toBe(first[0]!.id);
+    expect(second[0]!.driveFileId).toBe(first[0]!.driveFileId);
+
+    const driveRows = await state.database.client.query<{ count: string }>(
+      `select count(*)::text as count from drive_files`,
+    );
+    expect(driveRows.rows[0]!.count).toBe("1");
+    await state.close();
   });
 
-  it("releases staging cleanup instead of deleting inline when a tombstone wins", async () => {
-    const state = setup();
-    await state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-initial",
+  it("rejects a cross-tenant Session sync before touching Ark or storage", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const other = await seedTenant(state.database, "b");
+    state.setArtifacts([exportEntry("ark-file-1", "report.txt", 3)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      new Uint8Array([1, 2, 3]),
+      "text/plain",
+    );
+
+    await expect(
+      state.artifacts.syncSession(tenant.sessionId, {
+        userId: other.userId,
+        requestId: "req-1",
+      }),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    expect(state.storage.keys()).toEqual([]);
+    await state.close();
+  });
+
+  it("ignores exports with no reachable TOS location", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    state.setArtifacts([
+      { ...exportEntry("ark-file-1", "unreachable.txt", 3), tos: null },
+    ]);
+    const synced = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
+    });
+    expect(synced).toEqual([]);
+    await state.close();
+  });
+
+  it("lists owned artifacts by Session and downloads their private bytes", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const other = await seedTenant(state.database, "b");
+    const bytes = new TextEncoder().encode("private body");
+    state.setArtifacts([exportEntry("ark-file-1", "secret.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+    const [artifact] = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
     });
 
-    let releaseWrite!: () => void;
-    const writeReached = new Promise<void>((resolve) => {
-      releaseWrite = resolve;
-    });
-    let continueWrite!: () => void;
-    const writeReleased = new Promise<void>((resolve) => {
-      continueWrite = resolve;
-    });
-    const originalWrite = state.storage.write.bind(state.storage);
-    state.storage.write = vi.fn(async (key, stream, metadata, signal) => {
-      await originalWrite(key, stream, metadata, signal);
-      releaseWrite();
-      await writeReleased;
+    expect(
+      await state.artifacts.list(tenant.userId, tenant.sessionId),
+    ).toHaveLength(1);
+    expect(await state.artifacts.list(other.userId)).toEqual([]);
+
+    const download = await state.artifacts.download(
+      artifact!.id,
+      tenant.userId,
+    );
+    expect(await collect(download.stream)).toEqual(bytes);
+    await expect(
+      state.artifacts.download(artifact!.id, other.userId),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    await state.close();
+  });
+
+  it("orphans the drive object on requestDelete instead of deleting bytes", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("keep me");
+    state.setArtifacts([exportEntry("ark-file-1", "keep.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+    const [artifact] = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
     });
 
-    const sync = state.service.syncSession(sessionId, {
-      userId,
-      requestId: "request-racing-sync",
-    });
-    await writeReached;
-    await state.service.requestDelete(artifactId, userId);
-    continueWrite();
+    const deleting = await state.artifacts.requestDelete(
+      artifact!.id,
+      tenant.userId,
+    );
+    expect(deleting.deletionState).toBe("pending");
 
-    await expect(sync).resolves.toEqual([]);
-    expect(state.commitCandidate).toHaveBeenCalled();
-    expect(state.storage.keys()).toHaveLength(2);
+    // Bytes survive the association delete: a drive mode must be able to keep
+    // Agent output after the user removes it from a Session's list.
+    expect(state.storage.keys()).toHaveLength(1);
+    const driveRow = await state.database.client.query<{
+      orphaned_at: string | null;
+      deletion_state: string;
+    }>(`select orphaned_at, deletion_state from drive_files where id = $1`, [
+      artifact!.driveFileId,
+    ]);
+    expect(driveRow.rows[0]!.orphaned_at).not.toBeNull();
+    expect(driveRow.rows[0]!.deletion_state).toBe("none");
+    await state.close();
+  });
+
+  it("enqueues GC immediately at zero retention and defers it above zero", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("gc me");
+    state.setArtifacts([exportEntry("ark-file-1", "gc.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+    const [artifact] = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
+    });
+    await state.artifacts.requestDelete(artifact!.id, tenant.userId);
+
+    expect(
+      await state.drive.reapOrphans({ limit: 10, retentionMs: 60_000 }),
+    ).toBe(0);
+
+    expect(await state.drive.reapOrphans({ limit: 10, retentionMs: 0 })).toBe(
+      1,
+    );
+    // A second scan must not double-enqueue the same object.
+    expect(await state.drive.reapOrphans({ limit: 10, retentionMs: 0 })).toBe(
+      0,
+    );
+
+    await state.drive.deleteStored(artifact!.driveFileId, tenant.userId);
+    expect(state.storage.keys()).toEqual([]);
+    await state.close();
+  });
+
+  it("reclaims a half-written object when the transfer fails mid-flight", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("broken");
+    state.setArtifacts([exportEntry("ark-file-1", "broken.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+    const failing = new (class extends InMemoryArtifactStorage {
+      override async write(): Promise<void> {
+        throw new Error("provider failed mid-write");
+      }
+    })();
+    failing.putExternal(exportLocation("ark-file-1"), bytes, "text/plain");
+    const drive = new DriveFileService({
+      repository: state.repositories.driveFiles,
+      storage: failing,
+      createId: () => "00000000-0000-4000-8000-999999999999",
+      now: () => now,
+    });
+    const service = new ArtifactService({
+      repository: state.repositories.artifacts,
+      drive,
+      ark: {
+        async listArtifacts(session) {
+          return [
+            {
+              ...exportEntry("ark-file-1", "broken.txt", bytes.length),
+              sessionId: session,
+            },
+          ];
+        },
+      },
+      storage: failing,
+      createId: () => "00000000-0000-4000-8000-888888888888",
+      now: () => now,
+    });
+
+    await expect(
+      service.syncSession(tenant.sessionId, {
+        userId: tenant.userId,
+        requestId: "req-1",
+      }),
+    ).rejects.toThrow("provider failed mid-write");
+
+    // The staging row and its cleanup intent survive the crash, so a later
+    // cleanup pass can reclaim the partial object.
+    const rows = await state.database.client.query<{
+      deletion_state: string;
+      count: string;
+    }>(
+      `select deletion_state, count(*)::text as count from drive_files
+        group by deletion_state`,
+    );
+    expect(rows.rows).toEqual([{ deletion_state: "pending", count: "1" }]);
+    const jobs = await state.database.client.query<{ count: string }>(
+      `select count(*)::text as count from background_jobs
+        where type = 'cleanup_drive_object'`,
+    );
+    expect(jobs.rows[0]!.count).toBe("1");
+    await state.close();
+  });
+
+  it("orphans a Session's drive files on deletion without removing bytes", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("survives session");
+    state.setArtifacts([exportEntry("ark-file-1", "kept.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+    const [artifact] = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
+    });
+
+    const orphaned = await state.repositories.sessionDeletion.orphanDriveFiles(
+      tenant.userId,
+      tenant.sessionId,
+      now,
+    );
+    expect(orphaned).toBe(1);
+    // Deleting the Session row cascades the association, but the bytes remain
+    // until the drive GC reaps them under the configured retention.
+    await state.repositories.sessionDeletion.removeLocal(
+      tenant.userId,
+      tenant.sessionId,
+    );
+    expect(state.storage.keys()).toHaveLength(1);
+    const driveRow = await state.database.client.query<{ id: string }>(
+      `select id from drive_files where id = $1`,
+      [artifact!.driveFileId],
+    );
+    expect(driveRow.rows).toHaveLength(1);
+    await state.close();
+  });
+
+  it("refuses to clean up an object key outside the caller's tenant prefix", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    await expect(
+      state.artifacts.cleanupStoredObject(
+        "tenants/00000000-0000-4000-8000-0000000000ff/secret",
+        tenant.userId,
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    await expect(
+      state.artifacts.cleanupStoredObject(
+        `tenants/${tenant.userId}/../escape`,
+        tenant.userId,
+      ),
+    ).rejects.toBeInstanceOf(ResourceNotFoundError);
+    await state.close();
   });
 });

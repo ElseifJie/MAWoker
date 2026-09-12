@@ -83,6 +83,26 @@ describe("platform Agent database integration", () => {
     expect(jobs.rows).toEqual([
       { user_id: userId, session_id: sessionId, status: "pending" },
     ]);
+    const interruptAudits = await database.client.query<{
+      action: string;
+      resource_id: string;
+      owner_user_id: string;
+      metadata: Record<string, unknown> | null;
+    }>(
+      `select action, resource_id, owner_user_id, metadata
+         from audit_logs where action = 'quota_interrupt.enqueue'`,
+    );
+    expect(interruptAudits.rows).toEqual([
+      {
+        action: "quota_interrupt.enqueue",
+        resource_id: sessionId,
+        owner_user_id: userId,
+        metadata: {
+          monthStart: expect.any(String),
+          reason: "monthly_token_limit",
+        },
+      },
+    ]);
     await database.close();
   });
 
@@ -272,36 +292,41 @@ describe("platform Agent database integration", () => {
     await expect(
       service.assignDefault(userId, agent.id, context),
     ).rejects.toMatchObject({ code: "RESOURCE_NOT_FOUND" });
-    expect(await service.listUsers()).toEqual([
-      {
-        id: adminId,
-        email: "admin@example.com",
-        role: "admin",
-        status: "active",
-        hasPassword: false,
-        defaultAgentId: null,
-        quota: {
-          personalAgentLimit: 10,
-          concurrentSessionLimit: 2,
-          dailySessionLimit: 25,
-          monthlyTokenLimit: 1000,
+    expect(await service.listUsers()).toEqual({
+      users: expect.arrayContaining([
+        {
+          id: adminId,
+          email: "admin@example.com",
+          role: "admin",
+          status: "active",
+          hasPassword: false,
+          defaultAgentId: null,
+          createdAt: expect.any(Date),
+          quota: {
+            personalAgentLimit: 10,
+            concurrentSessionLimit: 2,
+            dailySessionLimit: 25,
+            monthlyTokenLimit: 1000,
+          },
         },
-      },
-      {
-        id: userId,
-        email: "user@example.com",
-        role: "user",
-        status: "active",
-        hasPassword: false,
-        defaultAgentId: null,
-        quota: {
-          personalAgentLimit: 3,
-          concurrentSessionLimit: 1,
-          dailySessionLimit: 5,
-          monthlyTokenLimit: 500,
+        {
+          id: userId,
+          email: "user@example.com",
+          role: "user",
+          status: "active",
+          hasPassword: false,
+          defaultAgentId: null,
+          createdAt: expect.any(Date),
+          quota: {
+            personalAgentLimit: 3,
+            concurrentSessionLimit: 1,
+            dailySessionLimit: 5,
+            monthlyTokenLimit: 500,
+          },
         },
-      },
-    ]);
+      ]),
+      nextCursor: null,
+    });
     await expect(
       service.updateUserQuota(
         userId,
@@ -319,6 +344,12 @@ describe("platform Agent database integration", () => {
       concurrentSessionLimit: 1,
       dailySessionLimit: 5,
       monthlyTokenLimit: 500,
+      inherited: {
+        personalAgentLimit: false,
+        concurrentSessionLimit: false,
+        dailySessionLimit: false,
+        monthlyTokenLimit: false,
+      },
     });
     const audits = await database.client.query<{
       action: string;
@@ -339,6 +370,105 @@ describe("platform Agent database integration", () => {
         ?.resource_type,
     ).toBe("user_quota");
     expect(JSON.stringify(audits.rows)).not.toContain("secret prompt");
+    await database.close();
+  });
+
+  it("guards the last active administrator and revokes sessions on lifecycle changes", async () => {
+    const database = await createTestDatabase();
+    const adminId = id();
+    const secondAdminId = id();
+    const userId = id();
+    await database.client.query(
+      `insert into users (id, auth_subject, email, role)
+       values ($1, $2, 'admin@example.com', 'admin'),
+              ($3, $4, 'second@example.com', 'admin'),
+              ($5, $6, 'user@example.com', 'user')`,
+      [
+        adminId,
+        `admin-${adminId}`,
+        secondAdminId,
+        `admin-${secondAdminId}`,
+        userId,
+        `user-${userId}`,
+      ],
+    );
+    for (const [owner, label] of [
+      [adminId, "admin"],
+      [userId, "user"],
+    ] as const) {
+      await database.client.query(
+        `insert into auth_sessions (id, user_id, token_hash, expires_at)
+         values ($1, $2, $3, now() + interval '1 day')`,
+        [id(), owner, `token-${label}`],
+      );
+    }
+    const repositories = createRepositories(database.db);
+    const service = new PlatformAgentService({
+      repository: repositories.platformAgents as PlatformAgentRepository,
+      ark: new InMemoryArkGateway(),
+      modelAllowlist: ["model-a"],
+      createId: id,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
+    });
+    const context = { adminId, requestId: "req-lifecycle" };
+
+    // Self-targeting is rejected before any repository mutation.
+    await expect(
+      service.setUserStatus(adminId, "disabled", context),
+    ).rejects.toMatchObject({ code: "SELF_TARGET_FORBIDDEN" });
+
+    // Disabling a regular user revokes their sessions in the same operation.
+    const disabled = await service.setUserStatus(userId, "disabled", context);
+    expect(disabled).toEqual({
+      from: "active",
+      to: "disabled",
+      revokedSessions: 1,
+    });
+
+    // A second admin may be demoted while another active admin remains.
+    const demoted = await service.setUserRole(secondAdminId, "user", context);
+    expect(demoted).toEqual({
+      from: "admin",
+      to: "user",
+      revokedSessions: 0,
+    });
+
+    // The service rejects self-targeting before the repository is involved…
+    await expect(
+      service.setUserRole(adminId, "user", context),
+    ).rejects.toMatchObject({ code: "SELF_TARGET_FORBIDDEN" });
+    // …and the repository independently guards the last active administrator,
+    // so a future caller that skips the service check still cannot lock the
+    // console out.
+    await expect(
+      repositories.platformAgents.setUserStatus({
+        userId: adminId,
+        status: "disabled",
+        actorId: adminId,
+      }),
+    ).resolves.toBe("last_active_admin");
+
+    const sessions = await database.client.query<{
+      token_hash: string;
+      revoked_at: string | null;
+    }>(`select token_hash, revoked_at from auth_sessions order by token_hash`);
+    expect(sessions.rows).toEqual([
+      { token_hash: "token-admin", revoked_at: null },
+      { token_hash: "token-user", revoked_at: expect.anything() },
+    ]);
+
+    const audits = await database.client.query<{
+      action: string;
+      result: string;
+    }>(`select action, result from audit_logs order by created_at`);
+    expect(audits.rows).toEqual([
+      { action: "user.status.update", result: "failed" },
+      { action: "user.status.update", result: "succeeded" },
+      { action: "user.role.update", result: "succeeded" },
+      { action: "user.role.update", result: "failed" },
+    ]);
     await database.close();
   });
 });

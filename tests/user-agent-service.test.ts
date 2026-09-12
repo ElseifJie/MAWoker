@@ -588,10 +588,14 @@ describe("UserAgentService", () => {
         expect(key).toBe(operationId);
         return Response.json({
           id: "agent-existing",
+          type: "agent",
           version: 1,
-          ...input,
-          toolsetId: "agent_toolset_20260701",
-          toolPermission: "always_allow",
+          name: input.name,
+          description: input.description,
+          model: { id: input.modelId },
+          base_agent: "ark_agent_preview",
+          created_at: "2026-09-07T00:00:00Z",
+          updated_at: "2026-09-07T00:00:00Z",
         });
       },
     );

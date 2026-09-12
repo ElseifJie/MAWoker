@@ -53,23 +53,27 @@ function adminService() {
     createPlatformAgent: vi.fn(async () => agent),
     updatePlatformAgent: vi.fn(async () => ({ ...agent, arkVersion: "2" })),
     deletePlatformAgent: vi.fn(async () => undefined),
-    listUsers: vi.fn(async () => [
-      {
-        id: userId,
-        email: "user@example.com",
-        role: "user" as const,
-        status: "active" as const,
-        hasPassword: true,
-        authSubject: "must-not-leak",
-        defaultAgentId: agentId,
-        quota: {
-          personalAgentLimit: 10,
-          concurrentSessionLimit: 2,
-          dailySessionLimit: 20,
-          monthlyTokenLimit: 1000,
+    listUsers: vi.fn(async () => ({
+      users: [
+        {
+          id: userId,
+          email: "user@example.com",
+          role: "user" as const,
+          status: "active" as const,
+          hasPassword: true,
+          authSubject: "must-not-leak",
+          defaultAgentId: agentId,
+          createdAt: new Date("2026-09-01T00:00:00.000Z"),
+          quota: {
+            personalAgentLimit: 10,
+            concurrentSessionLimit: 2,
+            dailySessionLimit: 20,
+            monthlyTokenLimit: 1000,
+          },
         },
-      },
-    ]),
+      ],
+      nextCursor: null,
+    })),
     createUser: vi.fn(async () => ({
       id: userId,
       email: "user@example.com",
@@ -77,6 +81,9 @@ function adminService() {
       status: "active" as const,
     })),
     resetUserPassword: vi.fn(async () => undefined),
+    setUserStatus: vi.fn(),
+    setUserRole: vi.fn(),
+    revokeUserSessions: vi.fn(),
     assignDefaultAgent: vi.fn(async () => ({
       userId,
       platformAgentId: agentId,
@@ -303,6 +310,7 @@ describe("admin platform Agent API", () => {
           status: "active",
           hasPassword: true,
           defaultAgentId: agentId,
+          createdAt: "2026-09-01T00:00:00.000Z",
           quota: {
             personalAgentLimit: 10,
             concurrentSessionLimit: 2,

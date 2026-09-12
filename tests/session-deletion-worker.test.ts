@@ -8,8 +8,6 @@ import {
 const sessionId = "00000000-0000-4000-8000-000000000001";
 const ownerUserId = "00000000-0000-4000-8000-000000000002";
 const timestamp = new Date("2026-09-06T00:00:00.000Z");
-const firstKey = `tenants/${ownerUserId}/sessions/${sessionId}/artifacts/a/v1`;
-const secondKey = `tenants/${ownerUserId}/sessions/${sessionId}/artifacts/b/v1`;
 
 function job(overrides: Partial<SessionDeletionJob> = {}): SessionDeletionJob {
   return {
@@ -33,7 +31,7 @@ function setup(
   input: {
     status?: "idle" | "running";
     payload?: SessionDeletionJob["payload"];
-    localRemoval?: "removed" | "missing" | "cleanup_pending" | "cleanup_failed";
+    localRemoval?: "removed" | "missing";
   } = {},
 ) {
   const order: string[] = [];
@@ -58,7 +56,10 @@ function setup(
       arkSessionId: "ark-session-1",
       status: input.status ?? "idle",
     })),
-    listArtifactObjectKeys: vi.fn(async () => [firstKey, secondKey]),
+    orphanDriveFiles: vi.fn(async () => {
+      order.push("orphan");
+      return 2;
+    }),
     removeLocal: vi.fn(async () => {
       order.push("local");
       return input.localRemoval ?? "removed";
@@ -88,23 +89,18 @@ function setup(
       order.push("ark-delete");
     }),
   };
-  const storage = {
-    delete: vi.fn(async (key: string) => {
-      order.push(`tos:${key}`);
-    }),
-  };
   const processor = new SessionDeletionProcessor({
     jobs,
     repository,
     ark,
-    storage,
     workerId: "worker-1",
+    now: () => timestamp,
   });
-  return { processor, jobs, repository, ark, storage, order };
+  return { processor, jobs, repository, ark, order };
 }
 
 describe("SessionDeletionProcessor", () => {
-  it("interrupts a running Session, observes it stop, then deletes Ark, TOS, and local records", async () => {
+  it("interrupts a running Session, then deletes Ark, orphans bytes, and removes local records", async () => {
     const state = setup({ status: "running" });
     state.ark.getSession
       .mockResolvedValueOnce({
@@ -142,12 +138,18 @@ describe("SessionDeletionProcessor", () => {
       "checkpoint:interruptRequested,nonRunningObserved",
       "ark-delete",
       "checkpoint:interruptRequested,nonRunningObserved,arkDeleted",
-      `tos:${firstKey}`,
-      `tos:${secondKey}`,
-      "checkpoint:interruptRequested,nonRunningObserved,arkDeleted,artifactsDeleted",
+      "orphan",
+      "checkpoint:interruptRequested,nonRunningObserved,arkDeleted,artifactsOrphaned",
       "local",
       "succeed",
     ]);
+    // The bytes are handed to the drive GC rather than deleted inline, so the
+    // retention setting decides when they actually go.
+    expect(state.repository.orphanDriveFiles).toHaveBeenCalledWith(
+      ownerUserId,
+      sessionId,
+      timestamp,
+    );
   });
 
   it("resumes after an Ark checkpoint without repeating completed external steps", async () => {
@@ -160,7 +162,9 @@ describe("SessionDeletionProcessor", () => {
         },
       },
     });
-    state.storage.delete.mockRejectedValueOnce(new Error("TOS unavailable"));
+    state.repository.orphanDriveFiles.mockRejectedValueOnce(
+      new Error("drive unavailable"),
+    );
 
     await state.processor.runOnce();
     expect(state.jobs.retry).toHaveBeenCalledWith(
@@ -205,7 +209,7 @@ describe("SessionDeletionProcessor", () => {
 
     expect(state.ark.submitEvent).toHaveBeenCalledOnce();
     expect(state.ark.deleteSession).not.toHaveBeenCalled();
-    expect(state.storage.delete).not.toHaveBeenCalled();
+    expect(state.repository.orphanDriveFiles).not.toHaveBeenCalled();
     expect(state.jobs.retry).toHaveBeenCalledWith(
       sessionId,
       "worker-1",
@@ -237,7 +241,7 @@ describe("SessionDeletionProcessor", () => {
 
     expect(state.repository.findDeleting).not.toHaveBeenCalled();
     expect(state.ark.getSession).not.toHaveBeenCalled();
-    expect(state.storage.delete).not.toHaveBeenCalled();
+    expect(state.repository.orphanDriveFiles).not.toHaveBeenCalled();
     expect(state.jobs.retry).toHaveBeenCalledTimes(2);
     expect(state.jobs.retry).toHaveBeenNthCalledWith(
       1,
@@ -248,43 +252,29 @@ describe("SessionDeletionProcessor", () => {
     );
   });
 
-  it("keeps deletion pending while a Session-scoped object cleanup is unsettled", async () => {
-    const state = setup({
-      payload: {
-        sessionId,
-        completed: {
-          nonRunningObserved: true,
-          arkDeleted: true,
-          artifactsDeleted: true,
-        },
-      },
-      localRemoval: "cleanup_pending",
-    });
+  it("succeeds without touching anything when the Session is already gone", async () => {
+    const state = setup();
+    state.repository.findDeleting.mockResolvedValueOnce(undefined as never);
 
     await state.processor.runOnce();
 
-    expect(state.repository.removeLocal).toHaveBeenCalledOnce();
-    expect(state.jobs.succeed).not.toHaveBeenCalled();
-    expect(state.jobs.retry).toHaveBeenCalledWith(
-      sessionId,
-      "worker-1",
-      "SESSION_DELETE_WAITING",
-      false,
-    );
+    expect(state.repository.orphanDriveFiles).not.toHaveBeenCalled();
+    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1");
   });
 
-  it("fails deletion without removing the Session when object cleanup is exhausted", async () => {
+  it("fails deletion without removing local records when orphaning is exhausted", async () => {
     const state = setup({
       payload: {
         sessionId,
         completed: {
           nonRunningObserved: true,
           arkDeleted: true,
-          artifactsDeleted: true,
         },
       },
-      localRemoval: "cleanup_failed",
     });
+    state.repository.orphanDriveFiles.mockRejectedValue(
+      new Error("drive store unavailable"),
+    );
     state.jobs.claim.mockResolvedValueOnce([
       job({
         attempts: 10,
@@ -293,7 +283,6 @@ describe("SessionDeletionProcessor", () => {
           completed: {
             nonRunningObserved: true,
             arkDeleted: true,
-            artifactsDeleted: true,
           },
         },
       }),
@@ -301,6 +290,7 @@ describe("SessionDeletionProcessor", () => {
 
     await state.processor.runOnce();
 
+    expect(state.repository.removeLocal).not.toHaveBeenCalled();
     expect(state.jobs.succeed).not.toHaveBeenCalled();
     expect(state.jobs.retry).toHaveBeenCalledWith(
       sessionId,
@@ -318,11 +308,12 @@ describe("SessionDeletionProcessor", () => {
         completed: {
           nonRunningObserved: true,
           arkDeleted: true,
-          artifactsDeleted: true,
         },
       },
-      localRemoval: "cleanup_failed",
     });
+    state.repository.orphanDriveFiles.mockRejectedValue(
+      new Error("drive store unavailable"),
+    );
     state.jobs.claim.mockResolvedValueOnce([
       job({
         attempts: 10,
@@ -331,7 +322,6 @@ describe("SessionDeletionProcessor", () => {
           completed: {
             nonRunningObserved: true,
             arkDeleted: true,
-            artifactsDeleted: true,
           },
         },
       }),
@@ -341,8 +331,8 @@ describe("SessionDeletionProcessor", () => {
       jobs: state.jobs,
       repository: state.repository,
       ark: state.ark,
-      storage: state.storage,
       workerId: "worker-1",
+      now: () => timestamp,
       alert,
     });
 

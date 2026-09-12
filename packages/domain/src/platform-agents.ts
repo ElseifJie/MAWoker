@@ -1,13 +1,14 @@
 import type { ArkAgentInput, ArkGateway } from "@pwa/ark-client";
 import {
   createUserSchema,
-  quotaSchema,
+  partialQuotaSchema,
   resetPasswordSchema,
   type CreateUserInput,
   type ResetPasswordInput,
 } from "@pwa/contracts";
 import { ResourceNotFoundError } from "./errors.js";
 import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
+import { QUOTA_NEAR_LIMIT_RATIO, type Notifier } from "./notifications.js";
 
 export const PLATFORM_AGENT_TOOLSET_ID = "agent_toolset_20260701";
 export const PLATFORM_AGENT_TOOL_PERMISSION = "always_allow";
@@ -43,12 +44,35 @@ export interface AdminUserSummary {
   status: "active" | "disabled";
   hasPassword: boolean;
   defaultAgentId: string | null;
+  createdAt: Date;
   quota: {
     personalAgentLimit: number;
     concurrentSessionLimit: number;
     dailySessionLimit: number;
     monthlyTokenLimit: number;
   };
+}
+
+export interface AdminUserCursor {
+  createdAt: string;
+  id: string;
+}
+
+export interface AdminUserListQuery {
+  limit: number;
+  search: string | null;
+  before: AdminUserCursor | null;
+}
+
+export interface AdminUserPage {
+  users: AdminUserSummary[];
+  nextCursor: AdminUserCursor | null;
+}
+
+export interface AdminUserLifecycleResult {
+  from: string;
+  to: string;
+  revokedSessions: number;
 }
 
 export interface AdminUserCreated {
@@ -70,6 +94,16 @@ export interface UserQuota {
   monthlyTokenLimit: number;
 }
 
+export type QuotaDimensionKey =
+  | "personalAgentLimit"
+  | "concurrentSessionLimit"
+  | "dailySessionLimit"
+  | "monthlyTokenLimit";
+
+export interface AdminUserEffectiveQuota extends Omit<UserQuota, never> {
+  inherited: Record<QuotaDimensionKey, boolean>;
+}
+
 interface AuditEntry {
   actorUserId: string;
   ownerUserId?: string | undefined;
@@ -79,7 +113,11 @@ interface AuditEntry {
     | "user_default_agent"
     | "user_quota"
     | "user"
-    | "user_password";
+    | "user_password"
+    | "user_session"
+    | "authentication"
+    | "quota_policy"
+    | "quota_interrupt";
   resourceId?: string | undefined;
   result: "succeeded" | "failed";
   requestId: string;
@@ -139,7 +177,21 @@ export interface PlatformAgentRepository {
     platformAgentId: string;
     assignedBy: string;
   }): PromiseLike<DefaultAgentRecord | undefined>;
-  listUsers(): PromiseLike<AdminUserSummary[]>;
+  listUsers(query: AdminUserListQuery): PromiseLike<AdminUserPage>;
+  setUserStatus(input: {
+    userId: string;
+    status: "active" | "disabled";
+    actorId: string;
+  }): PromiseLike<AdminUserLifecycleResult | "last_active_admin" | undefined>;
+  setUserRole(input: {
+    userId: string;
+    role: "user" | "admin";
+    actorId: string;
+  }): PromiseLike<AdminUserLifecycleResult | "last_active_admin" | undefined>;
+  revokeUserSessions(input: {
+    userId: string;
+    actorId: string;
+  }): PromiseLike<{ revokedSessions: number } | undefined>;
   createUser(input: {
     id: string;
     authSubject: string;
@@ -153,11 +205,22 @@ export interface PlatformAgentRepository {
     passwordHash: string;
     updatedBy: string;
   }): PromiseLike<boolean>;
-  updateUserQuota(
-    input: UserQuota & {
-      updatedBy: string;
-    },
-  ): PromiseLike<UserQuota | undefined>;
+  updateUserQuota(input: {
+    userId: string;
+    personalAgentLimit: number | null;
+    concurrentSessionLimit: number | null;
+    dailySessionLimit: number | null;
+    monthlyTokenLimit: number | null;
+    updatedBy: string;
+  }): PromiseLike<
+    | {
+        previous: Omit<UserQuota, "userId">;
+        effective: Omit<UserQuota, "userId">;
+        overridden: Record<QuotaDimensionKey, boolean>;
+        monthTokens: number;
+      }
+    | undefined
+  >;
   audit(entry: AuditEntry): PromiseLike<void>;
 }
 
@@ -182,6 +245,22 @@ export class UserEmailConflictError extends Error {
   constructor() {
     super("A user with this email already exists");
     this.name = "UserEmailConflictError";
+  }
+}
+
+export class SelfTargetForbiddenError extends Error {
+  readonly code = "SELF_TARGET_FORBIDDEN";
+  constructor() {
+    super("Administrators cannot target their own account");
+    this.name = "SelfTargetForbiddenError";
+  }
+}
+
+export class LastActiveAdminError extends Error {
+  readonly code = "LAST_ACTIVE_ADMIN";
+  constructor() {
+    super("The last active administrator cannot be disabled or demoted");
+    this.name = "LastActiveAdminError";
   }
 }
 
@@ -243,6 +322,7 @@ export class PlatformAgentService {
       modelAllowlist: readonly string[];
       createId: () => string;
       passwordHasher: PasswordHasher;
+      notifier?: Notifier;
     },
   ) {
     this.models = new Set(dependencies.modelAllowlist);
@@ -343,7 +423,22 @@ export class PlatformAgentService {
           updatedBy: context.adminId,
           lastErrorCode: null,
         });
-        await this.audit(context, "platform_agent.update", id, "succeeded");
+        await this.audit(context, "platform_agent.update", id, "succeeded", {
+          metadata: {
+            changedFields: Object.keys(input).filter(
+              (field) => field !== "arkVersion",
+            ),
+            arkVersion: { from: current.arkVersion, to: updated.arkVersion },
+            ...(input.systemPrompt !== undefined
+              ? {
+                  systemPrompt: {
+                    changed: true,
+                    length: configuration.systemPrompt.length,
+                  },
+                }
+              : {}),
+          },
+        });
         return updated;
       } catch (error) {
         const normalized = isArkCategory(error, "version_conflict")
@@ -376,6 +471,9 @@ export class PlatformAgentService {
           : "platform_agent.disable",
         id,
         "succeeded",
+        {
+          metadata: { from: current.status, to: input.status },
+        },
       );
       return updated;
     }
@@ -406,6 +504,15 @@ export class PlatformAgentService {
         references.assignments,
         references.sessions,
       );
+    }
+
+    // A row that never reached Ark still carries the `pending:` placeholder id,
+    // so there is nothing upstream to delete and Ark would only report
+    // not_found. This covers both `failed` and stuck `provisioning` rows.
+    if (current.arkAgentId.startsWith("pending:")) {
+      await this.dependencies.repository.remove(id);
+      await this.audit(context, "platform_agent.delete", id, "succeeded");
+      return;
     }
 
     try {
@@ -483,27 +590,174 @@ export class PlatformAgentService {
     return this.assignDefault(userId, platformAgentId, context);
   }
 
-  listUsers(): PromiseLike<AdminUserSummary[]> {
-    return this.dependencies.repository.listUsers();
+  listUsers(
+    query: AdminUserListQuery = { limit: 100, search: null, before: null },
+  ): PromiseLike<AdminUserPage> {
+    return this.dependencies.repository.listUsers(query);
+  }
+
+  async setUserStatus(
+    userId: string,
+    status: "active" | "disabled",
+    context: MutationContext,
+  ): Promise<AdminUserLifecycleResult> {
+    if (userId === context.adminId) {
+      await this.audit(context, "user.status.update", userId, "failed", {
+        ownerUserId: userId,
+        errorCode: "SELF_TARGET_FORBIDDEN",
+      });
+      throw new SelfTargetForbiddenError();
+    }
+    try {
+      const result = await this.dependencies.repository.setUserStatus({
+        userId,
+        status,
+        actorId: context.adminId,
+      });
+      if (!result) throw new ResourceNotFoundError();
+      if (result === "last_active_admin") throw new LastActiveAdminError();
+      await this.audit(context, "user.status.update", userId, "succeeded", {
+        ownerUserId: userId,
+        metadata: {
+          from: result.from,
+          to: result.to,
+          revokedSessions: result.revokedSessions,
+        },
+      });
+      return result;
+    } catch (error) {
+      await this.audit(context, "user.status.update", userId, "failed", {
+        ownerUserId: userId,
+        errorCode: auditLifecycleErrorCode(error),
+      });
+      throw error;
+    }
+  }
+
+  async setUserRole(
+    userId: string,
+    role: "user" | "admin",
+    context: MutationContext,
+  ): Promise<AdminUserLifecycleResult> {
+    if (userId === context.adminId) {
+      await this.audit(context, "user.role.update", userId, "failed", {
+        ownerUserId: userId,
+        errorCode: "SELF_TARGET_FORBIDDEN",
+      });
+      throw new SelfTargetForbiddenError();
+    }
+    try {
+      const result = await this.dependencies.repository.setUserRole({
+        userId,
+        role,
+        actorId: context.adminId,
+      });
+      if (!result) throw new ResourceNotFoundError();
+      if (result === "last_active_admin") throw new LastActiveAdminError();
+      await this.audit(context, "user.role.update", userId, "succeeded", {
+        ownerUserId: userId,
+        metadata: {
+          from: result.from,
+          to: result.to,
+          revokedSessions: result.revokedSessions,
+        },
+      });
+      return result;
+    } catch (error) {
+      await this.audit(context, "user.role.update", userId, "failed", {
+        ownerUserId: userId,
+        errorCode: auditLifecycleErrorCode(error),
+      });
+      throw error;
+    }
+  }
+
+  async revokeUserSessions(
+    userId: string,
+    context: MutationContext,
+  ): Promise<{ revokedSessions: number }> {
+    if (userId === context.adminId) {
+      await this.audit(context, "user_sessions.revoke", userId, "failed", {
+        ownerUserId: userId,
+        errorCode: "SELF_TARGET_FORBIDDEN",
+      });
+      throw new SelfTargetForbiddenError();
+    }
+    try {
+      const result = await this.dependencies.repository.revokeUserSessions({
+        userId,
+        actorId: context.adminId,
+      });
+      if (!result) throw new ResourceNotFoundError();
+      await this.audit(context, "user_sessions.revoke", userId, "succeeded", {
+        ownerUserId: userId,
+        metadata: { revokedSessions: result.revokedSessions },
+      });
+      return result;
+    } catch (error) {
+      await this.audit(context, "user_sessions.revoke", userId, "failed", {
+        ownerUserId: userId,
+        errorCode: auditLifecycleErrorCode(error),
+      });
+      throw error;
+    }
   }
 
   async updateUserQuota(
     userId: string,
-    quota: Omit<UserQuota, "userId">,
+    quota: {
+      personalAgentLimit?: number | null;
+      concurrentSessionLimit?: number | null;
+      dailySessionLimit?: number | null;
+      monthlyTokenLimit?: number | null;
+    },
     context: MutationContext,
-  ): Promise<UserQuota> {
+  ): Promise<AdminUserEffectiveQuota> {
     try {
-      const validated = quotaSchema.parse(quota);
-      const updated = await this.dependencies.repository.updateUserQuota({
+      const validated = partialQuotaSchema.parse(quota);
+      const result = await this.dependencies.repository.updateUserQuota({
         userId,
-        ...validated,
+        personalAgentLimit: validated.personalAgentLimit ?? null,
+        concurrentSessionLimit: validated.concurrentSessionLimit ?? null,
+        dailySessionLimit: validated.dailySessionLimit ?? null,
+        monthlyTokenLimit: validated.monthlyTokenLimit ?? null,
         updatedBy: context.adminId,
       });
-      if (!updated) throw new ResourceNotFoundError();
+      if (!result) throw new ResourceNotFoundError();
       await this.audit(context, "user_quota.update", userId, "succeeded", {
         ownerUserId: userId,
+        metadata: {
+          from: result.previous,
+          to: result.effective,
+          overridden: result.overridden,
+        },
       });
-      return updated;
+      const notifier = this.dependencies.notifier;
+      if (notifier && result.effective.monthlyTokenLimit > 0) {
+        if (result.monthTokens >= result.effective.monthlyTokenLimit) {
+          await notifier.quotaExhausted(userId, "monthlyTokens");
+        } else if (
+          result.monthTokens >=
+          result.effective.monthlyTokenLimit * QUOTA_NEAR_LIMIT_RATIO
+        ) {
+          await notifier.quotaNearLimit(
+            userId,
+            "monthlyTokens",
+            result.monthTokens,
+            result.effective.monthlyTokenLimit,
+          );
+        }
+      }
+      return {
+        userId,
+        ...result.effective,
+        inherited: {
+          personalAgentLimit: !result.overridden.personalAgentLimit,
+          concurrentSessionLimit: !result.overridden.concurrentSessionLimit,
+          dailySessionLimit: !result.overridden.dailySessionLimit,
+          monthlyTokenLimit: !result.overridden.monthlyTokenLimit,
+        },
+      };
     } catch (error) {
       await this.audit(context, "user_quota.update", userId, "failed", {
         ownerUserId: userId,
@@ -618,20 +872,35 @@ export class PlatformAgentService {
     return this.dependencies.repository.audit({
       actorUserId: context.adminId,
       action,
-      resourceType:
-        action === "user_default_agent.assign"
-          ? "user_default_agent"
-          : action === "user_quota.update"
-            ? "user_quota"
-            : action === "user.create"
-              ? "user"
-              : action === "user_password.reset"
-                ? "user_password"
-                : "platform_agent",
+      resourceType: auditResourceType(action),
       resourceId,
       result,
       requestId: context.requestId,
       ...extra,
     });
   }
+}
+
+function auditResourceType(action: string): AuditEntry["resourceType"] {
+  if (action.startsWith("platform_agent.")) return "platform_agent";
+  if (action === "user_default_agent.assign") return "user_default_agent";
+  if (action === "user_quota.update") return "user_quota";
+  if (action === "user_password.reset") return "user_password";
+  if (action === "user_sessions.revoke") return "user_session";
+  if (action === "auth.login") return "authentication";
+  if (action === "quota_policy.update") return "quota_policy";
+  if (action === "quota_interrupt.enqueue") return "quota_interrupt";
+  return "user";
+}
+
+function auditLifecycleErrorCode(error: unknown): string {
+  if (error instanceof LastActiveAdminError) return "LAST_ACTIVE_ADMIN";
+  if (error instanceof SelfTargetForbiddenError) return "SELF_TARGET_FORBIDDEN";
+  if (
+    error instanceof ResourceNotFoundError ||
+    error instanceof InvalidUserInputError
+  ) {
+    return error.code;
+  }
+  return "USER_UPDATE_FAILED";
 }

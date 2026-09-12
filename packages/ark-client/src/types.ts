@@ -15,9 +15,17 @@ export interface ArkAgentInput {
   toolPermission?: "always_allow" | undefined;
 }
 
-export interface ArkAgent extends ArkAgentInput {
+/**
+ * Ark's read APIs never echo the agent instructions, so `systemPrompt` is only
+ * present right after a write, echoed from the request we just sent.
+ */
+export interface ArkAgent {
   id: string;
   version: number;
+  name: string;
+  description: string;
+  modelId: string;
+  systemPrompt?: string | undefined;
 }
 
 export interface ArkAgentUpdate extends ArkAgentInput {

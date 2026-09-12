@@ -4,7 +4,7 @@
   flex: 0 0 auto;
   border-radius: var(--ui-radius-medium);
   font: inherit;
-  font-weight: 650;
+  font-weight: 590;
   line-height: 1;
   cursor: pointer;
 }
@@ -53,7 +53,7 @@
 
 .ui-button--text {
   border: 1px solid transparent;
-  color: var(--ui-color-accent);
+  color: var(--ui-color-accent-interactive);
   background: transparent;
 }
 
@@ -112,7 +112,7 @@
 .ui-field__label {
   color: var(--ui-color-text);
   font-size: 0.8125rem;
-  font-weight: 650;
+  font-weight: 590;
 }
 
 .ui-input,
@@ -243,7 +243,7 @@
   border: 1px solid transparent;
   border-radius: var(--ui-radius-medium);
   font-size: 0.75rem;
-  font-weight: 650;
+  font-weight: 590;
   line-height: 1.2;
 }
 
@@ -259,7 +259,7 @@
 
 .ui-badge--info {
   border-color: color-mix(in srgb, var(--ui-color-accent) 28%, transparent);
-  color: var(--ui-color-accent);
+  color: var(--ui-color-accent-interactive);
   background: var(--ui-color-accent-subtle);
 }
 
@@ -304,7 +304,7 @@
 
 .ui-alert--info {
   border-color: color-mix(in srgb, var(--ui-color-accent) 28%, transparent);
-  color: var(--ui-color-accent);
+  color: var(--ui-color-accent-interactive);
   background: var(--ui-color-accent-subtle);
 }
 
@@ -359,7 +359,7 @@
 .ui-empty-state__title {
   color: var(--ui-color-text);
   font-size: 0.875rem;
-  font-weight: 650;
+  font-weight: 590;
 }
 
 .ui-empty-state__description {
@@ -410,7 +410,7 @@
   margin: 0 0 var(--ui-space-1);
   color: var(--ui-color-text-muted);
   font-size: 0.6875rem;
-  font-weight: 700;
+  font-weight: 590;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }

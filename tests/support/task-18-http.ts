@@ -1,6 +1,7 @@
 import { InMemoryArkGateway } from "../../packages/ark-client/src/index.js";
 import {
   ArtifactService,
+  DriveFileService,
   QuotaUsageService,
   SessionService,
   UserAgentService,
@@ -52,6 +53,11 @@ export async function createTask18HttpHarness() {
   });
   const artifacts = new ArtifactService({
     repository: database.repositories.artifacts,
+    drive: new DriveFileService({
+      repository: database.repositories.driveFiles,
+      storage,
+      createId: database.ids,
+    }),
     ark,
     storage,
     createId: database.ids,

@@ -1,5 +1,9 @@
 import type { ArkEvent, ArkGateway } from "@pwa/ark-client";
-import { projectArkEvent, type ArkEventProjection } from "@pwa/domain";
+import {
+  projectArkEvent,
+  type ArkEventProjection,
+  type Notifier,
+} from "@pwa/domain";
 
 interface UsageReconciliationRepository {
   listReconcilable(input: { cutoff: Date; limit: number }): PromiseLike<
@@ -10,16 +14,21 @@ interface UsageReconciliationRepository {
       status: "idle" | "running" | "rescheduled" | "terminated";
     }>
   >;
+  /** Resolves to `true` when the projection recorded new token usage. */
   projectEvent(
     userId: string,
     sessionId: string,
     projection: ArkEventProjection,
-  ): PromiseLike<void>;
+  ): PromiseLike<boolean>;
   markReconciled(
     userId: string,
     sessionId: string,
     reconciledAt: Date,
   ): PromiseLike<void>;
+  monthlyTokenState(
+    userId: string,
+    now: Date,
+  ): PromiseLike<{ used: number; limit: number }>;
 }
 
 export class UsageReconciliationProcessor {
@@ -32,6 +41,7 @@ export class UsageReconciliationProcessor {
       lookbackMs?: number;
       now?: () => Date;
       reportError?: (message: string, error: unknown) => void;
+      notifier?: Notifier;
     },
   ) {}
 
@@ -56,8 +66,17 @@ export class UsageReconciliationProcessor {
             Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
             left.id.localeCompare(right.id),
         );
+        let tokenUsageRecorded = false;
         for (const event of events) {
-          await this.project(session.ownerUserId, session.sessionId, event);
+          tokenUsageRecorded =
+            (await this.project(
+              session.ownerUserId,
+              session.sessionId,
+              event,
+            )) || tokenUsageRecorded;
+        }
+        if (tokenUsageRecorded) {
+          await this.notifyQuotaState(session.ownerUserId);
         }
       } catch (error) {
         (this.dependencies.reportError ?? console.error)(
@@ -86,11 +105,38 @@ export class UsageReconciliationProcessor {
     userId: string,
     sessionId: string,
     event: ArkEvent,
-  ): PromiseLike<void> {
+  ): PromiseLike<boolean> {
     return this.dependencies.repository.projectEvent(
       userId,
       sessionId,
       projectArkEvent(event),
     );
+  }
+
+  /**
+   * Quota notification seam: after reconciling a session that consumed tokens,
+   * surface a near-limit / exhausted signal through the notifier (logs only
+   * until a channel is wired).
+   */
+  private async notifyQuotaState(userId: string): Promise<void> {
+    const notifier = this.dependencies.notifier;
+    if (!notifier) return;
+    try {
+      const { used, limit } =
+        await this.dependencies.repository.monthlyTokenState(
+          userId,
+          (this.dependencies.now ?? (() => new Date()))(),
+        );
+      if (limit <= 0 || used >= limit) {
+        await notifier.quotaExhausted(userId, "monthlyTokens");
+      } else if (used >= limit * 0.8) {
+        await notifier.quotaNearLimit(userId, "monthlyTokens", used, limit);
+      }
+    } catch (error) {
+      (this.dependencies.reportError ?? console.error)(
+        "Quota notification failed",
+        error,
+      );
+    }
   }
 }
