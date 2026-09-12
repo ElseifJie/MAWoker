@@ -21,6 +21,8 @@ export interface DefaultQuota {
   monthlyTokenLimit: number;
 }
 
+// Upserts rather than inserts so the .env values stay authoritative: with
+// `do nothing` a pre-existing 'default' row would silently keep stale limits.
 export async function ensureDefaultQuotaPolicy(
   pool: Pool,
   quota: DefaultQuota,
@@ -30,7 +32,12 @@ export async function ensureDefaultQuotaPolicy(
        (key, personal_agent_limit, concurrent_session_limit,
         daily_session_limit, monthly_token_limit)
      values ('default', $1, $2, $3, $4)
-     on conflict (key) do nothing`,
+     on conflict (key) do update
+       set personal_agent_limit = excluded.personal_agent_limit,
+           concurrent_session_limit = excluded.concurrent_session_limit,
+           daily_session_limit = excluded.daily_session_limit,
+           monthly_token_limit = excluded.monthly_token_limit,
+           updated_at = now()`,
     [
       quota.personalAgentLimit,
       quota.concurrentSessionLimit,
@@ -81,6 +88,39 @@ export async function ensureAdministrator(
     ],
   );
   return { id: user.id, created: false, passwordUpdated };
+}
+
+function quotaValue(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  fallback?: number,
+): number | string {
+  const raw = (env[name] ?? "").trim();
+  if (raw === "") {
+    // Absent or blank falls back to the default, mirroring packages/config.
+    return fallback ?? `${name} is required`;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return `${name} must be a non-negative integer, got ${JSON.stringify(env[name])}`;
+  }
+  return value;
+}
+
+export function readDefaultQuota(
+  env: NodeJS.ProcessEnv,
+): DefaultQuota | string {
+  const quota = {
+    personalAgentLimit: quotaValue(env, "PERSONAL_AGENT_LIMIT", 10),
+    concurrentSessionLimit: quotaValue(env, "CONCURRENT_SESSION_LIMIT", 2),
+    dailySessionLimit: quotaValue(env, "SESSION_DAILY_LIMIT"),
+    monthlyTokenLimit: quotaValue(env, "MONTHLY_TOKEN_LIMIT"),
+  };
+  const failure = Object.values(quota).find(
+    (value): value is string => typeof value === "string",
+  );
+  if (failure !== undefined) return failure;
+  return quota as DefaultQuota;
 }
 
 export function readAdministratorInput(

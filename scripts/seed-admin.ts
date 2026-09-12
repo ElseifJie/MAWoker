@@ -3,6 +3,7 @@ import {
   ensureAdministrator,
   ensureDefaultQuotaPolicy,
   readAdministratorInput,
+  readDefaultQuota,
 } from "./lib/administrator.js";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -17,15 +18,16 @@ if (typeof input === "string") {
   process.exit(1);
 }
 
+const quota = readDefaultQuota(process.env);
+if (typeof quota === "string") {
+  console.error(quota);
+  process.exit(1);
+}
+
 const pool = new pg.Pool({ connectionString: databaseUrl });
 
 try {
-  await ensureDefaultQuotaPolicy(pool, {
-    personalAgentLimit: 10,
-    concurrentSessionLimit: 2,
-    dailySessionLimit: 25,
-    monthlyTokenLimit: 1_000_000,
-  });
+  await ensureDefaultQuotaPolicy(pool, quota);
 
   const result = await ensureAdministrator(pool, input);
   if (result.created) {
