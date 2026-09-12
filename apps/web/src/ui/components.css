@@ -174,7 +174,21 @@
 }
 
 .ui-password__input {
+  appearance: none;
   padding-inline-end: calc(var(--ui-space-3) + 28px);
+}
+
+/* PasswordInput owns the only reveal toggle; suppress the browser's built-in one. */
+.ui-password__input::-webkit-inner-spin-button,
+.ui-password__input::-webkit-outer-spin-button,
+.ui-password__input::-webkit-contacts-auto-fill-button,
+.ui-password__input::-webkit-credentials-auto-fill-button,
+.ui-password__input::-ms-reveal,
+.ui-password__input::-ms-clear {
+  display: none;
+  width: 0;
+  height: 0;
+  margin: 0;
 }
 
 .ui-password__toggle {

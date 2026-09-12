@@ -8,7 +8,7 @@ import {
   Users,
 } from "lucide-react";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 import { PASSWORD_MIN_LENGTH } from "@pwa/contracts";
 import {
   ApiClientError,
@@ -44,7 +44,15 @@ interface AdminWorkspaceProps {
 interface AdminData {
   agents: AdminPlatformAgent[];
   users: AdminUserSummary[];
+  models: string[];
 }
+
+const UNCONFIGURABLE_CAPABILITIES = [
+  "Skills",
+  "Custom Tools",
+  "Multi Agents",
+  "MCPs",
+];
 
 function platformAgentStatusTone(
   status: AdminPlatformAgent["status"],
@@ -57,10 +65,12 @@ function platformAgentStatusTone(
 
 function AdminPlatformAgentsPage({
   agents,
+  models,
   onAgentsChanged,
   onAuthRequired,
 }: {
   agents: AdminPlatformAgent[];
+  models: string[];
   onAgentsChanged: (agents: AdminPlatformAgent[]) => void;
   onAuthRequired: () => void;
 }) {
@@ -80,6 +90,16 @@ function AdminPlatformAgentsPage({
   const [feedback, setFeedback] = useState<string | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const editorInitialFocusRef = useRef<HTMLInputElement>(null);
+
+  // Keep an out-of-allowlist model selectable so the dropdown cannot silently
+  // rewrite it to the first allowlisted model.
+  const offAllowlistModel =
+    editor && editor.value.modelId && !models.includes(editor.value.modelId)
+      ? editor.value.modelId
+      : undefined;
+  const modelOptions = offAllowlistModel
+    ? [offAllowlistModel, ...models]
+    : models;
 
   function closeEditor() {
     setEditor(null);
@@ -203,7 +223,7 @@ function AdminPlatformAgentsPage({
                 value: {
                   name: "",
                   description: "",
-                  modelId: "",
+                  modelId: models[0] ?? "",
                   systemPrompt: "",
                 },
               });
@@ -360,65 +380,151 @@ function AdminPlatformAgentsPage({
               className="admin-agent-editor-form"
               onSubmit={saveAgent}
             >
-              <Field label="Agent name">
-                <Input
-                  ref={editorInitialFocusRef}
-                  value={editor.value.name}
-                  maxLength={80}
-                  required
-                  onChange={(event) =>
-                    setEditor({
-                      ...editor,
-                      value: { ...editor.value, name: event.target.value },
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Description">
-                <Textarea
-                  value={editor.value.description}
-                  maxLength={500}
-                  rows={3}
-                  onChange={(event) =>
-                    setEditor({
-                      ...editor,
-                      value: {
-                        ...editor.value,
-                        description: event.target.value,
-                      },
-                    })
-                  }
-                />
-              </Field>
-              <Field label="Model">
-                <Input
-                  value={editor.value.modelId}
-                  maxLength={200}
-                  required
-                  onChange={(event) =>
-                    setEditor({
-                      ...editor,
-                      value: { ...editor.value, modelId: event.target.value },
-                    })
-                  }
-                />
-              </Field>
-              <Field label="System Prompt">
-                <Textarea
-                  value={editor.value.systemPrompt}
-                  maxLength={32_000}
-                  rows={8}
-                  onChange={(event) =>
-                    setEditor({
-                      ...editor,
-                      value: {
-                        ...editor.value,
-                        systemPrompt: event.target.value,
-                      },
-                    })
-                  }
-                />
-              </Field>
+              <section
+                className="agent-form-section"
+                aria-labelledby="agent-section-basic"
+              >
+                <header className="agent-form-section__header">
+                  <span className="agent-form-section__index">01</span>
+                  <div>
+                    <h3 id="agent-section-basic">Basic information</h3>
+                    <p>How this Agent is identified in the workspace picker.</p>
+                  </div>
+                </header>
+                <div className="agent-form-section__body">
+                  <Field label="Agent name">
+                    <Input
+                      ref={editorInitialFocusRef}
+                      value={editor.value.name}
+                      maxLength={80}
+                      required
+                      onChange={(event) =>
+                        setEditor({
+                          ...editor,
+                          value: { ...editor.value, name: event.target.value },
+                        })
+                      }
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <Textarea
+                      value={editor.value.description}
+                      maxLength={500}
+                      rows={3}
+                      onChange={(event) =>
+                        setEditor({
+                          ...editor,
+                          value: {
+                            ...editor.value,
+                            description: event.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+              </section>
+
+              <section
+                className="agent-form-section"
+                aria-labelledby="agent-section-model"
+              >
+                <header className="agent-form-section__header">
+                  <span className="agent-form-section__index">02</span>
+                  <div>
+                    <h3 id="agent-section-model">Model configuration</h3>
+                    <p>Only models on the workspace allowlist can be used.</p>
+                  </div>
+                </header>
+                <div className="agent-form-section__body">
+                  <Field label="Model">
+                    <Select
+                      value={editor.value.modelId}
+                      required
+                      onChange={(event) =>
+                        setEditor({
+                          ...editor,
+                          value: {
+                            ...editor.value,
+                            modelId: event.target.value,
+                          },
+                        })
+                      }
+                    >
+                      {modelOptions.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                          {model === offAllowlistModel ? " (not allowed)" : ""}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+              </section>
+
+              <section
+                className="agent-form-section"
+                aria-labelledby="agent-section-prompt"
+              >
+                <header className="agent-form-section__header">
+                  <span className="agent-form-section__index">03</span>
+                  <div>
+                    <h3 id="agent-section-prompt">System Prompt</h3>
+                    <p>Defines the role, boundaries, and reply style.</p>
+                  </div>
+                </header>
+                <div className="agent-form-section__body">
+                  <Field label="System">
+                    <Textarea
+                      value={editor.value.systemPrompt}
+                      maxLength={32_000}
+                      rows={8}
+                      onChange={(event) =>
+                        setEditor({
+                          ...editor,
+                          value: {
+                            ...editor.value,
+                            systemPrompt: event.target.value,
+                          },
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+              </section>
+
+              <section
+                className="agent-form-section"
+                aria-labelledby="agent-section-capabilities"
+              >
+                <header className="agent-form-section__header">
+                  <span className="agent-form-section__index">04</span>
+                  <div>
+                    <h3 id="agent-section-capabilities">
+                      Capability extensions
+                    </h3>
+                    <p>Managed by the platform and not editable per Agent.</p>
+                  </div>
+                </header>
+                <dl className="agent-capability-list">
+                  <div>
+                    <dt>Tools</dt>
+                    <dd>
+                      <Badge tone="info">Managed</Badge>
+                      Every Platform Agent runs with the platform toolset.
+                    </dd>
+                  </div>
+                  {UNCONFIGURABLE_CAPABILITIES.map((capability) => (
+                    <div key={capability}>
+                      <dt>{capability}</dt>
+                      <dd>
+                        <Badge tone="neutral">Unavailable</Badge>
+                        Not available in this deployment.
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
             </form>
             {editor.mode === "edit" ? (
               <p className="form-note">
@@ -628,6 +734,7 @@ function AdminUsersPage({
           <Field
             label="Password"
             hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+            error={passwordRequirementError(draft.password)}
           >
             <PasswordInput
               autoComplete="new-password"
@@ -644,7 +751,10 @@ function AdminUsersPage({
               }
             />
           </Field>
-          <Field label="Confirm password">
+          <Field
+            label="Confirm password"
+            error={passwordMatchError(draft.confirmPassword, draft.password)}
+          >
             <PasswordInput
               autoComplete="new-password"
               value={draft.confirmPassword}
@@ -708,6 +818,21 @@ function createUserReady(draft: CreateUserDraft): boolean {
     draft.password.length >= PASSWORD_MIN_LENGTH &&
     draft.password === draft.confirmPassword
   );
+}
+
+function passwordRequirementError(value: string): string | undefined {
+  if (value.length === 0) return undefined;
+  return value.length < PASSWORD_MIN_LENGTH
+    ? `Password does not meet the requirements — use at least ${PASSWORD_MIN_LENGTH} characters.`
+    : undefined;
+}
+
+function passwordMatchError(
+  confirm: string,
+  password: string,
+): string | undefined {
+  if (confirm.length === 0) return undefined;
+  return confirm === password ? undefined : "The passwords do not match.";
 }
 
 function userAdminErrorMessage(error: unknown, fallback: string): string {
@@ -787,6 +912,9 @@ function AdminUserRecord({
   const activeSelection = agents.some(
     (agent) => agent.id === selectedAgentId && agent.status === "active",
   );
+  const selectableAgents = agents.filter(
+    (agent) => agent.status === "active",
+  ).length;
   const quotaValue = parsedQuota(quota);
   const controlsDisabled = pending !== null || user.status !== "active";
 
@@ -1012,6 +1140,20 @@ function AdminUserRecord({
                 Save
               </Button>
             </div>
+            {agents.length === 0 ? (
+              <p className="form-note">
+                No Platform Agent exists yet.{" "}
+                <Link to="/admin/platform-agents">Create one</Link> before
+                assigning a default.
+              </p>
+            ) : null}
+            {agents.length > 0 && selectableAgents === 0 ? (
+              <p className="form-note">
+                No Platform Agent is active.{" "}
+                <Link to="/admin/platform-agents">Activate one</Link> to make it
+                assignable.
+              </p>
+            ) : null}
           </section>
 
           <section
@@ -1106,6 +1248,7 @@ function AdminUserRecord({
           <Field
             label="New password"
             hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+            error={passwordRequirementError(resetDraft.password)}
           >
             <PasswordInput
               ref={resetPasswordRef}
@@ -1123,7 +1266,13 @@ function AdminUserRecord({
               }
             />
           </Field>
-          <Field label="Confirm password">
+          <Field
+            label="Confirm password"
+            error={passwordMatchError(
+              resetDraft.confirmPassword,
+              resetDraft.password,
+            )}
+          >
             <PasswordInput
               autoComplete="new-password"
               value={resetDraft.confirmPassword}
@@ -1164,9 +1313,15 @@ export function AdminWorkspace({
     Promise.all([
       apiClient.listAdminPlatformAgents(),
       apiClient.listAdminUsers(),
+      apiClient.getCapabilities(),
     ])
-      .then(([agents, users]) => {
-        if (active) setData({ agents: agents.agents, users: users.users });
+      .then(([agents, users, capabilities]) => {
+        if (active)
+          setData({
+            agents: agents.agents,
+            users: users.users,
+            models: capabilities.personalAgentModels,
+          });
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -1240,6 +1395,7 @@ export function AdminWorkspace({
           element={
             <AdminPlatformAgentsPage
               agents={data.agents}
+              models={data.models}
               onAgentsChanged={(agents) =>
                 setData((current) =>
                   current ? { ...current, agents } : current,

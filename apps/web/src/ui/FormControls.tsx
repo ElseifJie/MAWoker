@@ -20,7 +20,7 @@ interface FieldControlProps {
 export interface FieldProps {
   label: string;
   hint?: string;
-  error?: string;
+  error?: string | undefined;
   children: ReactElement<FieldControlProps>;
 }
 

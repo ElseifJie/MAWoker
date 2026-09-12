@@ -127,6 +127,15 @@ function adminHandler() {
       return json(platformAgents);
     }
     if (path === "/api/v1/admin/users") return json(adminUsers);
+    if (path === "/api/v1/capabilities") {
+      return json({
+        skills: { available: false },
+        mcpServers: { available: false },
+        vaults: { available: false },
+        memoryStores: { available: false },
+        personalAgentModels: [longModelId, "model-a", "model-b", "model-c"],
+      });
+    }
     throw new Error(`Unexpected request: ${path}`);
   };
 }
@@ -250,6 +259,7 @@ describe("administrator role routing", () => {
       "/api/v1/me",
       "/api/v1/admin/platform-agents",
       "/api/v1/admin/users",
+      "/api/v1/capabilities",
     ]);
     expect(requestedPaths).not.toContain("/api/v1/sessions");
     expect(requestedPaths).not.toContain("/api/v1/artifacts");
@@ -496,6 +506,15 @@ describe("platform Agent administration", () => {
           agents = agents.filter((agent) => agent.id !== disabledAgentId);
           return noContent();
         }
+        if (path === "/api/v1/capabilities") {
+          return json({
+            skills: { available: false },
+            mcpServers: { available: false },
+            vaults: { available: false },
+            memoryStores: { available: false },
+            personalAgentModels: [longModelId, "model-a", "model-b", "model-c"],
+          });
+        }
         throw new Error(`Unexpected request: ${method} ${path}`);
       }),
     );
@@ -513,11 +532,8 @@ describe("platform Agent administration", () => {
     );
     await user.type(screen.getByLabelText("Agent name"), "Code reviewer");
     await user.type(screen.getByLabelText("Description"), "Reviews changes");
-    await user.type(screen.getByLabelText("Model"), "model-c");
-    await user.type(
-      screen.getByLabelText("System Prompt"),
-      "Review carefully.",
-    );
+    await user.selectOptions(screen.getByLabelText("Model"), "model-c");
+    await user.type(screen.getByLabelText("System"), "Review carefully.");
     await user.click(screen.getByRole("button", { name: "Create Agent" }));
     expect(await screen.findByText("Code reviewer")).toBeInTheDocument();
 

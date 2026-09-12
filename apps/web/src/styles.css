@@ -494,6 +494,99 @@ select:not(.ui-select):hover {
   gap: var(--ui-space-4);
 }
 
+.agent-form-section {
+  display: grid;
+  min-width: 0;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-4);
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-medium);
+  background: var(--ui-color-surface-subtle);
+}
+
+.agent-form-section__header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: var(--ui-space-3);
+}
+
+.agent-form-section__index {
+  flex: 0 0 auto;
+  color: var(--ui-color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.agent-form-section__header h3 {
+  margin: 0;
+  color: var(--ui-color-text);
+  font-size: 0.875rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.agent-form-section__header p {
+  margin: 2px 0 0;
+  color: var(--ui-color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.agent-form-section__body {
+  display: grid;
+  min-width: 0;
+  gap: var(--ui-space-3);
+}
+
+.agent-capability-list {
+  display: grid;
+  min-width: 0;
+  gap: var(--ui-space-2);
+  margin: 0;
+}
+
+.agent-capability-list > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(96px, 0.3fr) minmax(0, 1fr);
+  gap: var(--ui-space-3);
+  align-items: baseline;
+}
+
+.agent-capability-list dt {
+  color: var(--ui-color-text);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.agent-capability-list dd {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ui-space-2);
+  margin: 0;
+  color: var(--ui-color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 560px) {
+  .agent-form-section__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--ui-space-1);
+  }
+
+  .agent-capability-list > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--ui-space-1);
+  }
+}
+
 .admin-loading-icon-slot {
   display: inline-grid;
   width: 15px;
@@ -519,6 +612,8 @@ select:not(.ui-select):hover {
 .admin-user-records {
   display: grid;
   gap: var(--ui-space-3);
+  container-type: inline-size;
+  container-name: admin-users;
 }
 
 .admin-user-record {
@@ -610,11 +705,15 @@ select:not(.ui-select):hover {
 }
 
 .admin-quota-fields .ui-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   gap: var(--ui-space-1);
 }
 
+/* Labels grow instead of using a fixed height, so the inputs stay baseline-aligned. */
 .admin-quota-fields .ui-field__label {
-  min-height: 32px;
+  flex: 1 0 auto;
   font-size: 0.75rem;
   line-height: 1.35;
 }
@@ -623,16 +722,18 @@ select:not(.ui-select):hover {
   margin-top: var(--ui-space-3);
 }
 
-/* Wide screens put the default Agent and the quotas side by side per account. */
-@media (min-width: 1024px) {
+/* Breakpoints track the panel's own width, not the viewport: .page caps at 1060px. */
+@container admin-users (min-width: 700px) {
   .admin-user-record {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
   }
 
   .admin-user-record > .admin-user-identity {
     grid-column: 1 / -1;
   }
+}
 
+@container admin-users (min-width: 880px) {
   .admin-quota-fields {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
@@ -2124,18 +2225,8 @@ select:not(.ui-select):hover {
   font-size: 0.84rem;
 }
 
-@media (max-width: 1100px) {
-  .admin-quota-fields {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .admin-user-record {
-    grid-template-columns: minmax(0, 1fr);
-    gap: var(--ui-space-4);
-  }
-
+/* Stacked mode: separators only, since the record is single-column by default. */
+@container admin-users (max-width: 699px) {
   .admin-user-group + .admin-user-group {
     padding-top: var(--ui-space-4);
     border-top: 1px solid var(--ui-color-border);
