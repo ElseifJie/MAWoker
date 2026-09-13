@@ -16,7 +16,9 @@ import {
   QuotaUsageService,
   SessionInputService,
   SessionService,
+  SkillService,
   UserAgentService,
+  UserDefaultAgentSynchronizer,
   type PlatformAgentRepository,
 } from "@pwa/domain";
 import { createTosArtifactStorage } from "@pwa/storage";
@@ -54,6 +56,7 @@ const admin = new PlatformAgentService({
   createId: randomUUID,
   passwordHasher: { hash: hashPassword },
   notifier,
+  userAgentLister: () => repositories.adminAgents.listUserAgents(),
 });
 const adminUsage = new AdminUsageService({
   repository: {
@@ -84,6 +87,12 @@ const sessions = new SessionService({
   environmentId: config.ark.environmentId,
   createId: randomUUID,
 });
+const skills = new SkillService({
+  repository: repositories.skills,
+  ark,
+  defaultAgents: new UserDefaultAgentSynchronizer(userAgents),
+  createId: randomUUID,
+});
 const inputs = new SessionInputService({
   repository: repositories.sessionInputs,
   ark,
@@ -109,6 +118,7 @@ const app = buildApp({
   quotaPolicy,
   adminUserDetail,
   userAgents,
+  skills,
   sessions,
   inputs,
   artifacts,

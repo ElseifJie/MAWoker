@@ -15,6 +15,8 @@ import type {
   ArkResource,
   ArkSession,
   ArkSessionInput,
+  ArkSkill,
+  ArkSkillInput,
 } from "./types.js";
 
 const agentSchema = z
@@ -32,7 +34,9 @@ type ArkAgentResponse = z.infer<typeof agentSchema>;
 /**
  * Ark v3 agents use `model: {id}` and never return the instructions, so the
  * write body maps our camel-case config onto the upstream shape and the write
- * response re-attaches the `systemPrompt` we just sent.
+ * response re-attaches the `systemPrompt` we just sent. Skill bindings follow
+ * the managed-agents wire format: an omitted `skills` key leaves the upstream
+ * binding untouched, while an explicit array (even empty) replaces it.
  */
 function arkAgentWriteBody(input: ArkAgentInput): Record<string, unknown> {
   return {
@@ -43,6 +47,15 @@ function arkAgentWriteBody(input: ArkAgentInput): Record<string, unknown> {
     ...(input.toolsetId !== undefined ? { toolsetId: input.toolsetId } : {}),
     ...(input.toolPermission !== undefined
       ? { toolPermission: input.toolPermission }
+      : {}),
+    ...(input.skills !== undefined
+      ? {
+          skills: input.skills.map((skill) => ({
+            type: "custom",
+            skill_id: skill.skillId,
+            ...(skill.version !== undefined ? { version: skill.version } : {}),
+          })),
+        }
       : {}),
   };
 }
@@ -175,6 +188,50 @@ const resourceSchema = z
     mountPath: z.string().min(1),
   })
   .strict();
+
+/**
+ * Skill responses tolerate Ark's evolving shape: `latest_version` started as a
+ * numeric placeholder before version management shipped and may arrive as a
+ * scalar or a `{version}` object; `display_title`/`description` are optional.
+ */
+const skillSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().optional(),
+    display_title: z.string().optional(),
+    description: z.string().optional(),
+    latest_version: z
+      .union([
+        z.number(),
+        z.string(),
+        z
+          .object({ version: z.union([z.number(), z.string()]) })
+          .passthrough()
+          .transform(({ version }) => version),
+      ])
+      .optional(),
+    source: z.enum(["custom", "skill_hub"]).optional(),
+  })
+  .passthrough()
+  .transform((skill) => ({
+    id: skill.id,
+    name: skill.name ?? "",
+    displayTitle: skill.display_title ?? "",
+    description: skill.description ?? "",
+    latestVersion:
+      skill.latest_version === undefined ? "1" : String(skill.latest_version),
+    source: skill.source ?? ("custom" as const),
+  }));
+
+function toArkSkill(
+  response: z.infer<typeof skillSchema>,
+  written?: ArkSkillInput,
+): ArkSkill {
+  return {
+    ...response,
+    displayTitle: response.displayTitle || written?.displayTitle || "",
+  };
+}
 
 /**
  * The Files API reports snake_case, seconds-since-epoch timestamps and an
@@ -628,6 +685,41 @@ export class HttpArkGateway implements ArkGateway {
       },
       async () => undefined,
     );
+  }
+
+  createSkill(
+    input: ArkSkillInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkSkill> {
+    const form = new FormData();
+    form.set(
+      "files",
+      new Blob([new Uint8Array(input.file.bytes).buffer], {
+        type: input.file.contentType,
+      }),
+      input.file.name,
+    );
+    if (input.displayTitle !== undefined) {
+      form.set("display_title", input.displayTitle);
+    }
+    return this.jsonRequest({
+      method: "POST",
+      path: "/api/v3/skills",
+      safe: false,
+      body: form,
+      schema: skillSchema,
+      options,
+    }).then((response) => toArkSkill(response, input));
+  }
+
+  getSkill(skillId: string, options?: ArkRequestOptions): Promise<ArkSkill> {
+    return this.jsonRequest({
+      method: "GET",
+      path: `/api/v3/skills/${encodeURIComponent(skillId)}`,
+      safe: true,
+      schema: skillSchema,
+      options,
+    }).then((response) => toArkSkill(response));
   }
 
   listSessionResources(

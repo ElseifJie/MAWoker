@@ -21,6 +21,7 @@ const userId = "00000000-0000-4000-8000-000000000001";
 const otherUserId = "00000000-0000-4000-8000-000000000002";
 const personalAgentId = "00000000-0000-4000-8000-000000000003";
 const platformAgentId = "00000000-0000-4000-8000-000000000004";
+const skillId = "00000000-0000-4000-8000-000000000005";
 const requestId = "req-user-agent";
 const input = {
   name: "Research",
@@ -72,6 +73,8 @@ function createRepository(limit = 10) {
                 status: "active" as const,
                 kind: "platform" as const,
                 editable: false as const,
+                isAutoDefault: false,
+                skills: [],
               },
             ]
           : []),
@@ -81,6 +84,11 @@ function createRepository(limit = 10) {
             ...agent,
             kind: "personal" as const,
             editable: true as const,
+            isAutoDefault: agent.isAutoDefault,
+            skills: (agent.skills ?? []).map((skill) => ({
+              id: skill.skillId,
+              displayTitle: skill.arkSkillId,
+            })),
           })),
       ];
     },
@@ -103,6 +111,33 @@ function createRepository(limit = 10) {
     },
     async findDefaultActive() {
       return defaultAgent?.id;
+    },
+    async findAutoDefault(ownerUserId) {
+      return [...personal.values()].find(
+        (agent) => agent.ownerUserId === ownerUserId && agent.isAutoDefault,
+      );
+    },
+    async findPlatformTemplate() {
+      return defaultAgent
+        ? {
+            name: "Platform",
+            description: "Shared",
+            modelId: "model-a",
+            systemPrompt: "Hidden",
+          }
+        : undefined;
+    },
+    async listAgentsBoundToSkill() {
+      return [...personal.values()].filter((agent) =>
+        (agent.skills ?? []).some((binding) => binding.skillId === skillId),
+      );
+    },
+    async replaceSkillBindings(id, ownerUserId, bindings) {
+      const current = personal.get(id);
+      if (!current || current.ownerUserId !== ownerUserId) {
+        throw new Error("Expected owned personal Agent");
+      }
+      personal.set(id, { ...current, skills: [...bindings] });
     },
     async findAvailableById(ownerUserId, id) {
       return (await repository.listAvailable(ownerUserId)).find(
@@ -458,7 +493,7 @@ describe("UserAgentService", () => {
     expect(updateAgent).toHaveBeenCalledOnce();
     expect(state.reconciliationIntents.get(personalAgentId)).toEqual({
       operation: "update",
-      configuration: { ...input, name: "Recovered name" },
+      configuration: { ...input, name: "Recovered name", skills: [] },
       arkVersion: "1",
     });
     await expect(

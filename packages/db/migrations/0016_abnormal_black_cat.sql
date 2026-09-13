@@ -1,0 +1,2 @@
+CREATE UNIQUE INDEX "skills_owner_name_active_unique" ON "skills" USING btree ("owner_user_id","name") WHERE "skills"."status" = 'active' and "skills"."name" <> '';--> statement-breakpoint
+CREATE UNIQUE INDEX "skills_preset_name_active_unique" ON "skills" USING btree ("name") WHERE "skills"."owner_user_id" is null and "skills"."status" = 'active' and "skills"."name" <> '';

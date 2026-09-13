@@ -187,7 +187,7 @@ describe("Fastify authentication routes", () => {
     expect(unauthenticated.statusCode).toBe(401);
     expect(authenticated.statusCode).toBe(200);
     expect(authenticated.json()).toEqual({
-      skills: { available: false },
+      skills: { available: true },
       mcpServers: { available: false },
       vaults: { available: false },
       memoryStores: { available: false },
@@ -207,7 +207,7 @@ describe("Fastify authentication routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
-      skills: { available: false },
+      skills: { available: true },
       mcpServers: { available: false },
       vaults: { available: false },
       memoryStores: { available: false },

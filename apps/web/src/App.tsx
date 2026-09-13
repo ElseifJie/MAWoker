@@ -29,6 +29,7 @@ import {
   type UsageSummary,
 } from "./api.js";
 import { AdminWorkspace } from "./AdminPage.js";
+import { AgentEditorPage } from "./AgentEditorPage.js";
 import { AgentPage } from "./AgentPage.js";
 import { SessionIntro } from "./components/SessionIntro.js";
 import type { FirstMessageDelivery } from "./components/SessionComposer.js";
@@ -37,6 +38,7 @@ import { SessionList } from "./components/SessionList.js";
 import { SessionSearch } from "./components/SessionSearch.js";
 import { FilesPage } from "./FilesPage.js";
 import { SessionPage } from "./SessionPage.js";
+import { SkillsPage } from "./SkillsPage.js";
 import {
   isThemePreference,
   useThemePreference,
@@ -598,6 +600,62 @@ function Workspace({
               onAuthRequired={onAuthRequired}
             />
           }
+        />
+        <Route
+          path="/agents/new"
+          element={
+            <AgentEditorPage
+              models={data.capabilities.personalAgentModels}
+              onAuthRequired={onAuthRequired}
+              onAgentSaved={(agent) => {
+                setData((current) => {
+                  if (!current) return current;
+                  const exists = current.agents.agents.some(
+                    (item) => item.id === agent.id,
+                  );
+                  return {
+                    ...current,
+                    agents: {
+                      ...current.agents,
+                      agents: exists
+                        ? current.agents.agents.map((item) =>
+                            item.id === agent.id ? agent : item,
+                          )
+                        : [...current.agents.agents, agent],
+                    },
+                  };
+                });
+              }}
+            />
+          }
+        />
+        <Route
+          path="/agents/:agentId/edit"
+          element={
+            <AgentEditorPage
+              models={data.capabilities.personalAgentModels}
+              onAuthRequired={onAuthRequired}
+              onAgentSaved={(agent) => {
+                setData((current) =>
+                  current
+                    ? {
+                        ...current,
+                        agents: {
+                          ...current.agents,
+                          agents: current.agents.agents.map((item) =>
+                            item.id === agent.id ? agent : item,
+                          ),
+                        },
+                      }
+                    : current,
+                );
+              }}
+            />
+          }
+        />
+        <Route
+          path="/settings/skills"
+          element={<SkillsPage onAuthRequired={onAuthRequired} />}
         />
         <Route
           path="/files"

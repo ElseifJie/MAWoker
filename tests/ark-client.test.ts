@@ -367,6 +367,51 @@ describe("InMemoryArkGateway", () => {
   });
 });
 
+  it("registers skills, validates bindings, and exposes the ids an Agent carries", async () => {
+    const gateway = new InMemoryArkGateway();
+    const skill = await gateway.createSkill({
+      file: {
+        name: "demo.zip",
+        contentType: "application/zip",
+        bytes: new Uint8Array([80, 75]),
+      },
+      displayTitle: "Demo",
+    });
+    expect(skill).toMatchObject({
+      id: "skill-1",
+      displayTitle: "Demo",
+      latestVersion: "1",
+      source: "custom",
+    });
+
+    const agent = await gateway.createAgent({
+      ...agentInput,
+      skills: [{ skillId: skill.id, version: "1" }],
+    });
+    expect(gateway.agentSkillIds(agent.id)).toEqual([skill.id]);
+
+    // Rebinding with an explicit array replaces the binding set.
+    await gateway.createSkill({
+      file: {
+        name: "second.zip",
+        contentType: "application/zip",
+        bytes: new Uint8Array([80, 75]),
+      },
+    });
+    const updated = await gateway.updateAgent(agent.id, {
+      ...agentInput,
+      currentVersion: agent.version,
+      skills: [{ skillId: "skill-2" }],
+    });
+    expect(updated.version).toBe(2);
+    expect(gateway.agentSkillIds(agent.id)).toEqual(["skill-2"]);
+
+    // Unknown skill ids are rejected like Ark would.
+    await expect(
+      gateway.createAgent({ ...agentInput, skills: [{ skillId: "skill-404" }] }),
+    ).rejects.toMatchObject({ category: "not_found" });
+  });
+
 describe("HttpArkGateway", () => {
   it("owns authentication and correlation IDs and validates responses", async () => {
     const fetch = vi.fn(
@@ -429,6 +474,82 @@ describe("HttpArkGateway", () => {
       description: agentInput.description,
       modelId: agentInput.modelId,
       systemPrompt: agentInput.systemPrompt,
+    });
+  });
+
+  it("binds custom skills on agent writes and posts skill packages to /api/v3/skills", async () => {
+    const fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/api/v3/skills" && init?.method === "POST") {
+          const form = init.body as FormData;
+          const file = form.get("files") as File;
+          expect(file.name).toBe("demo.zip");
+          expect(form.get("display_title")).toBe("Demo");
+          return Response.json({
+            id: "skill-1",
+            object: "skill",
+            name: "demo",
+            display_title: "Demo",
+            latest_version: 1,
+            source: "custom",
+          });
+        }
+        if (url.pathname === "/api/v3/skills/skill-1") {
+          expect(init?.method).toBe("GET");
+          return Response.json({
+            id: "skill-1",
+            object: "skill",
+            name: "demo",
+            latest_version: { version: "2" },
+          });
+        }
+        expect(url.pathname).toBe("/api/v3/agents");
+        const body = JSON.parse(String(init?.body));
+        if ((body.skills ?? null) !== null) {
+          expect(body.skills).toEqual([
+            { type: "custom", skill_id: "skill-1", version: "2" },
+          ]);
+        }
+        return Response.json(arkAgentResponse);
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+    });
+
+    const created = await gateway.createSkill({
+      file: {
+        name: "demo.zip",
+        contentType: "application/zip",
+        bytes: new Uint8Array([80, 75]),
+      },
+      displayTitle: "Demo",
+    });
+    expect(created).toEqual({
+      id: "skill-1",
+      name: "demo",
+      displayTitle: "Demo",
+      description: "",
+      latestVersion: "1",
+      source: "custom",
+    });
+
+    const fetched = await gateway.getSkill("skill-1");
+    expect(fetched).toMatchObject({ id: "skill-1", latestVersion: "2" });
+
+    await expect(
+      gateway.createAgent({
+        ...agentInput,
+        skills: [{ skillId: created.id, version: fetched.latestVersion }],
+      }),
+    ).resolves.toMatchObject({ id: "agent-1" });
+
+    // An omitted skills key leaves the upstream binding untouched.
+    await expect(gateway.createAgent(agentInput)).resolves.toMatchObject({
+      id: "agent-1",
     });
   });
 

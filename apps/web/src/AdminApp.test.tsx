@@ -322,12 +322,12 @@ describe("administrator role routing", () => {
       name: "Administration",
     });
     expect(
-      within(navigation).getByRole("link", { name: "Platform Agents" }),
+      within(navigation).getByRole("link", { name: "Agents" }),
     ).toBeInTheDocument();
     expect(
       within(navigation).getByRole("link", { name: "Users" }),
     ).toBeInTheDocument();
-    for (const name of ["New task", "Agents", "My files", "Sessions"]) {
+    for (const name of ["New task", "My files", "Sessions"]) {
       expect(
         within(navigation).queryByRole("link", { name }),
       ).not.toBeInTheDocument();
@@ -439,7 +439,7 @@ describe("administrator role routing", () => {
 
     renderApp("/admin/platform-agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Platform Agents" });
+    await screen.findByRole("heading", { name: "Agents" });
     const sidebar = screen.getByRole("complementary", { hidden: true });
     const menu = screen.getByRole("button", {
       name: "Open administration navigation",
@@ -475,7 +475,7 @@ describe("platform Agent administration", () => {
     return screen.getByRole("menu");
   }
 
-  it("reserves the Agent editor loading icon slot while idle", async () => {
+  it("opens the platform Agent editor page with a disabled submit while idle", async () => {
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
 
     renderApp("/admin/platform-agents");
@@ -484,10 +484,10 @@ describe("platform Agent administration", () => {
       await screen.findByRole("button", { name: "New platform Agent" }),
     );
 
+    await screen.findByRole("heading", { name: "New platform Agent" });
     const saveButton = screen.getByRole("button", { name: "Create Agent" });
-    expect(
-      saveButton.querySelector(".admin-loading-icon-slot"),
-    ).toHaveAttribute("aria-hidden", "true");
+    expect(saveButton).toBeDisabled();
+    expect(screen.getByLabelText("Name")).toBeInTheDocument();
   });
 
   it("uses responsive labeled records without hiding long model identifiers", async () => {
@@ -608,29 +608,29 @@ describe("platform Agent administration", () => {
 
     renderApp("/admin/platform-agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Platform Agents" });
+    await screen.findByRole("heading", { name: "Agents" });
 
     const createTrigger = screen.getByRole("button", {
       name: "New platform Agent",
     });
     await user.click(createTrigger);
-    await waitFor(() =>
-      expect(screen.getByLabelText("Agent name")).toHaveFocus(),
-    );
-    await user.type(screen.getByLabelText("Agent name"), "Code reviewer");
+    await screen.findByRole("heading", { name: "New platform Agent" });
+    await user.type(screen.getByLabelText("Name"), "Code reviewer");
     await user.type(screen.getByLabelText("Description"), "Reviews changes");
     await user.selectOptions(screen.getByLabelText("Model"), "model-c");
     await user.type(screen.getByLabelText("System"), "Review carefully.");
     await user.click(screen.getByRole("button", { name: "Create Agent" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Code reviewer")).toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "Edit Research assistant" }),
     );
-    const name = screen.getByLabelText("Agent name");
+    const name = await screen.findByLabelText("Name");
     await user.clear(name);
     await user.type(name, "Research lead");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Research lead")).toBeInTheDocument();
     expect(screen.getByText("5")).toBeInTheDocument();
 
@@ -762,16 +762,16 @@ describe("platform Agent administration", () => {
         name: "Edit Research assistant",
       }),
     );
-    expect(screen.getByText("Current Ark version: 4")).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Edit platform Agent" });
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(
       await screen.findByText(
-        "This Agent changed elsewhere. Reload the page before saving again.",
+        "This Agent changed elsewhere. Go back and reopen the editor, then try again.",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("dialog", { name: "Edit Agent" }),
+      screen.getByRole("heading", { name: "Edit platform Agent" }),
     ).toBeInTheDocument();
   });
 

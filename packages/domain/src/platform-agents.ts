@@ -37,6 +37,23 @@ export interface DefaultAgentRecord {
   assignedAt: Date;
 }
 
+/** A user-owned Agent as visible to administrators (requirement: admins can
+ * see every user's exclusive default and personal Agents). */
+export interface AdminUserAgentRecord {
+  id: string;
+  name: string;
+  description: string;
+  modelId: string;
+  arkVersion: string;
+  status: PlatformAgentStatus;
+  isAutoDefault: boolean;
+  ownerUserId: string;
+  ownerEmail: string;
+  skills: Array<{ id: string; displayTitle: string }>;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface AdminUserSummary {
   id: string;
   email: string;
@@ -323,6 +340,7 @@ export class PlatformAgentService {
       createId: () => string;
       passwordHasher: PasswordHasher;
       notifier?: Notifier;
+      userAgentLister?: (() => PromiseLike<AdminUserAgentRecord[]>) | undefined;
     },
   ) {
     this.models = new Set(dependencies.modelAllowlist);
@@ -334,6 +352,14 @@ export class PlatformAgentService {
 
   listPlatformAgents(): PromiseLike<PlatformAgentRecord[]> {
     return this.list();
+  }
+
+  listUserAgents(): PromiseLike<AdminUserAgentRecord[]> {
+    const lister = this.dependencies.userAgentLister;
+    if (!lister) {
+      throw new Error("User Agent listing is not configured");
+    }
+    return lister();
   }
 
   createPlatformAgent(

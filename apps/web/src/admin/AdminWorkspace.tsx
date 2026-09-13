@@ -14,6 +14,7 @@ import {
   type CurrentUser,
 } from "../api.js";
 import { AppShell, EmptyState, Spinner } from "../ui/index.js";
+import { AdminAgentEditorPage } from "./AdminAgentEditorPage.js";
 import { AdminAuditPage } from "./AdminAuditPage.js";
 import { AdminPlatformAgentsPage } from "./AdminPlatformAgentsPage.js";
 import { AdminSettingsPage } from "./AdminSettingsPage.js";
@@ -119,7 +120,7 @@ export function AdminWorkspace({
         { to: "/admin/audit", label: "Audit", icon: ScrollText },
         {
           to: "/admin/platform-agents",
-          label: "Platform Agents",
+          label: "Agents",
           icon: Bot,
         },
         { to: "/admin/settings", label: "Settings", icon: Settings },
@@ -163,9 +164,40 @@ export function AdminWorkspace({
           element={
             <AdminPlatformAgentsPage
               agents={agents}
-              models={models}
-              onAgentsChanged={setAgents}
+              onAgentsChanged={(updated) => setAgents(updated)}
               onAuthRequired={onAuthRequired}
+            />
+          }
+        />
+        <Route
+          path="/admin/platform-agents/new"
+          element={
+            <AdminAgentEditorPage
+              models={models}
+              onAuthRequired={onAuthRequired}
+              onAgentSaved={(agent) => {
+                setAgents((current) =>
+                  current?.some((item) => item.id === agent.id)
+                    ? current.map((item) => (item.id === agent.id ? agent : item))
+                    : [...(current ?? []), agent],
+                );
+              }}
+            />
+          }
+        />
+        <Route
+          path="/admin/platform-agents/:agentId/edit"
+          element={
+            <AdminAgentEditorPage
+              models={models}
+              onAuthRequired={onAuthRequired}
+              onAgentSaved={(agent) => {
+                setAgents(
+                  (current) =>
+                    current?.map((item) => (item.id === agent.id ? agent : item)) ??
+                    null,
+                );
+              }}
             />
           }
         />

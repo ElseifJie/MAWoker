@@ -10,6 +10,20 @@ import {
 import { ResourceNotFoundError } from "./errors.js";
 import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
 
+export interface AgentSkillBinding {
+  /** Local `skills.id`. */
+  skillId: string;
+  /** Upstream Ark skill id the binding resolves to. */
+  arkSkillId: string;
+  /** Ark skill version pinned at bind time. */
+  arkVersion: string;
+}
+
+export interface AgentSkillSummary {
+  id: string;
+  displayTitle: string;
+}
+
 export interface PersonalAgentRecord {
   id: string;
   ownerUserId: string;
@@ -20,6 +34,8 @@ export interface PersonalAgentRecord {
   systemPrompt: string;
   arkVersion: string;
   status: PlatformAgentStatus;
+  isAutoDefault: boolean;
+  skills: AgentSkillBinding[];
   lastErrorCode: string | null;
 }
 
@@ -34,6 +50,8 @@ export interface AvailableAgentRecord {
   status: PlatformAgentStatus;
   kind: "platform" | "personal";
   editable: boolean;
+  isAutoDefault: boolean;
+  skills: AgentSkillSummary[];
 }
 
 interface PersonalAgentAuditEntry {
@@ -52,15 +70,38 @@ export interface UserAgentRepository {
   listAvailable(userId: string): PromiseLike<AvailableAgentRecord[]>;
   findRecentAvailable(userId: string): PromiseLike<string | undefined>;
   findDefaultActive(userId: string): PromiseLike<string | undefined>;
+  findAutoDefault(userId: string): PromiseLike<PersonalAgentRecord | undefined>;
+  /**
+   * The configuration the user's exclusive default Agent is modelled on: the
+   * assigned platform default Agent when there is one, otherwise the oldest
+   * active platform Agent, otherwise undefined (the service falls back to the
+   * model allowlist defaults).
+   */
+  findPlatformTemplate(
+    userId: string,
+  ): PromiseLike<
+    Pick<
+      AgentConfiguration,
+      "name" | "description" | "modelId" | "systemPrompt"
+    > | undefined
+  >;
   findAvailableById(
     userId: string,
     id: string,
   ): PromiseLike<AvailableAgentRecord | undefined>;
+  listAgentsBoundToSkill(
+    skillId: string,
+  ): PromiseLike<PersonalAgentRecord[]>;
+  replaceSkillBindings(
+    agentId: string,
+    userId: string,
+    bindings: AgentSkillBinding[],
+  ): PromiseLike<void>;
   createProvisioning(
     record: Omit<
       PersonalAgentRecord,
-      "arkAgentId" | "arkVersion" | "status" | "lastErrorCode"
-    >,
+      "arkAgentId" | "arkVersion" | "status" | "lastErrorCode" | "skills"
+    > & { skills: AgentSkillBinding[] },
   ): PromiseLike<PersonalAgentRecord | undefined>;
   findOwned(
     userId: string,
@@ -139,6 +180,11 @@ interface AgentConfiguration {
   description: string;
   modelId: string;
   systemPrompt: string;
+  /**
+   * Skill bindings pushed with the configuration. `undefined` keeps whatever
+   * binding the Agent already has; an explicit array (even empty) replaces it.
+   */
+  skills?: AgentSkillBinding[] | undefined;
 }
 
 interface MutationContext {
@@ -181,6 +227,29 @@ function createCorrelationId(id: string): string {
   return `personal-agent-create:${id}`;
 }
 
+const AUTO_DEFAULT_AGENT_NAME = "My Agent";
+const AUTO_DEFAULT_AGENT_DESCRIPTION =
+  "Your personal default Agent. Created from the platform default and kept in sync with your Skills.";
+const AUTO_DEFAULT_AGENT_PROMPT =
+  "You are a helpful personal work agent. Complete the user's task with the tools and Skills available to you.";
+
+/**
+ * Order-insensitive binding equality: the sync rewrites the binding list in a
+ * canonical order, so only membership and pinned versions matter.
+ */
+export function sameAgentSkillBindings(
+  current: AgentSkillBinding[],
+  desired: AgentSkillBinding[],
+): boolean {
+  if (current.length !== desired.length) return false;
+  const key = (binding: AgentSkillBinding) =>
+    `${binding.skillId}:${binding.arkSkillId}:${binding.arkVersion}`;
+  const desiredKeys = new Set(desired.map(key));
+  return current.every((binding) => desiredKeys.has(key(binding)));
+}
+
+const sameBindings = sameAgentSkillBindings;
+
 export class UserAgentService {
   private readonly models: Set<string>;
 
@@ -202,8 +271,22 @@ export class UserAgentService {
     const agents = (
       await this.dependencies.repository.listAvailable(userId)
     ).map((agent) => ({ ...agent, version: agent.arkVersion }));
-    const recent =
-      await this.dependencies.repository.findRecentAvailable(userId);
+    const autoDefault = await this.dependencies.repository.findAutoDefault(
+      userId,
+    );
+    if (autoDefault && autoDefault.status === "active") {
+      return {
+        agents,
+        selection: {
+          agentId: autoDefault.id,
+          source: "personal_default" as const,
+        },
+        blocker: null,
+      };
+    }
+    const recent = await this.dependencies.repository.findRecentAvailable(
+      userId,
+    );
     if (recent) {
       return {
         agents,
@@ -231,8 +314,16 @@ export class UserAgentService {
   }
 
   async resolveSelection(userId: string): Promise<AvailableAgentRecord> {
+    const autoDefault = await this.dependencies.repository.findAutoDefault(
+      userId,
+    );
+    const primary =
+      autoDefault && autoDefault.status === "active"
+        ? autoDefault.id
+        : undefined;
     const recent =
-      await this.dependencies.repository.findRecentAvailable(userId);
+      primary ??
+      (await this.dependencies.repository.findRecentAvailable(userId));
     const selected =
       recent ?? (await this.dependencies.repository.findDefaultActive(userId));
     if (!selected) throw new NoDefaultAgentError();
@@ -255,7 +346,7 @@ export class UserAgentService {
   }
 
   async create(
-    input: AgentConfiguration,
+    input: AgentConfiguration & { isAutoDefault?: boolean },
     context: MutationContext,
   ): Promise<PersonalAgentRecord> {
     this.assertModel(input.modelId);
@@ -263,17 +354,25 @@ export class UserAgentService {
     const local = await this.dependencies.repository.createProvisioning({
       id,
       ownerUserId: context.userId,
-      ...input,
+      name: input.name,
+      description: input.description,
+      modelId: input.modelId,
+      systemPrompt: input.systemPrompt,
+      isAutoDefault: input.isAutoDefault ?? false,
+      skills: input.skills ?? [],
     });
     if (!local) throw new PersonalAgentQuotaExceededError();
 
     let upstream;
     try {
       const operationId = createCorrelationId(id);
-      upstream = await this.dependencies.ark.createAgent(this.arkInput(input), {
-        correlationId: operationId,
-        idempotencyKey: operationId,
-      });
+      upstream = await this.dependencies.ark.createAgent(
+        this.arkInput(input),
+        {
+          correlationId: operationId,
+          idempotencyKey: operationId,
+        },
+      );
     } catch (error) {
       const errorCode = arkErrorCode(error);
       if (isArkCategory(error, "unknown_write_outcome")) {
@@ -318,6 +417,78 @@ export class UserAgentService {
     }
     await this.audit(context, "personal_agent.create", id, "succeeded");
     return created;
+  }
+
+  /**
+   * The user's exclusive default Agent: created once from the platform
+   * default Agent's configuration with every owned Skill bound, then kept in
+   * sync by the Skill service whenever their Skill library changes.
+   */
+  async ensureAutoDefault(
+    userId: string,
+    bindings: AgentSkillBinding[],
+    context: MutationContext,
+  ): Promise<PersonalAgentRecord> {
+    const existing = await this.dependencies.repository.findAutoDefault(userId);
+    if (existing) {
+      if (existing.status !== "active") return existing;
+      return existing;
+    }
+    const template =
+      (await this.dependencies.repository.findPlatformTemplate(userId)) ??
+      ({
+        name: AUTO_DEFAULT_AGENT_NAME,
+        description: AUTO_DEFAULT_AGENT_DESCRIPTION,
+        modelId: this.allowlistDefaultModel(),
+        systemPrompt: AUTO_DEFAULT_AGENT_PROMPT,
+      } satisfies AgentConfiguration);
+    try {
+      return await this.create(
+        {
+          ...template,
+          name: AUTO_DEFAULT_AGENT_NAME,
+          isAutoDefault: true,
+          skills: bindings,
+        },
+        context,
+      );
+    } catch (error) {
+      // A concurrent ensure already provisioned the Agent; return theirs. A
+      // failed row is not a race winner, so the original error still surfaces.
+      const raced = await this.dependencies.repository.findAutoDefault(userId);
+      if (raced && raced.status !== "failed") return raced;
+      throw error;
+    }
+  }
+
+  /** Rebinds the Agent's Skills, leaving the rest of its configuration alone. */
+  async updateAgentSkills(
+    id: string,
+    bindings: AgentSkillBinding[],
+    context: MutationContext,
+  ): Promise<PersonalAgentRecord> {
+    const current = await this.requireOwned(context.userId, id);
+    if (current.arkAgentId.startsWith("pending:")) {
+      // The Agent was never provisioned upstream: its Skills are pushed with
+      // the create itself, so only the local binding rows need rewriting.
+      if (!sameBindings(current.skills, bindings)) {
+        await this.dependencies.repository.replaceSkillBindings(
+          id,
+          context.userId,
+          bindings,
+        );
+      }
+      return current;
+    }
+    return this.update(
+      id,
+      { skills: bindings, arkVersion: current.arkVersion },
+      context,
+    );
+  }
+
+  listAgentsBoundToSkill(skillId: string): PromiseLike<PersonalAgentRecord[]> {
+    return this.dependencies.repository.listAgentsBoundToSkill(skillId);
   }
 
   async reconcileCreate(
@@ -373,11 +544,14 @@ export class UserAgentService {
       throw new AgentConflictError();
     }
 
-    const configuration = {
+    const configuration: AgentConfiguration & {
+      skills: AgentSkillBinding[];
+    } = {
       name: input.name ?? current.name,
       description: input.description ?? current.description,
       modelId: input.modelId ?? current.modelId,
       systemPrompt: input.systemPrompt ?? current.systemPrompt,
+      skills: input.skills ?? current.skills,
     };
     await this.dependencies.repository.saveUpdateIntent(
       id,
@@ -413,6 +587,13 @@ export class UserAgentService {
 
     let updated;
     try {
+      if (input.skills !== undefined) {
+        await this.dependencies.repository.replaceSkillBindings(
+          id,
+          context.userId,
+          configuration.skills,
+        );
+      }
       updated = await this.dependencies.repository.update(id, context.userId, {
         ...configuration,
         arkVersion: String(upstream.version),
@@ -443,9 +624,14 @@ export class UserAgentService {
     const desired = intent.configuration;
     this.assertModel(desired.modelId);
 
+    const configurationMatches = this.matchesConfiguration(current, desired);
+    const skillsMatch =
+      desired.skills === undefined ||
+      sameBindings(current.skills, desired.skills);
     if (
       Number(current.arkVersion) > Number(intent.arkVersion) &&
-      this.matchesConfiguration(current, desired)
+      configurationMatches &&
+      skillsMatch
     ) {
       return current;
     }
@@ -456,7 +642,7 @@ export class UserAgentService {
     let resolved = upstream;
     if (
       upstream.version === Number(intent.arkVersion) &&
-      !this.matchesConfiguration(upstream, desired)
+      (!this.matchesConfiguration(upstream, desired) || !skillsMatch)
     ) {
       resolved = await this.dependencies.ark.updateAgent(
         current.arkAgentId,
@@ -468,16 +654,27 @@ export class UserAgentService {
       );
     } else if (
       upstream.version < Number(intent.arkVersion) ||
-      !this.matchesConfiguration(upstream, desired)
+      !this.matchesConfiguration(upstream, desired) ||
+      !skillsMatch
     ) {
       throw new AgentConflictError();
     }
 
+    if (desired.skills !== undefined) {
+      await this.dependencies.repository.replaceSkillBindings(
+        id,
+        context.userId,
+        desired.skills,
+      );
+    }
     const reconciled = await this.dependencies.repository.update(
       id,
       context.userId,
       {
-        ...desired,
+        name: desired.name,
+        description: desired.description,
+        modelId: desired.modelId,
+        systemPrompt: desired.systemPrompt,
         arkVersion: String(resolved.version),
         status: "active",
         lastErrorCode: null,
@@ -605,9 +802,22 @@ export class UserAgentService {
     if (!this.models.has(modelId)) throw new InvalidModelError();
   }
 
+  private allowlistDefaultModel(): string {
+    return this.models.values().next().value ?? "";
+  }
+
   private arkInput(input: AgentConfiguration): ArkAgentInput {
     return {
-      ...input,
+      name: input.name,
+      description: input.description,
+      modelId: input.modelId,
+      systemPrompt: input.systemPrompt,
+      // Domain bindings carry both local and upstream ids; the gateway only
+      // speaks upstream ids.
+      skills: input.skills?.map((skill) => ({
+        skillId: skill.arkSkillId,
+        version: skill.arkVersion,
+      })),
       toolsetId: PLATFORM_AGENT_TOOLSET_ID,
       toolPermission: PLATFORM_AGENT_TOOL_PERMISSION,
     };

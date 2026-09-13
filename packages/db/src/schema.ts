@@ -36,6 +36,12 @@ export const agentStatus = pgEnum("agent_status", [
   "deleting",
 ]);
 export const agentKind = pgEnum("agent_kind", ["platform", "personal"]);
+export const skillStatus = pgEnum("skill_status", [
+  "provisioning",
+  "active",
+  "failed",
+  "deleting",
+]);
 export const sessionStatus = pgEnum("session_status", [
   "idle",
   "running",
@@ -170,6 +176,12 @@ export const personalAgents = pgTable(
     systemPrompt: text("system_prompt").notNull(),
     arkVersion: text("ark_version").notNull(),
     status: agentStatus("status").default("provisioning").notNull(),
+    /**
+     * Marks the one Agent per user that the platform owns on their behalf: it
+     * is provisioned from the platform default Agent the first time the user
+     * uploads a Skill and is kept bound to every Skill they own.
+     */
+    isAutoDefault: boolean("is_auto_default").default(false).notNull(),
     lastErrorCode: text("last_error_code"),
     ...timestamps,
   },
@@ -179,6 +191,9 @@ export const personalAgents = pgTable(
       table.ownerUserId,
       table.arkAgentId,
     ),
+    uniqueIndex("personal_agents_owner_auto_default_unique")
+      .on(table.ownerUserId)
+      .where(sql`${table.isAutoDefault}`),
     index("personal_agents_owner_status_idx").on(
       table.ownerUserId,
       table.status,
@@ -200,6 +215,79 @@ export const userDefaultAgents = pgTable("user_default_agents", {
     .defaultNow()
     .notNull(),
 });
+
+/**
+ * A Skill package uploaded to Ark. A row with `ownerUserId` is a user's custom
+ * Skill; `ownerUserId` null marks a platform preset Skill. The bytes live in
+ * Ark (there is no Ark delete or update Skill API yet), so "editing" a Skill
+ * re-uploads a fresh package and swaps the upstream identity on the same row,
+ * and deleting a row only unbinds it locally.
+ */
+export const skills = pgTable(
+  "skills",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
+    arkSkillId: text("ark_skill_id").notNull().unique(),
+    /** The Skill name Ark parsed out of the package's SKILL.md. */
+    name: text("name").default("").notNull(),
+    displayTitle: text("display_title").notNull(),
+    description: text("description").default("").notNull(),
+    latestVersion: text("latest_version").default("1").notNull(),
+    source: text("source").default("custom").notNull(),
+    fileName: text("file_name").default("").notNull(),
+    fileSize: bigint("file_size", { mode: "number" }).default(0).notNull(),
+    status: skillStatus("status").default("provisioning").notNull(),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    check("skills_file_size_check", sql`${table.fileSize} >= 0`),
+    index("skills_owner_status_idx").on(table.ownerUserId, table.status),
+    index("skills_owner_created_idx").on(table.ownerUserId, table.createdAt),
+    /**
+     * Storage identity is (skill name, owner): the same package name uploaded
+     * by two users is two independent rows, and a user can hold one active
+     * row per name. Empty names (unparseable packages) are exempt.
+     */
+    uniqueIndex("skills_owner_name_active_unique")
+      .on(table.ownerUserId, table.name)
+      .where(sql`${table.status} = 'active' and ${table.name} <> ''`),
+    uniqueIndex("skills_preset_name_active_unique")
+      .on(table.name)
+      .where(
+        sql`${table.ownerUserId} is null and ${table.status} = 'active' and ${table.name} <> ''`,
+      ),
+  ],
+);
+
+/**
+ * Which Skills a personal Agent was created/updated with. The binding is a
+ * snapshot pushed to Ark as `skills: [{skill_id, version}]`; rows are rewritten
+ * on every Skill or Agent change that rebinds the Agent.
+ */
+export const personalAgentSkills = pgTable(
+  "personal_agent_skills",
+  {
+    agentId: uuid("agent_id")
+      .notNull()
+      .references(() => personalAgents.id, { onDelete: "cascade" }),
+    skillId: uuid("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    arkSkillId: text("ark_skill_id").notNull(),
+    arkVersion: text("ark_version").notNull(),
+    addedAt: timestamp("added_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.agentId, table.skillId] }),
+    index("personal_agent_skills_skill_idx").on(table.skillId),
+  ],
+);
 
 export const sessions = pgTable(
   "sessions",

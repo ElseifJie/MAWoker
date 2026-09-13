@@ -206,20 +206,23 @@ describe("Task 18 browser acceptance", () => {
     await user.click(
       screen.getByRole("button", { name: "New personal Agent" }),
     );
-    await user.type(screen.getByLabelText("Agent name"), "Private reviewer");
+    await screen.findByRole("heading", { name: "New personal Agent" });
+    await user.type(screen.getByLabelText("Name"), "Private reviewer");
     await user.type(screen.getByLabelText("Description"), "Checks reports");
     await user.selectOptions(screen.getByLabelText("Model"), "model-a");
-    await user.type(screen.getByLabelText("System Prompt"), "Review safely.");
+    await user.type(screen.getByLabelText("System"), "Review safely.");
     await user.click(screen.getByRole("button", { name: "Create Agent" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Private reviewer")).toBeVisible();
 
     await user.click(
       screen.getByRole("button", { name: "Edit Private reviewer" }),
     );
-    const agentName = await screen.findByLabelText("Agent name");
+    const agentName = await screen.findByLabelText("Name");
     await user.clear(agentName);
     await user.type(agentName, "Private editor");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Private editor")).toBeVisible();
     await user.click(
       screen.getByRole("button", { name: "Delete Private editor" }),
@@ -290,25 +293,28 @@ describe("Task 18 browser acceptance", () => {
     const user = await signIn("admin@example.com");
 
     expect(
-      await screen.findByRole("heading", { name: "Platform Agents" }),
+      await screen.findByRole("heading", { name: "Agents" }),
     ).toBeVisible();
     await user.click(
       screen.getByRole("button", { name: "New platform Agent" }),
     );
-    await user.type(screen.getByLabelText("Agent name"), "Operations Agent");
+    await screen.findByRole("heading", { name: "New platform Agent" });
+    await user.type(screen.getByLabelText("Name"), "Operations Agent");
     await user.type(screen.getByLabelText("Description"), "Runs operations");
-    await user.type(screen.getByLabelText("Model"), "model-a");
-    await user.type(screen.getByLabelText("System Prompt"), "Operate safely.");
+    await user.selectOptions(screen.getByLabelText("Model"), "model-a");
+    await user.type(screen.getByLabelText("System"), "Operate safely.");
     await user.click(screen.getByRole("button", { name: "Create Agent" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Operations Agent")).toBeVisible();
 
     await user.click(
       screen.getByRole("button", { name: "Edit Operations Agent" }),
     );
-    const name = screen.getByLabelText("Agent name");
+    const name = await screen.findByLabelText("Name");
     await user.clear(name);
     await user.type(name, "Operations Lead");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Operations Lead")).toBeVisible();
 
     await user.click(screen.getByRole("link", { name: "Users" }));
@@ -352,7 +358,7 @@ describe("Task 18 browser acceptance", () => {
     );
     expect(await screen.findByText("Quotas saved.")).toBeVisible();
 
-    await user.click(screen.getByRole("link", { name: "Platform Agents" }));
+    await user.click(screen.getByRole("link", { name: "Agents" }));
     await user.click(
       await screen.findByRole("button", {
         name: "Actions for Operations Lead",

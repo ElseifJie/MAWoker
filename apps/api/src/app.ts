@@ -7,6 +7,7 @@ import {
   AgentReferencedError,
   type ArtifactRecord,
   InvalidModelError,
+  InvalidSkillPackageError,
   InvalidUploadNameError,
   InvalidUserInputError,
   LastActiveAdminError,
@@ -14,10 +15,13 @@ import {
   ResourceNotFoundError,
   SelfTargetForbiddenError,
   SessionTerminatedError,
+  SkillNotSelectableError,
   UserEmailConflictError,
   type AdminPermission,
+  type AdminUserAgentRecord,
   type AdminUserCreated,
   type AdminUserLifecycleResult,
+  type AgentSkillBinding,
   type AuditLogCursor,
   type AuditLogEntry,
   type AuditLogQuery,
@@ -27,6 +31,8 @@ import {
   type PlatformAgentRecord,
   type SessionRecord,
   type SessionInputRecord,
+  type SkillRecord,
+  type SkillScope,
   type QuotaUsageSummary,
   type TenantAuthorizationService,
   type TenantResource,
@@ -69,6 +75,7 @@ export interface ApiAuthService {
 
 export interface AdminService {
   listPlatformAgents(): PromiseLike<PlatformAgentRecord[]>;
+  listUserAgents(): PromiseLike<AdminUserAgentRecord[]>;
   createPlatformAgent(
     input: {
       name: string;
@@ -331,7 +338,10 @@ export interface UserAgentApiService {
         lastErrorCode?: string | null;
       }
     >;
-    selection: { agentId: string; source: "recent" | "default" } | null;
+    selection: {
+      agentId: string;
+      source: "personal_default" | "recent" | "default";
+    } | null;
     blocker: {
       code: "NO_DEFAULT_AGENT";
       message: string;
@@ -344,6 +354,7 @@ export interface UserAgentApiService {
       description: string;
       modelId: string;
       systemPrompt: string;
+      skills?: AgentSkillBinding[];
     },
     context: { userId: string; requestId: string },
   ): PromiseLike<PersonalAgentRecord>;
@@ -354,6 +365,7 @@ export interface UserAgentApiService {
       description?: string;
       modelId?: string;
       systemPrompt?: string;
+      skills?: AgentSkillBinding[];
       arkVersion: string;
     },
     context: { userId: string; requestId: string },
@@ -363,6 +375,40 @@ export interface UserAgentApiService {
     context: { userId: string; requestId: string },
   ): PromiseLike<void>;
 }
+
+export interface SkillApiService {
+  list(
+    userId: string,
+    query: { scope: SkillScope; search?: string | undefined },
+  ): PromiseLike<SkillRecord[]>;
+  upload(
+    input: {
+      file: { name: string; contentType: string; bytes: Uint8Array };
+      displayTitle?: string | undefined;
+      description?: string | undefined;
+    },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<{ skill: SkillRecord; defaultAgentSync: SyncOutcome }>;
+  update(
+    id: string,
+    input: {
+      file?: { name: string; contentType: string; bytes: Uint8Array };
+      displayTitle?: string | undefined;
+      description?: string | undefined;
+    },
+    context: { userId: string; requestId: string },
+  ): PromiseLike<{ skill: SkillRecord; defaultAgentSync: SyncOutcome }>;
+  delete(
+    id: string,
+    context: { userId: string; requestId: string },
+  ): PromiseLike<SyncOutcome>;
+  resolveBindings(
+    userId: string,
+    skillIds: string[],
+  ): PromiseLike<AgentSkillBinding[]>;
+}
+
+type SyncOutcome = { synced: true } | { synced: false; errorCode: string };
 
 export interface SessionApiService {
   create(
@@ -476,6 +522,7 @@ interface BuildAppOptions {
   quotaPolicy?: QuotaPolicyApiService;
   adminUserDetail?: AdminUserDetailApiService;
   userAgents?: UserAgentApiService;
+  skills?: SkillApiService;
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
   artifacts?: ArtifactApiService;
@@ -578,11 +625,18 @@ const updatePlatformAgentBodySchema = {
   ],
 } as const;
 
+const skillIdsSchema = {
+  type: "array",
+  items: { type: "string", format: "uuid" },
+  maxItems: 50,
+  uniqueItems: true,
+} as const;
+
 const createPersonalAgentBodySchema = {
   type: "object",
   additionalProperties: false,
   required: ["name", "modelId", "systemPrompt"],
-  properties: agentProperties,
+  properties: { ...agentProperties, skillIds: skillIdsSchema },
 } as const;
 
 const updatePersonalAgentBodySchema = {
@@ -591,6 +645,7 @@ const updatePersonalAgentBodySchema = {
   required: ["arkVersion"],
   properties: {
     ...agentProperties,
+    skillIds: skillIdsSchema,
     arkVersion: { type: "string", pattern: "^[1-9][0-9]*$" },
   },
   anyOf: [
@@ -598,6 +653,7 @@ const updatePersonalAgentBodySchema = {
     { required: ["description"] },
     { required: ["modelId"] },
     { required: ["systemPrompt"] },
+    { required: ["skillIds"] },
   ],
 } as const;
 
@@ -1206,10 +1262,50 @@ function publicUserAgent(
     status: agent.status,
     kind: personal ? ("personal" as const) : agent.kind,
     editable: personal ? true : agent.editable,
+    isAutoDefault: agent.isAutoDefault,
+    // AvailableAgentRecord carries Skill summaries; a bare provisioning record
+    // (create/update) carries Ark bindings instead, so no titles are claimed.
+    ...("kind" in agent
+      ? { skills: agent.skills }
+      : { skills: agent.skills.map((skill) => ({ id: skill.skillId })) }),
     ...(personal ? { lastErrorCode: agent.lastErrorCode } : {}),
     ...(includePrompt && (personal || agent.editable)
       ? { systemPrompt: agent.systemPrompt }
       : {}),
+  };
+}
+
+function publicSkill(skill: SkillRecord) {
+  return {
+    id: skill.id,
+    name: skill.name,
+    displayTitle: skill.displayTitle,
+    description: skill.description,
+    latestVersion: skill.latestVersion,
+    source: skill.source,
+    fileName: skill.fileName,
+    fileSize: skill.fileSize,
+    status: skill.status,
+    preset: skill.ownerUserId === null,
+    createdAt: skill.createdAt.toISOString(),
+    updatedAt: skill.updatedAt.toISOString(),
+  };
+}
+
+function adminUserAgent(agent: AdminUserAgentRecord) {
+  return {
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    modelId: agent.modelId,
+    version: agent.arkVersion,
+    status: agent.status,
+    isAutoDefault: agent.isAutoDefault,
+    ownerUserId: agent.ownerUserId,
+    ownerEmail: agent.ownerEmail,
+    skills: agent.skills,
+    createdAt: agent.createdAt.toISOString(),
+    updatedAt: agent.updatedAt.toISOString(),
   };
 }
 
@@ -1489,6 +1585,36 @@ function sendAdminError(
         ),
       );
   }
+  if (
+    error instanceof InvalidSkillPackageError ||
+    hasErrorName(error, "InvalidSkillPackageError")
+  ) {
+    return reply
+      .code(400)
+      .send(
+        applicationError(
+          request.id,
+          "INVALID_SKILL_PACKAGE",
+          "Skill packages must be non-empty .zip archives up to 50 MB",
+          false,
+        ),
+      );
+  }
+  if (
+    error instanceof SkillNotSelectableError ||
+    hasErrorName(error, "SkillNotSelectableError")
+  ) {
+    return reply
+      .code(400)
+      .send(
+        applicationError(
+          request.id,
+          "SKILL_NOT_AVAILABLE",
+          "One or more selected Skills are not available",
+          false,
+        ),
+      );
+  }
   const category =
     typeof error === "object" && error !== null && "category" in error
       ? error.category
@@ -1654,6 +1780,7 @@ function sendArtifactError(
 const ADMIN_ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
   "/api/v1/admin/platform-agents": "AGENT_MANAGE",
   "/api/v1/admin/platform-agents/:id": "AGENT_MANAGE",
+  "/api/v1/admin/user-agents": "AGENT_MANAGE",
   "/api/v1/admin/users": "USER_MANAGE",
   "/api/v1/admin/users/:id": "USER_MANAGE",
   "/api/v1/admin/users/:id/audit": "AUDIT_VIEW",
@@ -2688,6 +2815,16 @@ export function buildApp(options: BuildAppOptions = {}) {
         userId: request.auth!.userId,
         requestId: request.id,
       });
+      const resolveSkillBindings = async (
+        userId: string,
+        skillIds: string[] | undefined,
+      ): Promise<AgentSkillBinding[] | undefined> => {
+        if (skillIds === undefined) return undefined;
+        if (!options.skills) {
+          throw new Error("Skill service is not configured");
+        }
+        return options.skills.resolveBindings(userId, skillIds);
+      };
 
       app.get("/api/v1/agents", async (request, reply) => {
         const result = await userAgents.list(request.auth!.userId);
@@ -2720,22 +2857,35 @@ export function buildApp(options: BuildAppOptions = {}) {
           description?: string;
           modelId: string;
           systemPrompt: string;
+          skillIds?: string[];
         };
       }>(
         "/api/v1/agents",
         { schema: { body: createPersonalAgentBodySchema } },
         async (request, reply) => {
           try {
+            const skills = await resolveSkillBindings(
+              request.auth!.userId,
+              request.body.skillIds,
+            );
             const created = await userAgents.create(
               {
                 name: request.body.name.trim(),
                 description: request.body.description?.trim() ?? "",
                 modelId: request.body.modelId.trim(),
                 systemPrompt: request.body.systemPrompt,
+                ...(skills !== undefined ? { skills } : {}),
               },
               context(request),
             );
-            return reply.code(201).send(publicUserAgent(created, true));
+            // Re-read so the response carries Skill summaries like the list.
+            let record: AvailableAgentRecord | undefined;
+            try {
+              record = await userAgents.get(request.auth!.userId, created.id);
+            } catch {
+              record = undefined;
+            }
+            return reply.code(201).send(publicUserAgent(record ?? created, true));
           } catch (error) {
             return sendAdminError(error, request, reply);
           }
@@ -2749,6 +2899,7 @@ export function buildApp(options: BuildAppOptions = {}) {
           description?: string;
           modelId?: string;
           systemPrompt?: string;
+          skillIds?: string[];
           arkVersion: string;
         };
       }>(
@@ -2761,12 +2912,37 @@ export function buildApp(options: BuildAppOptions = {}) {
         },
         async (request, reply) => {
           try {
+            const skills = await resolveSkillBindings(
+              request.auth!.userId,
+              request.body.skillIds,
+            );
             const updated = await userAgents.update(
               request.params.id,
-              request.body,
+              {
+                ...(request.body.name !== undefined
+                  ? { name: request.body.name.trim() }
+                  : {}),
+                ...(request.body.description !== undefined
+                  ? { description: request.body.description.trim() }
+                  : {}),
+                ...(request.body.modelId !== undefined
+                  ? { modelId: request.body.modelId.trim() }
+                  : {}),
+                ...(request.body.systemPrompt !== undefined
+                  ? { systemPrompt: request.body.systemPrompt }
+                  : {}),
+                ...(skills !== undefined ? { skills } : {}),
+                arkVersion: request.body.arkVersion,
+              },
               context(request),
             );
-            return reply.send(publicUserAgent(updated, true));
+            let record: AvailableAgentRecord | undefined;
+            try {
+              record = await userAgents.get(request.auth!.userId, updated.id);
+            } catch {
+              record = undefined;
+            }
+            return reply.send(publicUserAgent(record ?? updated, true));
           } catch (error) {
             return sendAdminError(error, request, reply);
           }
@@ -2787,6 +2963,166 @@ export function buildApp(options: BuildAppOptions = {}) {
       );
     }
 
+    if (options.skills) {
+      const skills = options.skills;
+      const context = (request: FastifyRequest) => ({
+        userId: request.auth!.userId,
+        requestId: request.id,
+      });
+
+      /** Per-request limits: a Skill package may exceed the 20 MB uploads cap. */
+      const skillUploadLimits = { files: 1, fields: 5, fileSize: 50 * 1024 * 1024 };
+
+      const readSkillUpload = async (
+        request: FastifyRequest,
+        reply: FastifyReply,
+      ) => {
+        let file:
+          | { name: string; contentType: string; bytes: Uint8Array }
+          | undefined;
+        const fields: Record<string, string> = {};
+        let invalid = false;
+        let truncated = false;
+        for await (const part of request.parts({ limits: skillUploadLimits })) {
+          if (part.type !== "file") {
+            if (part.fieldname === "displayTitle" || part.fieldname === "description") {
+              if (typeof part.value === "string" && !fields[part.fieldname]) {
+                fields[part.fieldname] = part.value;
+              }
+            } else {
+              invalid = true;
+            }
+            continue;
+          }
+          if (part.fieldname !== "file" || file) {
+            invalid = true;
+            await part.toBuffer();
+            continue;
+          }
+          const bytes = new Uint8Array(await part.toBuffer());
+          if (part.file.truncated) {
+            truncated = true;
+            continue;
+          }
+          file = { name: part.filename, contentType: part.mimetype, bytes };
+        }
+        if (truncated) {
+          reply
+            .code(413)
+            .send(
+              applicationError(
+                request.id,
+                "INVALID_SKILL_PACKAGE",
+                "Skill packages must be .zip archives up to 50 MB",
+                false,
+              ),
+            );
+          return undefined;
+        }
+        if (invalid) {
+          reply
+            .code(400)
+            .send(
+              applicationError(
+                request.id,
+                "INVALID_MULTIPART",
+                "Exactly one .zip file part is required, with optional displayTitle and description fields",
+                false,
+              ),
+            );
+          return undefined;
+        }
+        return { file, fields };
+      };
+
+      app.get<{ Querystring: { scope?: string; q?: string } }>(
+        "/api/v1/skills",
+        async (request, reply) => {
+          const scope = request.query.scope === "preset" ? "preset" : "custom";
+          const records = await skills.list(request.auth!.userId, {
+            scope,
+            search: request.query.q,
+          });
+          return reply.send({
+            skills: records.map(publicSkill),
+            scope,
+          });
+        },
+      );
+
+      app.post("/api/v1/skills", async (request, reply) => {
+        const upload = await readSkillUpload(request, reply);
+        if (upload === undefined) return reply;
+        if (!upload.file) {
+          return reply
+            .code(400)
+            .send(
+              applicationError(
+                request.id,
+                "INVALID_MULTIPART",
+                "A .zip skill package is required",
+                false,
+              ),
+            );
+        }
+        try {
+          const { skill, defaultAgentSync } = await skills.upload(
+            {
+              file: upload.file,
+              displayTitle: upload.fields.displayTitle,
+              description: upload.fields.description,
+            },
+            context(request),
+          );
+          return reply.code(201).send({
+            ...publicSkill(skill),
+            defaultAgentSync,
+          });
+        } catch (error) {
+          return sendAdminError(error, request, reply);
+        }
+      });
+
+      app.patch<{ Params: { id: string } }>(
+        "/api/v1/skills/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          const upload = await readSkillUpload(request, reply);
+          if (upload === undefined) return reply;
+          try {
+            const { skill, defaultAgentSync } = await skills.update(
+              request.params.id,
+              {
+                ...(upload.file ? { file: upload.file } : {}),
+                displayTitle: upload.fields.displayTitle,
+                description: upload.fields.description,
+              },
+              context(request),
+            );
+            return reply.send({
+              ...publicSkill(skill),
+              defaultAgentSync,
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/skills/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const result = await skills.delete(request.params.id, context(request));
+            return reply.code(200).send({ defaultAgentSync: result });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+    }
+
     if (options.admin) {
       const admin = options.admin;
       const context = (request: FastifyRequest) => ({
@@ -2797,6 +3133,11 @@ export function buildApp(options: BuildAppOptions = {}) {
       app.get("/api/v1/admin/platform-agents", async (_request, reply) => {
         const agents = await admin.listPlatformAgents();
         return reply.send({ agents: agents.map(publicAgent) });
+      });
+
+      app.get("/api/v1/admin/user-agents", async (_request, reply) => {
+        const agents = await admin.listUserAgents();
+        return reply.send({ agents: agents.map(adminUserAgent) });
       });
 
       app.post<{

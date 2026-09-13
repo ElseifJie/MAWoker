@@ -63,6 +63,17 @@ const platformAgentSelection = sql`
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
+interface AgentSkillBinding extends Row {
+  skillId: string;
+  arkSkillId: string;
+  arkVersion: string;
+}
+
+interface AgentSkillSummary extends Row {
+  id: string;
+  displayTitle: string;
+}
+
 interface PersonalAgentRecord extends Row {
   id: string;
   ownerUserId: string;
@@ -73,6 +84,8 @@ interface PersonalAgentRecord extends Row {
   systemPrompt: string;
   arkVersion: string;
   status: "provisioning" | "active" | "disabled" | "failed" | "deleting";
+  isAutoDefault: boolean;
+  skills: AgentSkillBinding[];
   lastErrorCode: string | null;
 }
 
@@ -87,7 +100,34 @@ interface AvailableAgentRecord extends Row {
   status: PersonalAgentRecord["status"];
   kind: "platform" | "personal";
   editable: boolean;
+  isAutoDefault: boolean;
+  skills: AgentSkillSummary[];
 }
+
+interface SkillRecord extends Row {
+  id: string;
+  ownerUserId: string | null;
+  arkSkillId: string;
+  name: string;
+  displayTitle: string;
+  description: string;
+  latestVersion: string;
+  source: "custom" | "skill_hub";
+  fileName: string;
+  fileSize: number;
+  status: "provisioning" | "active" | "failed" | "deleting";
+  lastErrorCode: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const skillSelection = sql`
+  id, owner_user_id as "ownerUserId", ark_skill_id as "arkSkillId",
+  name, display_title as "displayTitle", description,
+  latest_version as "latestVersion", source,
+  file_name as "fileName", file_size::double precision as "fileSize", status,
+  last_error_code as "lastErrorCode",
+  created_at as "createdAt", updated_at as "updatedAt"`;
 
 interface SessionRecord extends Row {
   id: string;
@@ -231,10 +271,57 @@ interface DriveFileRecord extends Row {
   updatedAt: Date;
 }
 
+/**
+ * Aggregated Skill bindings for a personal Agent row, aliased into the shape
+ * `AgentSkillBinding` expects. The subquery assumes the outer row is
+ * `personal_agents` (the column names are resolved against it).
+ */
+const personalAgentBindingsJson = sql`
+  coalesce(
+    (select json_agg(
+              json_build_object('skillId', pas.skill_id::text,
+                                'arkSkillId', pas.ark_skill_id,
+                                'arkVersion', pas.ark_version)
+              order by pas.skill_id)
+       from personal_agent_skills pas
+      where pas.agent_id = personal_agents.id),
+    '[]'::json)`;
+
+/** Agent-visible Skill summaries for the workspace/admin views. */
+function agentSkillSummariesFor(agentAlias: string): SQL {
+  return sql`
+  coalesce(
+    (select json_agg(
+              json_build_object('id', s.id::text,
+                                'displayTitle', s.display_title)
+              order by s.display_title, s.id)
+       from personal_agent_skills pas
+       join skills s on s.id = pas.skill_id
+      where pas.agent_id = ${sql.raw(agentAlias)}.id),
+    '[]'::json)`;
+}
+
+interface AdminUserAgentRecord extends Row {
+  id: string;
+  name: string;
+  description: string;
+  modelId: string;
+  arkVersion: string;
+  status: PersonalAgentRecord["status"];
+  isAutoDefault: boolean;
+  ownerUserId: string;
+  ownerEmail: string;
+  skills: AgentSkillSummary[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const personalAgentSelection = sql`
   id, owner_user_id as "ownerUserId", ark_agent_id as "arkAgentId",
   name, description, model_id as "modelId",
   system_prompt as "systemPrompt", ark_version as "arkVersion", status,
+  is_auto_default as "isAutoDefault",
+  ${personalAgentBindingsJson} as skills,
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
@@ -1542,6 +1629,7 @@ export function createRepositories(database: unknown) {
                          pa.system_prompt as "systemPrompt",
                          pa.ark_version as "arkVersion", pa.status,
                          'platform'::text as kind, false as editable,
+                         false as "isAutoDefault", '[]'::json as skills,
                          pa.created_at as "createdAt"
                     from platform_agents pa
                     join user_default_agents uda
@@ -1554,6 +1642,8 @@ export function createRepositories(database: unknown) {
                          ua.system_prompt as "systemPrompt",
                          ua.ark_version as "arkVersion", ua.status,
                          'personal'::text as kind, true as editable,
+                         ua.is_auto_default as "isAutoDefault",
+                         ${agentSkillSummariesFor("ua")} as skills,
                          ua.created_at as "createdAt"
                     from personal_agents ua
                    where ua.owner_user_id = ${userId}
@@ -1603,6 +1693,85 @@ export function createRepositories(database: unknown) {
         );
         return assignment?.agentId;
       },
+      findAutoDefault(userId: string) {
+        return first<PersonalAgentRecord>(
+          db,
+          sql`select ${personalAgentSelection}
+                from personal_agents
+               where owner_user_id = ${userId}
+                 and is_auto_default
+               limit 1`,
+        );
+      },
+      async findPlatformTemplate(userId: string) {
+        return first<{
+          name: string;
+          description: string;
+          modelId: string;
+          systemPrompt: string;
+        }>(
+          db,
+          sql`select pa.name, pa.description,
+                     pa.model_id as "modelId",
+                     pa.system_prompt as "systemPrompt"
+                from platform_agents pa
+                left join user_default_agents uda
+                  on uda.platform_agent_id = pa.id
+                 and uda.user_id = ${userId}
+               where pa.status = 'active'
+               order by (uda.user_id is not null) desc,
+                        pa.created_at asc, pa.id asc
+               limit 1`,
+        );
+      },
+      listAgentsBoundToSkill(skillId: string) {
+        return rows<PersonalAgentRecord>(
+          db,
+          sql`select ${personalAgentSelection}
+                from personal_agents
+               where id in (
+                 select agent_id from personal_agent_skills
+                  where skill_id = ${skillId}
+               )
+               order by created_at asc, id asc`,
+        );
+      },
+      async replaceSkillBindings(
+        agentId: string,
+        userId: string,
+        bindings: AgentSkillBinding[],
+      ) {
+        await db.transaction(async (transaction) => {
+          const agent = await first<{ id: string }>(
+            transaction,
+            sql`select id from personal_agents
+                 where id = ${agentId} and owner_user_id = ${userId}
+                 for update`,
+          );
+          if (!agent) throw new Error("Agent not found");
+          await transaction.execute(
+            sql`delete from personal_agent_skills
+                 where agent_id = ${agentId}`,
+          );
+          if (bindings.length === 0) return;
+          const now = new Date();
+          await transaction.execute(
+            sql`insert into personal_agent_skills
+                  (agent_id, skill_id, ark_skill_id, ark_version, added_at)
+                select ${agentId}, x."skillId", x."arkSkillId",
+                       x."arkVersion", ${now}
+                  from jsonb_to_recordset(
+                    ${JSON.stringify(
+                      bindings.map((binding) => ({
+                        skillId: binding.skillId,
+                        arkSkillId: binding.arkSkillId,
+                        arkVersion: binding.arkVersion,
+                      })),
+                    )}::jsonb
+                  ) as x("skillId" uuid, "arkSkillId" text, "arkVersion" text)`,
+          );
+        });
+      },
       findAvailableById(userId: string, id: string) {
         return first<AvailableAgentRecord>(
           db,
@@ -1612,7 +1781,8 @@ export function createRepositories(database: unknown) {
                          pa.description, pa.model_id as "modelId",
                          pa.system_prompt as "systemPrompt",
                          pa.ark_version as "arkVersion", pa.status,
-                         'platform'::text as kind, false as editable
+                         'platform'::text as kind, false as editable,
+                         false as "isAutoDefault", '[]'::json as skills
                     from platform_agents pa
                     join user_default_agents uda
                       on uda.platform_agent_id = pa.id
@@ -1624,7 +1794,9 @@ export function createRepositories(database: unknown) {
                          ua.description, ua.model_id as "modelId",
                          ua.system_prompt as "systemPrompt",
                          ua.ark_version as "arkVersion", ua.status,
-                         'personal'::text as kind, true as editable
+                         'personal'::text as kind, true as editable,
+                         ua.is_auto_default as "isAutoDefault",
+                         ${agentSkillSummariesFor("ua")} as skills
                     from personal_agents ua
                    where ua.owner_user_id = ${userId}
                      and ua.id = ${id}
@@ -1640,6 +1812,8 @@ export function createRepositories(database: unknown) {
         description: string;
         modelId: string;
         systemPrompt: string;
+        isAutoDefault: boolean;
+        skills: AgentSkillBinding[];
       }) {
         return db.transaction(async (transaction) => {
           const user = await first(
@@ -1668,13 +1842,31 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`insert into personal_agents
                   (id, owner_user_id, ark_agent_id, name, description, model_id,
-                   system_prompt, ark_version, status)
+                   system_prompt, ark_version, status, is_auto_default)
                 values
                   (${input.id}, ${input.ownerUserId}, ${`pending:${input.id}`},
                    ${input.name}, ${input.description}, ${input.modelId},
-                   ${input.systemPrompt}, '0', 'provisioning')
+                   ${input.systemPrompt}, '0', 'provisioning',
+                   ${input.isAutoDefault ?? false})
                 returning ${personalAgentSelection}`,
           );
+          if ((input.skills ?? []).length > 0) {
+            await transaction.execute(
+              sql`insert into personal_agent_skills
+                    (agent_id, skill_id, ark_skill_id, ark_version)
+                  select ${input.id}, x."skillId", x."arkSkillId",
+                         x."arkVersion"
+                    from jsonb_to_recordset(
+                      ${JSON.stringify(
+                        (input.skills ?? []).map((binding) => ({
+                          skillId: binding.skillId,
+                          arkSkillId: binding.arkSkillId,
+                          arkVersion: binding.arkVersion,
+                        })),
+                      )}::jsonb
+                    ) as x("skillId" uuid, "arkSkillId" text, "arkVersion" text)`,
+            );
+          }
           await enqueuePersonalAgentReconciliation(transaction, {
             id: input.id,
             ownerUserId: input.ownerUserId,
@@ -1839,6 +2031,7 @@ export function createRepositories(database: unknown) {
           description: string;
           modelId: string;
           systemPrompt: string;
+          skills?: AgentSkillBinding[];
         },
         arkVersion: string,
       ) {
@@ -1993,6 +2186,244 @@ export function createRepositories(database: unknown) {
                  ${input.action}, ${input.resourceType}, ${input.resourceId},
                  ${input.result}, ${input.requestId},
                  ${input.arkRequestId ?? null}, ${input.errorCode ?? null})`,
+        );
+      },
+    },
+
+    skills: {
+      findOwned(userId: string, id: string) {
+        return first<SkillRecord>(
+          db,
+          sql`select ${skillSelection}
+                from skills
+               where id = ${id}
+                 and owner_user_id = ${userId}
+               limit 1`,
+        );
+      },
+      findPlatform(id: string) {
+        return first<SkillRecord>(
+          db,
+          sql`select ${skillSelection}
+                from skills
+               where id = ${id}
+                 and owner_user_id is null
+               limit 1`,
+        );
+      },
+      listForOwner(userId: string, search: string | null) {
+        return rows<SkillRecord>(
+          db,
+          sql`select ${skillSelection}
+                from skills
+               where owner_user_id = ${userId}
+                 ${search ? sql`and display_title ilike ${`%${search}%`}` : sql``}
+               order by created_at desc, id asc`,
+        );
+      },
+      listPlatform(search: string | null) {
+        return rows<SkillRecord>(
+          db,
+          sql`select ${skillSelection}
+                from skills
+               where owner_user_id is null
+                 ${search ? sql`and display_title ilike ${`%${search}%`}` : sql``}
+               order by created_at desc, id asc`,
+        );
+      },
+      listActiveBindingsForOwner(userId: string) {
+        // Ark rejects an Agent whose Skills contain the same SKILL.md name
+        // twice, so a library that re-uploads a package keeps only its newest
+        // active version per name.
+        return rows<AgentSkillBinding>(
+          db,
+          sql`select t."skillId", t."arkSkillId", t."arkVersion"
+                from (
+                  select distinct on (name)
+                         id::text as "skillId",
+                         ark_skill_id as "arkSkillId",
+                         latest_version as "arkVersion"
+                    from skills
+                   where owner_user_id = ${userId}
+                     and status = 'active'
+                   order by name, updated_at desc, id desc
+                ) t
+               order by t."skillId" asc`,
+        );
+      },
+      findActiveByName(
+        ownerUserId: string | null,
+        name: string,
+        excludeId: string,
+      ) {
+        return first<SkillRecord>(
+          db,
+          sql`select ${skillSelection}
+                from skills
+               where owner_user_id is not distinct from ${ownerUserId}::uuid
+                 and name = ${name}
+                 and status = 'active'
+                 and id <> ${excludeId}::uuid
+               order by updated_at desc
+               limit 1`,
+        );
+      },
+      async findSelectableBindings(userId: string, skillIds: string[]) {
+        return rows<AgentSkillBinding>(
+          db,
+          sql`select id::text as "skillId", ark_skill_id as "arkSkillId",
+                     latest_version as "arkVersion"
+                from skills
+               where status = 'active'
+                 and (owner_user_id = ${userId} or owner_user_id is null)
+                 and id in (${sql.join(
+                   skillIds.map((id) => sql`${id}::uuid`),
+                   sql`, `,
+                 )})
+               order by id asc`,
+        );
+      },
+      async createProvisioning(input: {
+        id: string;
+        ownerUserId: string | null;
+        displayTitle: string;
+        description: string;
+        fileName: string;
+        fileSize: number;
+      }) {
+        return requiredFirst<SkillRecord>(
+          db,
+          sql`insert into skills
+                (id, owner_user_id, ark_skill_id, display_title, description,
+                 file_name, file_size, latest_version, status)
+              values
+                (${input.id}, ${input.ownerUserId}, ${`pending:${input.id}`},
+                 ${input.displayTitle}, ${input.description},
+                 ${input.fileName}, ${input.fileSize}, '0', 'provisioning')
+              returning ${skillSelection}`,
+        );
+      },
+      markProvisioned(
+        id: string,
+        upstream: {
+          arkSkillId: string;
+          name: string;
+          latestVersion: string;
+          source: "custom" | "skill_hub";
+        },
+      ) {
+        return requiredFirst<SkillRecord>(
+          db,
+          sql`update skills
+                 set ark_skill_id = ${upstream.arkSkillId},
+                     name = ${upstream.name},
+                     latest_version = ${upstream.latestVersion},
+                     source = ${upstream.source},
+                     status = 'active',
+                     last_error_code = null,
+                     updated_at = now()
+               where id = ${id}
+               returning ${skillSelection}`,
+        );
+      },
+      markFailure(
+        id: string,
+        status: "provisioning" | "failed" | "deleting",
+        errorCode: string,
+      ) {
+        return requiredFirst<SkillRecord>(
+          db,
+          sql`update skills
+                 set status = ${status},
+                     last_error_code = ${errorCode},
+                     updated_at = now()
+               where id = ${id}
+               returning ${skillSelection}`,
+        );
+      },
+      updateMetadata(
+        id: string,
+        input: { displayTitle?: string; description?: string },
+      ) {
+        return requiredFirst<SkillRecord>(
+          db,
+          sql`update skills
+                 set display_title = coalesce(${input.displayTitle ?? null}, display_title),
+                     description = coalesce(${input.description ?? null}, description),
+                     updated_at = now()
+               where id = ${id}
+               returning ${skillSelection}`,
+        );
+      },
+      replaceUpstream(
+        id: string,
+        upstream: {
+          arkSkillId: string;
+          name: string;
+          latestVersion: string;
+          source: "custom" | "skill_hub";
+        },
+        file: { fileName: string; fileSize: number },
+      ) {
+        return requiredFirst<SkillRecord>(
+          db,
+          sql`update skills
+                 set ark_skill_id = ${upstream.arkSkillId},
+                     name = ${upstream.name},
+                     latest_version = ${upstream.latestVersion},
+                     source = ${upstream.source},
+                     file_name = ${file.fileName},
+                     file_size = ${file.fileSize},
+                     status = 'active',
+                     last_error_code = null,
+                     updated_at = now()
+               where id = ${id}
+               returning ${skillSelection}`,
+        );
+      },
+      async remove(id: string) {
+        await db.execute(sql`delete from skills where id = ${id}`);
+      },
+      async audit(input: {
+        actorUserId: string;
+        ownerUserId: string | null;
+        action: string;
+        resourceType: "skill";
+        resourceId: string;
+        result: "succeeded" | "failed";
+        requestId: string;
+        arkRequestId?: string;
+        errorCode?: string;
+      }) {
+        await db.execute(
+          sql`insert into audit_logs
+                (id, actor_user_id, owner_user_id, action, resource_type,
+                 resource_id, result, request_id, ark_request_id, error_code)
+              values
+                (${randomUUID()}, ${input.actorUserId}, ${input.ownerUserId},
+                 ${input.action}, ${input.resourceType}, ${input.resourceId},
+                 ${input.result}, ${input.requestId},
+                 ${input.arkRequestId ?? null}, ${input.errorCode ?? null})`,
+        );
+      },
+    },
+
+    adminAgents: {
+      listUserAgents() {
+        return rows<AdminUserAgentRecord>(
+          db,
+          sql`select pa.id, pa.name, pa.description,
+                     pa.model_id as "modelId",
+                     pa.ark_version as "arkVersion", pa.status,
+                     pa.is_auto_default as "isAutoDefault",
+                     pa.owner_user_id as "ownerUserId",
+                     u.email as "ownerEmail",
+                     ${agentSkillSummariesFor("pa")} as skills,
+                     pa.created_at as "createdAt",
+                     pa.updated_at as "updatedAt"
+                from personal_agents pa
+                join users u on u.id = pa.owner_user_id
+               order by pa.is_auto_default desc, pa.created_at desc, pa.id asc`,
         );
       },
     },

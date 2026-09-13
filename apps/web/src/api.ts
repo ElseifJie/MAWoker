@@ -9,6 +9,11 @@ export interface CurrentUser {
   role: UserRole;
 }
 
+export interface AgentSkillSummary {
+  id: string;
+  displayTitle: string;
+}
+
 export interface AgentSummary {
   id: string;
   name: string;
@@ -18,6 +23,8 @@ export interface AgentSummary {
   status: "provisioning" | "active" | "disabled" | "failed" | "deleting";
   kind: "platform" | "personal";
   editable: boolean;
+  isAutoDefault: boolean;
+  skills: AgentSkillSummary[];
 }
 
 export interface AgentDetail extends AgentSummary {
@@ -29,12 +36,55 @@ export interface AgentList {
   agents: AgentSummary[];
   selection: {
     agentId: string;
-    source: "recent" | "default";
+    source: "personal_default" | "recent" | "default";
   } | null;
   blocker: {
     code: "NO_DEFAULT_AGENT";
     message: string;
   } | null;
+}
+
+export type SkillScope = "custom" | "preset";
+
+export type SkillStatus = "provisioning" | "active" | "failed" | "deleting";
+
+export interface SkillSummary {
+  id: string;
+  name: string;
+  displayTitle: string;
+  description: string;
+  latestVersion: string;
+  source: "custom" | "skill_hub";
+  fileName: string;
+  fileSize: number;
+  status: SkillStatus;
+  preset: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillMutationResult {
+  defaultAgentSync: { synced: true } | { synced: false; errorCode: string };
+}
+
+export interface SkillList {
+  skills: SkillSummary[];
+  scope: SkillScope;
+}
+
+export interface AdminUserAgent {
+  id: string;
+  name: string;
+  description: string;
+  modelId: string;
+  version: string;
+  status: AdminPlatformAgentStatus;
+  isAutoDefault: boolean;
+  ownerUserId: string;
+  ownerEmail: string;
+  skills: AgentSkillSummary[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ClientCapabilities extends FeatureCapabilities {
@@ -526,6 +576,7 @@ export const apiClient = {
     description: string;
     modelId: string;
     systemPrompt: string;
+    skillIds?: string[];
   }) =>
     request<AgentDetail>("/agents", {
       method: "POST",
@@ -534,10 +585,11 @@ export const apiClient = {
   updateAgent: (
     id: string,
     input: {
-      name: string;
-      description: string;
-      modelId: string;
-      systemPrompt: string;
+      name?: string;
+      description?: string;
+      modelId?: string;
+      systemPrompt?: string;
+      skillIds?: string[];
       arkVersion: string;
     },
   ) =>
@@ -547,6 +599,45 @@ export const apiClient = {
     }),
   deleteAgent: (id: string) =>
     request<void>(`/agents/${id}`, { method: "DELETE" }),
+  listSkills: (scope: SkillScope = "custom") =>
+    request<SkillList>(`/skills?scope=${scope}`),
+  uploadSkill: (input: {
+    file: File;
+    displayTitle?: string;
+    description?: string;
+  }) => {
+    const body = new FormData();
+    body.set("file", input.file);
+    if (input.displayTitle) body.set("displayTitle", input.displayTitle);
+    if (input.description) body.set("description", input.description);
+    return request<SkillSummary & SkillMutationResult>("/skills", {
+      method: "POST",
+      body,
+    });
+  },
+  updateSkill: (
+    id: string,
+    input: {
+      file?: File;
+      displayTitle?: string;
+      description?: string;
+    },
+  ) => {
+    const body = new FormData();
+    if (input.file) body.set("file", input.file);
+    if (input.displayTitle) body.set("displayTitle", input.displayTitle);
+    if (input.description) body.set("description", input.description);
+    return request<SkillSummary & SkillMutationResult>(
+      `/skills/${encodeURIComponent(id)}`,
+      { method: "PATCH", body },
+    );
+  },
+  deleteSkill: (id: string) =>
+    request<SkillMutationResult>(`/skills/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  listAdminUserAgents: () =>
+    request<{ agents: AdminUserAgent[] }>("/admin/user-agents"),
   listSessions: (archived = false) =>
     request<{ sessions: SessionSummary[] }>(
       `/sessions${archived ? "?archived=true" : ""}`,

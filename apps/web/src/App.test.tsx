@@ -777,11 +777,13 @@ describe("Agent management", () => {
     ).toHaveClass("ui-button", "ui-button--text");
 
     await user.click(newAgent);
-    const dialog = screen.getByRole("dialog", { name: "Create Agent" });
-    expect(dialog).toHaveClass("ui-dialog");
+    const editorHeading = await screen.findByRole("heading", {
+      name: "New personal Agent",
+    });
+    expect(editorHeading).toBeInTheDocument();
     expect(
-      within(dialog).getByRole("button", { name: "Close Agent editor" }),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: "Create Agent" }),
+    ).toBeDisabled();
   });
 
   it("uses only the server capability allowlist for personal Agent models", async () => {
@@ -888,34 +890,26 @@ describe("Agent management", () => {
       name: "New personal Agent",
     });
     await user.click(newAgentTrigger);
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByLabelText("Agent name")).toHaveFocus();
-    });
-    screen.getByRole("button", { name: "Close Agent editor" }).focus();
-    await user.tab({ shift: true });
-    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(newAgentTrigger).toHaveFocus();
-    await user.click(newAgentTrigger);
-    await user.type(screen.getByLabelText("Agent name"), "Code reviewer");
+    await screen.findByRole("heading", { name: "New personal Agent" });
+    await user.type(screen.getByLabelText("Name"), "Code reviewer");
     await user.type(screen.getByLabelText("Description"), "Reviews changes");
     await user.selectOptions(screen.getByLabelText("Model"), "model-a");
     await user.type(
-      screen.getByLabelText("System Prompt"),
+      screen.getByLabelText("System"),
       "Review carefully.",
     );
     await user.click(screen.getByRole("button", { name: "Create Agent" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Code reviewer")).toBeInTheDocument();
 
     await user.click(
       screen.getByRole("button", { name: "Edit Writing assistant" }),
     );
-    const name = await screen.findByLabelText("Agent name");
+    const name = await screen.findByLabelText("Name");
     await user.clear(name);
     await user.type(name, "Editorial assistant");
     await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Editorial assistant")).toBeInTheDocument();
 
     const deleteAgentTrigger = screen.getByRole("button", {
@@ -964,6 +958,7 @@ describe("Agent management", () => {
       description: "Reviews changes",
       modelId: "model-a",
       systemPrompt: "Review carefully.",
+      skillIds: [],
     });
     expect(
       JSON.parse(String(calls.find((call) => call.method === "PATCH")?.body)),
@@ -1000,10 +995,12 @@ describe("Agent management", () => {
 
     expect(
       await screen.findByText(
-        "This Agent changed elsewhere. Close and reopen the editor, then try again.",
+        "This Agent changed elsewhere. Go back and reopen the editor, then try again.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Edit Agent" }),
+    ).toBeInTheDocument();
   });
 });
 

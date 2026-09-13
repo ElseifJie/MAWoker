@@ -15,11 +15,23 @@ import type {
   ArkResource,
   ArkSession,
   ArkSessionInput,
+  ArkSkill,
+  ArkSkillInput,
   SessionStatus,
 } from "./types.js";
 
 /** The bucket the stub pretends Ark exported into; mirrors the real `tos.bucket`. */
 export const stubExportBucket = "ark-exports";
+
+function slugifySkillName(source: string): string {
+  const slug = source
+    .toLowerCase()
+    .replace(/\.zip$/i, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return slug || "skill";
+}
 
 type InjectedFailure =
   | Extract<
@@ -71,6 +83,8 @@ export class InMemoryArkGateway implements ArkGateway {
   private readonly now: () => Date;
   private readonly agents = new Map<string, ArkAgent>();
   private readonly agentsByCreateIdempotencyKey = new Map<string, string>();
+  private readonly agentSkills = new Map<string, string[]>();
+  private readonly skills = new Map<string, ArkSkill>();
   private readonly sessions = new Map<string, ArkSession>();
   private readonly sessionsByCreateIdempotencyKey = new Map<string, string>();
   private readonly events = new Map<string, ArkEvent[]>();
@@ -87,6 +101,7 @@ export class InMemoryArkGateway implements ArkGateway {
     file: 0,
     resource: 0,
     artifact: 0,
+    skill: 0,
   };
 
   constructor(options: InMemoryArkGatewayOptions = {}) {
@@ -110,12 +125,17 @@ export class InMemoryArkGateway implements ArkGateway {
     if (existingId) {
       return structuredClone(this.requireAgent(existingId));
     }
+    this.requireSkills(input.skills);
     const agent = {
       ...input,
       id: `agent-${++this.counters.agent}`,
       version: 1,
     };
     this.agents.set(agent.id, agent);
+    this.agentSkills.set(
+      agent.id,
+      (input.skills ?? []).map((skill) => skill.skillId),
+    );
     if (options?.idempotencyKey) {
       this.agentsByCreateIdempotencyKey.set(options.idempotencyKey, agent.id);
     }
@@ -140,6 +160,7 @@ export class InMemoryArkGateway implements ArkGateway {
     if (input.currentVersion !== current.version) {
       throw new ArkGatewayError("version_conflict");
     }
+    this.requireSkills(input.skills);
     const updated = {
       id: current.id,
       version: current.version + 1,
@@ -149,6 +170,12 @@ export class InMemoryArkGateway implements ArkGateway {
       systemPrompt: input.systemPrompt,
     };
     this.agents.set(agentId, updated);
+    if (input.skills !== undefined) {
+      this.agentSkills.set(
+        agentId,
+        input.skills.map((skill) => skill.skillId),
+      );
+    }
     return structuredClone(updated);
   }
 
@@ -159,6 +186,60 @@ export class InMemoryArkGateway implements ArkGateway {
     this.record("deleteAgent", { agentId }, options);
     this.requireAgent(agentId);
     this.agents.delete(agentId);
+    this.agentSkills.delete(agentId);
+  }
+
+  /**
+   * Test seam: the Skill ids an Agent carries, mirroring what Ark would
+   * resolve for a Session it opens with that Agent.
+   */
+  agentSkillIds(agentId: string): string[] {
+    this.requireAgent(agentId);
+    return [...(this.agentSkills.get(agentId) ?? [])];
+  }
+
+  async createSkill(
+    input: ArkSkillInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkSkill> {
+    this.record(
+      "createSkill",
+      {
+        name: input.file.name,
+        contentType: input.file.contentType,
+        size: input.file.bytes.byteLength,
+        displayTitle: input.displayTitle,
+      },
+      options,
+    );
+    const skill: ArkSkill = {
+      id: `skill-${++this.counters.skill}`,
+      name: slugifySkillName(input.displayTitle ?? input.file.name),
+      displayTitle: input.displayTitle ?? "",
+      description: "",
+      latestVersion: "1",
+      source: "custom",
+    };
+    this.skills.set(skill.id, skill);
+    return structuredClone(skill);
+  }
+
+  async getSkill(
+    skillId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkSkill> {
+    this.record("getSkill", { skillId }, options);
+    const skill = this.skills.get(skillId);
+    if (!skill) throw new ArkGatewayError("not_found");
+    return structuredClone(skill);
+  }
+
+  private requireSkills(input: ArkAgentInput["skills"]): void {
+    for (const binding of input ?? []) {
+      if (!this.skills.has(binding.skillId)) {
+        throw new ArkGatewayError("not_found");
+      }
+    }
   }
 
   async createSession(

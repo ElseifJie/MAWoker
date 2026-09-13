@@ -6,6 +6,16 @@ export interface ArkRequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * A Skill bound to an Agent. Only custom (user-uploaded) Skills are bound by
+ * this app; the version is pinned at bind time so Ark resolves exactly the
+ * package snapshot we validated.
+ */
+export interface ArkSkillBindingInput {
+  skillId: string;
+  version?: string | undefined;
+}
+
 export interface ArkAgentInput {
   name: string;
   description: string;
@@ -13,6 +23,7 @@ export interface ArkAgentInput {
   systemPrompt: string;
   toolsetId?: string | undefined;
   toolPermission?: "always_allow" | undefined;
+  skills?: ArkSkillBindingInput[] | undefined;
 }
 
 /**
@@ -77,6 +88,28 @@ export interface ArkFile {
 }
 
 /**
+ * A Skill package upload. Ark parses the package's SKILL.md itself, so `name`
+ * in the response is Ark-derived while `displayTitle` is our human label.
+ */
+export interface ArkSkillInput {
+  file: {
+    name: string;
+    contentType: string;
+    bytes: Uint8Array;
+  };
+  displayTitle?: string | undefined;
+}
+
+export interface ArkSkill {
+  id: string;
+  name: string;
+  displayTitle: string;
+  description: string;
+  latestVersion: string;
+  source: "custom" | "skill_hub";
+}
+
+/**
  * Where Ark parked the bytes of an exported file. The Files API exposes no
  * content endpoint, so this is the only way to read an export: TOS directly.
  */
@@ -138,6 +171,11 @@ export interface ArkGateway {
     options?: ArkRequestOptions,
   ): Promise<ArkFile>;
   deleteFile(fileId: string, options?: ArkRequestOptions): Promise<void>;
+  createSkill(
+    input: ArkSkillInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkSkill>;
+  getSkill(skillId: string, options?: ArkRequestOptions): Promise<ArkSkill>;
   listSessionResources(
     sessionId: string,
     options?: ArkRequestOptions,
@@ -161,6 +199,8 @@ export type ArkOperation =
   | "streamEvents"
   | "uploadFile"
   | "deleteFile"
+  | "createSkill"
+  | "getSkill"
   | "listSessionResources"
   | "listArtifacts";
 

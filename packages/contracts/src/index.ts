@@ -20,6 +20,8 @@ export const errorCodeSchema = z.enum([
   "LAST_ACTIVE_ADMIN",
   "INVALID_MULTIPART",
   "INVALID_UPLOAD_NAME",
+  "INVALID_SKILL_PACKAGE",
+  "SKILL_NOT_AVAILABLE",
   "QUOTA_EXCEEDED",
   "CONCURRENCY_LIMITED",
   "RATE_LIMITED",
@@ -406,7 +408,7 @@ export interface FeatureCapabilities {
 }
 
 export const capabilities: FeatureCapabilities = {
-  skills: { available: false },
+  skills: { available: true },
   mcpServers: { available: false },
   vaults: { available: false },
   memoryStores: { available: false },

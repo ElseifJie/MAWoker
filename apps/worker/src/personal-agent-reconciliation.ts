@@ -48,6 +48,11 @@ interface ReconciliationService {
         description: string;
         modelId: string;
         systemPrompt: string;
+        skills?: Array<{
+          skillId: string;
+          arkSkillId: string;
+          arkVersion: string;
+        }>;
       };
       arkVersion: string;
     },
@@ -67,6 +72,11 @@ interface UpdatePayload {
     description: string;
     modelId: string;
     systemPrompt: string;
+    skills?: Array<{
+      skillId: string;
+      arkSkillId: string;
+      arkVersion: string;
+    }>;
   };
   arkVersion: string;
 }
@@ -81,6 +91,33 @@ function requiredString(
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`Invalid personal Agent reconciliation ${field}`);
   }
+}
+
+function optionalSkillBindings(value: unknown):
+  | Array<{
+      skillId: string;
+      arkSkillId: string;
+      arkVersion: string;
+    }>
+  | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid personal Agent reconciliation skills");
+  }
+  return value.map((binding) => {
+    if (typeof binding !== "object" || binding === null) {
+      throw new Error("Invalid personal Agent reconciliation skill binding");
+    }
+    const candidate = binding as Record<string, unknown>;
+    requiredString(candidate.skillId, "skillId");
+    requiredString(candidate.arkSkillId, "arkSkillId");
+    requiredString(candidate.arkVersion, "arkVersion");
+    return {
+      skillId: candidate.skillId,
+      arkSkillId: candidate.arkSkillId,
+      arkVersion: candidate.arkVersion,
+    };
+  });
 }
 
 function parsePayload(payload: Record<string, unknown>): ReconciliationPayload {
@@ -110,6 +147,7 @@ function parsePayload(payload: Record<string, unknown>): ReconciliationPayload {
     throw new Error("Invalid personal Agent reconciliation systemPrompt");
   }
   requiredString(payload.arkVersion, "arkVersion");
+  const skills = optionalSkillBindings(configuration.skills);
   return {
     operation: "update",
     personalAgentId: payload.personalAgentId,
@@ -118,6 +156,7 @@ function parsePayload(payload: Record<string, unknown>): ReconciliationPayload {
       description: configuration.description,
       modelId: configuration.modelId,
       systemPrompt: configuration.systemPrompt,
+      ...(skills !== undefined ? { skills } : {}),
     },
     arkVersion: payload.arkVersion,
   };

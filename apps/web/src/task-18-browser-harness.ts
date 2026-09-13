@@ -34,6 +34,8 @@ interface UserAgent {
   status: "active";
   kind: "platform" | "personal";
   editable: boolean;
+  isAutoDefault: boolean;
+  skills: Array<{ id: string; displayTitle: string }>;
 }
 
 interface BrowserSession {
@@ -195,6 +197,8 @@ export function createTask18BrowserBackend() {
       status: "active",
       kind: "platform",
       editable: false,
+      isAutoDefault: false,
+      skills: [],
     },
   ];
   const adminUsers: Array<{
@@ -427,6 +431,8 @@ export function createTask18BrowserBackend() {
         status: "active",
         kind: "personal",
         editable: true,
+        isAutoDefault: false,
+        skills: [],
       };
       userAgents.push(created);
       return json(created, 201);
@@ -454,12 +460,15 @@ export function createTask18BrowserBackend() {
     }
     if (path === "/api/v1/capabilities") {
       return json({
-        skills: { available: false },
+        skills: { available: true },
         mcpServers: { available: false },
         vaults: { available: false },
         memoryStores: { available: false },
         personalAgentModels: ["model-a"],
       });
+    }
+    if (path === "/api/v1/skills" && method === "GET") {
+      return json({ skills: [], scope: "custom" });
     }
     if (path === "/api/v1/usage") {
       return json({
