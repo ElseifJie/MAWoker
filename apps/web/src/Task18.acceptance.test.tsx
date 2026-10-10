@@ -295,27 +295,10 @@ describe("Task 18 browser acceptance", () => {
     expect(
       await screen.findByRole("heading", { name: "Agents" }),
     ).toBeVisible();
-    await user.click(
-      screen.getByRole("button", { name: "New platform Agent" }),
-    );
-    await screen.findByRole("heading", { name: "New platform Agent" });
-    await user.type(screen.getByLabelText("Name"), "Operations Agent");
-    await user.type(screen.getByLabelText("Description"), "Runs operations");
-    await user.selectOptions(screen.getByLabelText("Model"), "model-a");
-    await user.type(screen.getByLabelText("System"), "Operate safely.");
-    await user.click(screen.getByRole("button", { name: "Create Agent" }));
-    await screen.findByRole("heading", { name: "Agents" });
-    expect(await screen.findByText("Operations Agent")).toBeVisible();
-
-    await user.click(
-      screen.getByRole("button", { name: "Edit Operations Agent" }),
-    );
-    const name = await screen.findByLabelText("Name");
-    await user.clear(name);
-    await user.type(name, "Operations Lead");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByRole("heading", { name: "Agents" });
-    expect(await screen.findByText("Operations Lead")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "New platform Agent" }),
+    ).not.toBeInTheDocument();
+    expect(await screen.findByText("Research assistant")).toBeVisible();
 
     await user.click(screen.getByRole("link", { name: "Users" }));
     await screen.findByRole("heading", { name: "Users" });
@@ -359,30 +342,16 @@ describe("Task 18 browser acceptance", () => {
     expect(await screen.findByText("Quotas saved.")).toBeVisible();
 
     await user.click(screen.getByRole("link", { name: "Agents" }));
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Actions for Operations Lead",
-      }),
-    );
-    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
-    await waitFor(() => expect(backend.platformAgentVersion()).toBe("2"));
-    await user.click(
-      screen.getByRole("button", { name: "Actions for Operations Lead" }),
-    );
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
-    const dialog = screen.getByRole("dialog", {
-      name: "Delete platform Agent?",
-    });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete Agent" }),
-    );
+    expect(await screen.findByText("Research assistant")).toBeVisible();
     expect(
-      await within(dialog).findByText(
-        "This Agent is still assigned to users or referenced by Sessions.",
+      screen.queryByRole("button", { name: /Actions for/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      backend.calls.some(
+        ({ method, path }) =>
+          path.startsWith("/api/v1/admin/platform-agents") && method !== "GET",
       ),
-    ).toBeVisible();
-
-    expect(backend.platformAgentVersion()).toBe("2");
+    ).toBe(false);
     expect(backend.userQuota()).toEqual({
       personalAgentLimit: 12,
       concurrentSessionLimit: 3,

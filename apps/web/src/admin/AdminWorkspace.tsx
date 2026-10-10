@@ -14,7 +14,6 @@ import {
   type CurrentUser,
 } from "../api.js";
 import { AppShell, EmptyState, Spinner } from "../ui/index.js";
-import { AdminAgentEditorPage } from "./AdminAgentEditorPage.js";
 import { AdminAuditPage } from "./AdminAuditPage.js";
 import { AdminPlatformAgentsPage } from "./AdminPlatformAgentsPage.js";
 import { AdminSettingsPage } from "./AdminSettingsPage.js";
@@ -35,8 +34,7 @@ function adminHandle(authSubject: string): string {
 }
 
 /**
- * The shell loads only the slow-changing shared data (Platform Agents and the
- * model allowlist); every page owns its own paginated fetching.
+ * The shell loads shared System Agents; every page owns its paginated fetching.
  */
 export function AdminWorkspace({
   user,
@@ -44,21 +42,17 @@ export function AdminWorkspace({
   onAuthRequired,
 }: AdminWorkspaceProps) {
   const [agents, setAgents] = useState<AdminPlatformAgent[] | null>(null);
-  const [models, setModels] = useState<string[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
     setLoadError(false);
-    Promise.all([
-      apiClient.listAdminPlatformAgents(),
-      apiClient.getCapabilities(),
-    ])
-      .then(([agentsResult, capabilities]) => {
+    apiClient
+      .listAdminPlatformAgents()
+      .then((agentsResult) => {
         if (!active) return;
         setAgents(agentsResult.agents);
-        setModels(capabilities.personalAgentModels);
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -164,42 +158,17 @@ export function AdminWorkspace({
           element={
             <AdminPlatformAgentsPage
               agents={agents}
-              onAgentsChanged={(updated) => setAgents(updated)}
               onAuthRequired={onAuthRequired}
             />
           }
         />
         <Route
           path="/admin/platform-agents/new"
-          element={
-            <AdminAgentEditorPage
-              models={models}
-              onAuthRequired={onAuthRequired}
-              onAgentSaved={(agent) => {
-                setAgents((current) =>
-                  current?.some((item) => item.id === agent.id)
-                    ? current.map((item) => (item.id === agent.id ? agent : item))
-                    : [...(current ?? []), agent],
-                );
-              }}
-            />
-          }
+          element={<Navigate to="/admin/platform-agents" replace />}
         />
         <Route
           path="/admin/platform-agents/:agentId/edit"
-          element={
-            <AdminAgentEditorPage
-              models={models}
-              onAuthRequired={onAuthRequired}
-              onAgentSaved={(agent) => {
-                setAgents(
-                  (current) =>
-                    current?.map((item) => (item.id === agent.id ? agent : item)) ??
-                    null,
-                );
-              }}
-            />
-          }
+          element={<Navigate to="/admin/platform-agents" replace />}
         />
         <Route
           path="/admin/settings"

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
+import { createMemoryRepository } from "./memory-repository.js";
 
 type Row = Record<string, unknown>;
 
@@ -140,8 +141,16 @@ interface SessionRecord extends Row {
   agentName: string;
   agentVersion: string;
   environmentId: string;
+  memoryStoreId?: string | null;
   title: string;
-  status: "idle" | "running" | "rescheduled" | "terminated";
+  status:
+    | "idle"
+    | "running"
+    | "rescheduled"
+    | "terminated"
+    | "initializing"
+    | "upgrading"
+    | "failed";
   lastErrorCode: string | null;
   errorRecoverable: boolean | null;
   archivedAt: Date | null;
@@ -208,6 +217,7 @@ const sessionSelection = sql`
   personal_agent_id as "personalAgentId",
   ark_agent_id as "arkAgentId", agent_name as "agentName",
   agent_version as "agentVersion", environment_id as "environmentId",
+  memory_store_id as "memoryStoreId",
   title, status, last_error_code as "lastErrorCode",
   error_recoverable as "errorRecoverable", archived_at as "archivedAt",
   pinned_at as "pinnedAt",
@@ -794,6 +804,7 @@ export function createRepositories(database: unknown) {
   const db = database as DatabaseClient;
 
   return {
+    memories: createMemoryRepository(db),
     users: {
       findById(id: string) {
         return first(
@@ -1094,6 +1105,67 @@ export function createRepositories(database: unknown) {
     },
 
     platformAgents: {
+      synchronizeSystemAgents(
+        agents: Array<{
+          arkAgentId: string;
+          name: string;
+          description: string;
+          modelId: string;
+          systemPrompt: string;
+          arkVersion: string;
+          status: "active" | "disabled";
+        }>,
+      ) {
+        return db.transaction(async (transaction) => {
+          // Serialize startup reconciliation across API replicas.
+          await transaction.execute(sql`select pg_advisory_xact_lock(734201)`);
+          const administrator =
+            agents.length > 0
+              ? await first<{ id: string }>(
+                  transaction,
+                  sql`select id from users where role = 'admin' and status = 'active'
+                    order by created_at, id limit 1`,
+                )
+              : undefined;
+          if (agents.length > 0 && !administrator) {
+            throw new Error(
+              "Run npm run admin:seed before configuring SYSTEM_AGENT_IDS",
+            );
+          }
+          const configuredIds = agents.map((agent) => agent.arkAgentId);
+          await transaction.execute(
+            sql`update platform_agents set status = 'disabled', updated_at = now()
+                where status <> 'disabled'
+                  ${
+                    configuredIds.length > 0
+                      ? sql`and ark_agent_id not in (${sql.join(
+                          configuredIds.map((agentId) => sql`${agentId}`),
+                          sql`, `,
+                        )})`
+                      : sql``
+                  }`,
+          );
+          for (const [position, agent] of agents.entries()) {
+            await transaction.execute(
+              sql`insert into platform_agents
+                    (id, ark_agent_id, name, description, model_id, system_prompt,
+                     ark_version, status, created_by, updated_by, updated_at)
+                  values
+                    (${randomUUID()}, ${agent.arkAgentId}, ${agent.name},
+                     ${agent.description}, ${agent.modelId}, ${agent.systemPrompt},
+                     ${agent.arkVersion}, ${agent.status}, ${administrator!.id},
+                     ${administrator!.id},
+                     transaction_timestamp() + ${position} * interval '1 microsecond')
+                  on conflict (ark_agent_id) do update
+                    set name = excluded.name, description = excluded.description,
+                        model_id = excluded.model_id, ark_version = excluded.ark_version,
+                        status = excluded.status,
+                        updated_by = excluded.updated_by, last_error_code = null,
+                        updated_at = excluded.updated_at`,
+            );
+          }
+        });
+      },
       findById(id: string) {
         return first<PlatformAgentRecord>(
           db,
@@ -1119,7 +1191,7 @@ export function createRepositories(database: unknown) {
           db,
           sql`select ${platformAgentSelection}
                 from platform_agents
-               order by created_at asc, id asc`,
+               order by (status = 'active') desc, updated_at asc, id asc`,
         );
       },
       createProvisioning(input: {
@@ -1708,19 +1780,16 @@ export function createRepositories(database: unknown) {
           name: string;
           description: string;
           modelId: string;
-          systemPrompt: string;
         }>(
           db,
-          sql`select pa.name, pa.description,
-                     pa.model_id as "modelId",
-                     pa.system_prompt as "systemPrompt"
+          sql`select pa.name, pa.description, pa.model_id as "modelId"
                 from platform_agents pa
                 left join user_default_agents uda
                   on uda.platform_agent_id = pa.id
                  and uda.user_id = ${userId}
                where pa.status = 'active'
                order by (uda.user_id is not null) desc,
-                        pa.created_at asc, pa.id asc
+                        pa.updated_at asc, pa.id asc
                limit 1`,
         );
       },
@@ -2512,6 +2581,10 @@ export function createRepositories(database: unknown) {
           );
           if (!user) throw new Error("Active user not found");
 
+          if (input.memoryStoreId != null) {
+            await createMemoryRepository(transaction).gate(input.ownerUserId);
+          }
+
           const selectedUploadIds = [...new Set(uploadIds)];
           let selectedInputs: SessionInputRecord[] = [];
           if (selectedUploadIds.length > 0) {
@@ -2595,6 +2668,7 @@ export function createRepositories(database: unknown) {
                   (id, owner_user_id, ark_session_id, agent_kind,
                    platform_agent_id, personal_agent_id, ark_agent_id,
                    agent_name, agent_version, environment_id, title, status,
+                   memory_store_id,
                    archived_at, deletion_state, last_event_at, created_at,
                    updated_at)
                 values
@@ -2603,6 +2677,7 @@ export function createRepositories(database: unknown) {
                    ${input.personalAgentId}, ${input.arkAgentId},
                    ${input.agentName}, ${input.agentVersion},
                    ${input.environmentId}, ${input.title}, ${input.status},
+                   ${input.memoryStoreId ?? null},
                    ${input.archivedAt}, ${input.deletionState},
                    ${input.lastEventAt}, ${input.createdAt}, ${input.updatedAt})`,
           );
@@ -3059,6 +3134,10 @@ export function createRepositories(database: unknown) {
             };
           }
 
+          if (session.memoryStoreId != null) {
+            await createMemoryRepository(transaction).gate(userId);
+          }
+
           const quota = await effectiveQuota(transaction, userId);
           const month = utcMonthWindow(new Date());
           const usage = await first<{
@@ -3137,7 +3216,7 @@ export function createRepositories(database: unknown) {
       async finishMessage(
         userId: string,
         id: string,
-        outcome: "accepted_or_unknown" | "definite_failure",
+        outcome: "accepted_or_unknown" | "unknown" | "definite_failure",
       ) {
         await db.execute(
           sql`update sessions
@@ -3150,11 +3229,13 @@ export function createRepositories(database: unknown) {
                       else status
                     end,
                     message_start_pending = case
-                      when ${outcome} = 'accepted_or_unknown'
+                      when ${outcome} in ('accepted_or_unknown', 'unknown')
                         or message_in_flight_count = 1
                       then false
                       else message_start_pending
                     end,
+                    message_unknown_outcome =
+                      message_unknown_outcome or ${outcome} = 'unknown',
                     message_in_flight_count =
                       greatest(message_in_flight_count - 1, 0),
                     updated_at = now()

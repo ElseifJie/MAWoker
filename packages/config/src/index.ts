@@ -90,6 +90,25 @@ const requiredNonnegativeInteger = z
 
 const positiveInteger = z.coerce.number().int().positive();
 
+const systemAgentIds = z
+  .string()
+  .default("")
+  .transform(csv)
+  .superRefine((agentIds, context) => {
+    if (agentIds.some((agentId) => agentId.startsWith("pending:"))) {
+      context.addIssue({
+        code: "custom",
+        message: "must contain only persisted Ark Agent IDs",
+      });
+    }
+    if (new Set(agentIds).size !== agentIds.length) {
+      context.addIssue({
+        code: "custom",
+        message: "Agent IDs must be unique",
+      });
+    }
+  });
+
 const environmentSchema = z
   .object({
     NODE_ENV: z
@@ -103,6 +122,7 @@ const environmentSchema = z
     ARK_API_BASE_URL: httpOrigin,
     ARK_API_KEY: z.string().min(1),
     ARK_ENVIRONMENT_ID: z.string().min(1),
+    SYSTEM_AGENT_IDS: systemAgentIds,
     ARK_REQUEST_TIMEOUT_MS: positiveInteger.default(15_000),
     ARK_MAX_ATTEMPTS: positiveInteger.default(3),
     ARK_RETRY_BASE_DELAY_MS: positiveInteger.default(100),
@@ -122,6 +142,13 @@ const environmentSchema = z
      * user's drive after the Session that produced them is gone.
      */
     DRIVE_ORPHAN_RETENTION_MS: z.coerce.number().int().min(0).default(0),
+    MEMORY_BYTE_BUDGET: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      positiveInteger.optional(),
+    ),
+    MEMORY_DREAM_MODEL: z.string().trim().default(""),
+    MEMORY_MONITOR_INTERVAL_MS: positiveInteger.default(300_000),
+    MEMORY_COOLDOWN_MS: z.coerce.number().int().min(0).default(21_600_000),
     PERSONAL_AGENT_LIMIT: z.coerce.number().int().min(0).default(10),
     CONCURRENT_SESSION_LIMIT: z.coerce.number().int().min(0).default(2),
     SESSION_DAILY_LIMIT: requiredNonnegativeInteger,
@@ -141,6 +168,16 @@ const environmentSchema = z
   })
   .passthrough()
   .superRefine((env, context) => {
+    if (
+      env.MEMORY_DREAM_MODEL &&
+      !csv(env.MODEL_ALLOWLIST).includes(env.MEMORY_DREAM_MODEL)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["MEMORY_DREAM_MODEL"],
+        message: "must be in MODEL_ALLOWLIST",
+      });
+    }
     if (
       normalizedTosEndpoint({
         endpoint: env.TOS_ENDPOINT,
@@ -224,8 +261,15 @@ export function parseServerConfig(
       ...(env.TOS_SESSION_TOKEN ? { stsToken: env.TOS_SESSION_TOKEN } : {}),
     },
     modelAllowlist: publicConfig.modelAllowlist,
+    systemAgentIds: env.SYSTEM_AGENT_IDS,
     outboundHostAllowlist: csv(env.OUTBOUND_HOST_ALLOWLIST),
     driveOrphanRetentionMs: env.DRIVE_ORPHAN_RETENTION_MS,
+    memory: {
+      byteBudget: env.MEMORY_BYTE_BUDGET,
+      modelId: env.MEMORY_DREAM_MODEL,
+      monitorIntervalMs: env.MEMORY_MONITOR_INTERVAL_MS,
+      cooldownMs: env.MEMORY_COOLDOWN_MS,
+    },
     personalAgentLimit: env.PERSONAL_AGENT_LIMIT,
     concurrentSessionLimit: env.CONCURRENT_SESSION_LIMIT,
     dailySessionLimit: env.SESSION_DAILY_LIMIT,

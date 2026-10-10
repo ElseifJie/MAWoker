@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { ArkGatewayError, type ArkErrorCategory } from "./errors.js";
 import type {
   ArkAgent,
@@ -9,7 +10,14 @@ import type {
   ArkEventInput,
   ArkFile,
   ArkFileInput,
+  ArkFileResourceInput,
   ArkGateway,
+  ArkDream,
+  ArkDreamInput,
+  ArkMemory,
+  ArkMemoryInput,
+  ArkMemoryStore,
+  ArkMemoryStoreInput,
   ArkOperation,
   ArkRequestOptions,
   ArkResource,
@@ -69,6 +77,10 @@ export interface StubEventInput {
 }
 
 const safeOperations = new Set<ArkOperation>([
+  "getMemoryStore",
+  "listMemories",
+  "getMemory",
+  "getDream",
   "getAgent",
   "getSession",
   "listEvents",
@@ -94,6 +106,9 @@ export class InMemoryArkGateway implements ArkGateway {
   private readonly artifacts = new Map<string, ArkArtifact[]>();
   private readonly subscribers = new Map<string, Set<Subscriber>>();
   private readonly failures = new Map<ArkOperation, InjectedFailure[]>();
+  private readonly memoryStores = new Map<string, ArkMemoryStore>();
+  private readonly memories = new Map<string, Map<string, ArkMemory>>();
+  private readonly dreams = new Map<string, ArkDream>();
   private counters = {
     agent: 0,
     session: 0,
@@ -102,6 +117,10 @@ export class InMemoryArkGateway implements ArkGateway {
     resource: 0,
     artifact: 0,
     skill: 0,
+    memoryStore: 0,
+    memory: 0,
+    memoryVersion: 0,
+    dream: 0,
   };
 
   constructor(options: InMemoryArkGatewayOptions = {}) {
@@ -112,6 +131,253 @@ export class InMemoryArkGateway implements ArkGateway {
     const failures = this.failures.get(operation) ?? [];
     failures.push(failure);
     this.failures.set(operation, failures);
+  }
+
+  async createMemoryStore(
+    input: ArkMemoryStoreInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemoryStore> {
+    this.record("createMemoryStore", input, options);
+    if (
+      !input.name.trim() ||
+      [...input.name].length > 64 ||
+      Buffer.byteLength(input.description ?? "", "utf8") > 2048
+    ) {
+      throw new ArkGatewayError("invalid_response");
+    }
+    return structuredClone(this.newMemoryStore(input.name));
+  }
+
+  async getMemoryStore(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemoryStore> {
+    this.record("getMemoryStore", { memoryStoreId }, options);
+    return structuredClone(this.requireMemoryStore(memoryStoreId));
+  }
+
+  async deleteMemoryStore(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<void> {
+    this.record("deleteMemoryStore", { memoryStoreId }, options);
+    this.requireMemoryStore(memoryStoreId);
+    this.memoryStores.delete(memoryStoreId);
+    this.memories.delete(memoryStoreId);
+  }
+
+  async listMemories(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory[]> {
+    this.record("listMemories", { memoryStoreId }, options);
+    this.requireMemoryStore(memoryStoreId);
+    return structuredClone(
+      [...this.memories.get(memoryStoreId)!.values()].sort((a, b) =>
+        a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
+      ),
+    );
+  }
+
+  async getMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    this.record("getMemory", { memoryStoreId, memoryId }, options);
+    return structuredClone(this.requireMemory(memoryStoreId, memoryId));
+  }
+
+  async createMemory(
+    memoryStoreId: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    this.record("createMemory", { memoryStoreId, ...input }, options);
+    const store = this.requireMemoryStore(memoryStoreId);
+    const memories = this.memories.get(memoryStoreId)!;
+    this.validateMemory(input, memories);
+    if (memories.size >= 2000) throw new ArkGatewayError("invalid_response");
+    const memory = this.newMemory(input);
+    memories.set(memory.id, memory);
+    store.memoryCount = memories.size;
+    store.storageBytes += memory.sizeBytes;
+    return structuredClone(memory);
+  }
+
+  async updateMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    this.record("updateMemory", { memoryStoreId, memoryId, ...input }, options);
+    const original = this.requireMemory(memoryStoreId, memoryId);
+    const store = this.requireMemoryStore(memoryStoreId);
+    const memories = this.memories.get(memoryStoreId)!;
+    this.validateMemory(input, memories, memoryId);
+    const updated = this.newMemory(
+      input,
+      original.path === input.path ? memoryId : undefined,
+    );
+    memories.delete(memoryId);
+    memories.set(updated.id, updated);
+    store.storageBytes += updated.sizeBytes - original.sizeBytes;
+    return structuredClone(updated);
+  }
+
+  async deleteMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    options?: ArkRequestOptions,
+  ): Promise<void> {
+    this.record("deleteMemory", { memoryStoreId, memoryId }, options);
+    const memory = this.requireMemory(memoryStoreId, memoryId);
+    const store = this.requireMemoryStore(memoryStoreId);
+    this.memories.get(memoryStoreId)!.delete(memoryId);
+    store.memoryCount -= 1;
+    store.storageBytes -= memory.sizeBytes;
+  }
+
+  async createDream(
+    input: ArkDreamInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkDream> {
+    this.record("createDream", input, options);
+    if (
+      input.sessionIds.length < 1 ||
+      input.sessionIds.length > 100 ||
+      new Set(input.sessionIds).size !== input.sessionIds.length ||
+      input.sessionIds.some((id) => !id.trim()) ||
+      !input.modelId.trim() ||
+      [...input.instructions].length > 4096
+    ) {
+      throw new ArkGatewayError("invalid_response");
+    }
+    this.requireMemoryStore(input.memoryStoreId);
+    for (const id of input.sessionIds) this.requireSession(id);
+    const output = this.newMemoryStore("dream-curated-memory");
+    const dream: ArkDream = {
+      id: `dream-${++this.counters.dream}`,
+      status: "pending",
+      outputMemoryStoreId: output.id,
+      usage: null,
+    };
+    this.dreams.set(dream.id, dream);
+    return structuredClone(dream);
+  }
+
+  async getDream(
+    dreamId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkDream> {
+    this.record("getDream", { dreamId }, options);
+    return structuredClone(this.requireDream(dreamId));
+  }
+
+  async cancelDream(
+    dreamId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkDream> {
+    this.record("cancelDream", { dreamId }, options);
+    const dream = this.requireDream(dreamId);
+    if (dream.status === "completed" || dream.status === "failed") {
+      throw new ArkGatewayError("invalid_response");
+    }
+    dream.status = "canceled";
+    return structuredClone(dream);
+  }
+
+  setDreamResult(
+    dreamId: string,
+    outputStoreId: string,
+    status: ArkDream["status"] = "completed",
+  ): void {
+    const dream = this.requireDream(dreamId);
+    if (!this.memoryStores.has(outputStoreId))
+      throw new ArkGatewayError("not_found");
+    dream.outputMemoryStoreId = outputStoreId;
+    dream.status = status;
+  }
+
+  private newMemoryStore(name: string): ArkMemoryStore {
+    const store = {
+      id: `memstore-${++this.counters.memoryStore}`,
+      name,
+      memoryCount: 0,
+      storageBytes: 0,
+    };
+    this.memoryStores.set(store.id, store);
+    this.memories.set(store.id, new Map());
+    return store;
+  }
+
+  private requireMemoryStore(memoryStoreId: string): ArkMemoryStore {
+    const store = this.memoryStores.get(memoryStoreId);
+    if (!store) throw new ArkGatewayError("not_found");
+    for (const dream of this.dreams.values()) {
+      if (
+        dream.outputMemoryStoreId === memoryStoreId &&
+        (dream.status === "pending" || dream.status === "running")
+      ) {
+        throw new ArkGatewayError("runtime_busy");
+      }
+    }
+    return store;
+  }
+
+  private requireMemory(memoryStoreId: string, memoryId: string): ArkMemory {
+    this.requireMemoryStore(memoryStoreId);
+    const memory = this.memories.get(memoryStoreId)!.get(memoryId);
+    if (!memory) throw new ArkGatewayError("not_found");
+    return memory;
+  }
+
+  private requireDream(dreamId: string): ArkDream {
+    const dream = this.dreams.get(dreamId);
+    if (!dream) throw new ArkGatewayError("not_found");
+    return dream;
+  }
+
+  private validateMemory(
+    input: ArkMemoryInput,
+    memories: Map<string, ArkMemory>,
+    excludeId?: string,
+  ): void {
+    const segments = input.path.slice(1).split("/");
+    if (
+      !input.path.startsWith("/") ||
+      !/\.(md|txt)$/.test(input.path) ||
+      Buffer.byteLength(input.path, "utf8") > 1024 ||
+      [...input.path].some(
+        (character) =>
+          character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
+      ) ||
+      /[%;?]/.test(input.path) ||
+      segments.some(
+        (segment) => !segment || segment === "." || segment === "..",
+      ) ||
+      Buffer.from(input.path, "utf8").toString("utf8") !== input.path ||
+      Buffer.from(input.content, "utf8").toString("utf8") !== input.content ||
+      Buffer.byteLength(input.content, "utf8") > 102400 ||
+      [...memories.values()].some(
+        (memory) => memory.id !== excludeId && memory.path === input.path,
+      )
+    ) {
+      throw new ArkGatewayError("invalid_response");
+    }
+  }
+
+  private newMemory(input: ArkMemoryInput, id?: string): ArkMemory {
+    return {
+      ...input,
+      id: id ?? `mem-${++this.counters.memory}`,
+      contentSha256: createHash("sha256")
+        .update(input.content, "utf8")
+        .digest("hex"),
+      memoryVersionId: `memversion-${++this.counters.memoryVersion}`,
+      sizeBytes: Buffer.byteLength(input.content, "utf8"),
+    };
   }
 
   async createAgent(
@@ -258,7 +524,9 @@ export class InMemoryArkGateway implements ArkGateway {
       throw new ArkGatewayError("version_conflict");
     }
     for (const resource of input.resources) {
-      if (!this.files.has(resource.fileId)) {
+      if ("type" in resource) {
+        this.requireMemoryStore(resource.memoryStoreId);
+      } else if (!this.files.has(resource.fileId)) {
         throw new ArkGatewayError("not_found");
       }
     }
@@ -279,10 +547,14 @@ export class InMemoryArkGateway implements ArkGateway {
     this.events.set(session.id, []);
     this.resources.set(
       session.id,
-      input.resources.map((resource) => ({
-        ...resource,
-        id: `resource-${++this.counters.resource}`,
-      })),
+      input.resources
+        .filter(
+          (resource): resource is ArkFileResourceInput => !("type" in resource),
+        )
+        .map((resource) => ({
+          ...resource,
+          id: `resource-${++this.counters.resource}`,
+        })),
     );
     this.artifacts.set(session.id, []);
     return structuredClone(session);
@@ -449,9 +721,14 @@ export class InMemoryArkGateway implements ArkGateway {
         status === "idle" ||
         status === "running" ||
         status === "rescheduled" ||
-        status === "terminated"
+        status === "terminated" ||
+        status === "initializing" ||
+        status === "upgrading" ||
+        status === "failed"
       ) {
         session.status = status;
+      } else if (status === "rescheduling") {
+        session.status = "rescheduled";
       }
     }
     return this.appendEvent(sessionId, input);

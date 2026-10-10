@@ -367,50 +367,50 @@ describe("InMemoryArkGateway", () => {
   });
 });
 
-  it("registers skills, validates bindings, and exposes the ids an Agent carries", async () => {
-    const gateway = new InMemoryArkGateway();
-    const skill = await gateway.createSkill({
-      file: {
-        name: "demo.zip",
-        contentType: "application/zip",
-        bytes: new Uint8Array([80, 75]),
-      },
-      displayTitle: "Demo",
-    });
-    expect(skill).toMatchObject({
-      id: "skill-1",
-      displayTitle: "Demo",
-      latestVersion: "1",
-      source: "custom",
-    });
-
-    const agent = await gateway.createAgent({
-      ...agentInput,
-      skills: [{ skillId: skill.id, version: "1" }],
-    });
-    expect(gateway.agentSkillIds(agent.id)).toEqual([skill.id]);
-
-    // Rebinding with an explicit array replaces the binding set.
-    await gateway.createSkill({
-      file: {
-        name: "second.zip",
-        contentType: "application/zip",
-        bytes: new Uint8Array([80, 75]),
-      },
-    });
-    const updated = await gateway.updateAgent(agent.id, {
-      ...agentInput,
-      currentVersion: agent.version,
-      skills: [{ skillId: "skill-2" }],
-    });
-    expect(updated.version).toBe(2);
-    expect(gateway.agentSkillIds(agent.id)).toEqual(["skill-2"]);
-
-    // Unknown skill ids are rejected like Ark would.
-    await expect(
-      gateway.createAgent({ ...agentInput, skills: [{ skillId: "skill-404" }] }),
-    ).rejects.toMatchObject({ category: "not_found" });
+it("registers skills, validates bindings, and exposes the ids an Agent carries", async () => {
+  const gateway = new InMemoryArkGateway();
+  const skill = await gateway.createSkill({
+    file: {
+      name: "demo.zip",
+      contentType: "application/zip",
+      bytes: new Uint8Array([80, 75]),
+    },
+    displayTitle: "Demo",
   });
+  expect(skill).toMatchObject({
+    id: "skill-1",
+    displayTitle: "Demo",
+    latestVersion: "1",
+    source: "custom",
+  });
+
+  const agent = await gateway.createAgent({
+    ...agentInput,
+    skills: [{ skillId: skill.id, version: "1" }],
+  });
+  expect(gateway.agentSkillIds(agent.id)).toEqual([skill.id]);
+
+  // Rebinding with an explicit array replaces the binding set.
+  await gateway.createSkill({
+    file: {
+      name: "second.zip",
+      contentType: "application/zip",
+      bytes: new Uint8Array([80, 75]),
+    },
+  });
+  const updated = await gateway.updateAgent(agent.id, {
+    ...agentInput,
+    currentVersion: agent.version,
+    skills: [{ skillId: "skill-2" }],
+  });
+  expect(updated.version).toBe(2);
+  expect(gateway.agentSkillIds(agent.id)).toEqual(["skill-2"]);
+
+  // Unknown skill ids are rejected like Ark would.
+  await expect(
+    gateway.createAgent({ ...agentInput, skills: [{ skillId: "skill-404" }] }),
+  ).rejects.toMatchObject({ category: "not_found" });
+});
 
 describe("HttpArkGateway", () => {
   it("owns authentication and correlation IDs and validates responses", async () => {

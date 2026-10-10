@@ -27,6 +27,7 @@ export function runProductionWorkerPoll(
     artifactCleanup: WorkerProcessor;
     driveCleanup: WorkerProcessor;
     driveOrphanGc: WorkerProcessor;
+    memory?: WorkerProcessor;
   },
   reportError?: (message: string, error: unknown) => void,
 ): Promise<void> {
@@ -42,6 +43,7 @@ export function runProductionWorkerPoll(
       processors.artifactCleanup,
       processors.driveCleanup,
       processors.driveOrphanGc,
+      ...(processors.memory ? [processors.memory] : []),
     ],
     reportError,
   );

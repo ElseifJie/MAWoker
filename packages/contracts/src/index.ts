@@ -36,6 +36,11 @@ export const errorCodeSchema = z.enum([
   "ARTIFACT_SOURCE_UNAVAILABLE",
   "SESSION_TERMINATED",
   "SESSION_BUSY",
+  "MEMORY_BUSY",
+  "MEMORY_CONFLICT",
+  "MEMORY_INVALID",
+  "MEMORY_CAPACITY",
+  "MEMORY_REPAIR_REQUIRED",
   "DELETION_PENDING",
   "DELETION_FAILED",
   "INTERNAL_ERROR",
@@ -78,6 +83,9 @@ export const sessionStatusSchema = z.enum([
   "idle",
   "running",
   "rescheduled",
+  "initializing",
+  "upgrading",
+  "failed",
   "terminated",
 ]);
 
@@ -99,6 +107,7 @@ export const createSessionSchema = z
     agentId: z.string().uuid(),
     uploadIds: z.array(z.string().uuid()).max(20).default([]),
     title: z.string().trim().min(1).max(120).optional(),
+    temporary: z.boolean().default(false),
   })
   .strict();
 

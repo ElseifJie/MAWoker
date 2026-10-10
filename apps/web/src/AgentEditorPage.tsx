@@ -141,9 +141,10 @@ export function AgentEditorPage({
       .catch(() => {
         if (active) setSkills([]);
       });
-    if (!agentId) return () => {
-      active = false;
-    };
+    if (!agentId)
+      return () => {
+        active = false;
+      };
     apiClient
       .getAgent(agentId)
       .then((detail) => {
@@ -364,10 +365,7 @@ export function AgentEditorPage({
               </div>
             </header>
             <div className="agent-form-section__body">
-              <Field
-                label="System"
-                hint={`${value.systemPrompt.length}/32000`}
-              >
+              <Field label="System" hint={`${value.systemPrompt.length}/32000`}>
                 <Textarea
                   value={value.systemPrompt}
                   maxLength={32_000}
@@ -387,9 +385,7 @@ export function AgentEditorPage({
             <header className="agent-form-section__header">
               <span className="agent-form-section__index">04</span>
               <div>
-                <h3 id="agent-section-capabilities">
-                  Capability extensions
-                </h3>
+                <h3 id="agent-section-capabilities">Capability extensions</h3>
                 <p>Attach the capabilities this Agent can use.</p>
               </div>
             </header>
@@ -403,7 +399,9 @@ export function AgentEditorPage({
                   type="button"
                   role="tab"
                   aria-selected={capabilitiesTab === "skills"}
-                  className={capabilitiesTab === "skills" ? "is-active" : undefined}
+                  className={
+                    capabilitiesTab === "skills" ? "is-active" : undefined
+                  }
                   onClick={() => setCapabilitiesTab("skills")}
                 >
                   Skills

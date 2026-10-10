@@ -46,6 +46,15 @@ const USER_DATA_TABLES = [
 const pool = new pg.Pool({ connectionString: databaseUrl });
 
 try {
+  const memoryStores = await pool.query(
+    "select 1 from user_memory_stores limit 1",
+  );
+  if (memoryStores.rows.length > 0) {
+    throw new Error(
+      "Reset refused: user_memory_stores contains durable memory manifests; reconcile upstream memory cleanup before resetting data",
+    );
+  }
+
   await pool.query(
     `truncate table ${USER_DATA_TABLES} restart identity cascade`,
   );

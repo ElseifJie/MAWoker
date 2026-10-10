@@ -6,6 +6,7 @@ import {
   ArtifactService,
   DriveFileService,
   LoggingNotifier,
+  MemoryService,
   SessionInputService,
   SessionService,
   UserAgentService,
@@ -47,6 +48,16 @@ const service = new UserAgentService({
   modelAllowlist: config.modelAllowlist,
   createId: randomUUID,
 });
+const memory = new MemoryService({
+  repository: repositories.memories,
+  ark,
+  modelId: config.memory.modelId,
+  monitorIntervalMs: config.memory.monitorIntervalMs,
+  cooldownMs: config.memory.cooldownMs,
+  ...(config.memory.byteBudget === undefined
+    ? {}
+    : { byteBudget: config.memory.byteBudget }),
+});
 const personalAgentProcessor = new PersonalAgentReconciliationProcessor({
   jobs: repositories.jobs,
   service,
@@ -60,6 +71,7 @@ const sessionProcessor = new SessionReconciliationProcessor({
     ark,
     environmentId: config.ark.environmentId,
     createId: randomUUID,
+    memory,
   }),
   workerId: `session-worker:${process.pid}:${randomUUID()}`,
 });
@@ -169,6 +181,7 @@ await new Promise<void>((resolve) => {
           artifactCleanup: artifactObjectCleanupProcessor,
           driveCleanup: driveObjectCleanupProcessor,
           driveOrphanGc: driveOrphanGcProcessor,
+          memory,
         },
         reportWorkerError,
       );

@@ -33,6 +33,46 @@ const valid = {
 };
 
 describe("server configuration", () => {
+  it("parses multiple system Agent IDs without exposing them publicly", () => {
+    const config = parseServerConfig({
+      ...valid,
+      SYSTEM_AGENT_IDS: " ark-a, ark-b ",
+    });
+    expect(config.systemAgentIds).toEqual(["ark-a", "ark-b"]);
+    expect(config.public).not.toHaveProperty("systemAgentIds");
+    expect(parseServerConfig(valid).systemAgentIds).toEqual([]);
+    expect(
+      parseServerConfig({ ...valid, SYSTEM_AGENT_IDS: "" }).systemAgentIds,
+    ).toEqual([]);
+  });
+
+  it("rejects duplicate system Agent IDs", () => {
+    expect(() =>
+      parseServerConfig({
+        ...valid,
+        SYSTEM_AGENT_IDS: "ark-a,ark-a",
+      }),
+    ).toThrow(/SYSTEM_AGENT_IDS/);
+  });
+
+  it("parses memory budgets and only allows an approved Dream model", () => {
+    expect(parseServerConfig(valid).memory).toMatchObject({
+      byteBudget: undefined,
+      modelId: "",
+      monitorIntervalMs: 300000,
+      cooldownMs: 21600000,
+    });
+    expect(
+      parseServerConfig({
+        ...valid,
+        MEMORY_BYTE_BUDGET: "1000000",
+        MEMORY_DREAM_MODEL: "model-a",
+      }).memory.byteBudget,
+    ).toBe(1000000);
+    expect(() =>
+      parseServerConfig({ ...valid, MEMORY_DREAM_MODEL: "unapproved" }),
+    ).toThrow();
+  });
   it("parses allowlists and defaults", () => {
     const config = parseServerConfig(valid);
 

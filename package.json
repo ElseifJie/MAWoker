@@ -24,6 +24,7 @@
     "healthcheck": "node scripts/container-healthcheck.mjs",
     "healthcheck:api": "node scripts/container-healthcheck.mjs api",
     "healthcheck:worker": "node scripts/container-healthcheck.mjs worker",
+    "memory:demo": "tsx scripts/memory-demo.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

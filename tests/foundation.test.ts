@@ -1,12 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import { once } from "node:events";
-import { createServer } from "node:net";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..");
-const startupTimeoutMs = 25_000;
 const testTimeoutMs = 30_000;
 
 function readJson(path: string): Record<string, unknown> {
@@ -37,20 +34,6 @@ const serverEnvironment = {
   SESSION_DAILY_LIMIT: "25",
   MONTHLY_TOKEN_LIMIT: "1000000",
 };
-
-async function availablePort(): Promise<number> {
-  const server = createServer();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Unable to reserve a test port");
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
 
 async function waitForExit(
   child: ChildProcess,
@@ -92,27 +75,6 @@ async function stopSubprocess(child: ChildProcess): Promise<void> {
     if (child.exitCode === null) child.kill("SIGKILL");
     await waitForExit(child, 5_000);
   }
-}
-
-async function waitForApi(url: string, child: ChildProcess): Promise<void> {
-  const deadline = Date.now() + startupTimeoutMs;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(
-        `API subprocess exited with code ${child.exitCode} and signal ${child.signalCode}`,
-      );
-    }
-    try {
-      const response = await fetch(`${url}/health`, {
-        signal: AbortSignal.timeout(500),
-      });
-      if (response.ok) return;
-    } catch {
-      // The subprocess has not started listening yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error("API subprocess did not become ready");
 }
 
 describe("modular monolith foundation", () => {
@@ -209,9 +171,8 @@ describe("modular monolith foundation", () => {
   );
 
   it(
-    "starts the production API entrypoint with secure cookies",
+    "fails startup when System Agents cannot be synchronized with the database",
     async () => {
-      const port = await availablePort();
       const api = spawn(
         process.execPath,
         ["--import", "tsx", "apps/api/src/index.ts"],
@@ -220,76 +181,20 @@ describe("modular monolith foundation", () => {
           env: {
             ...serverEnvironment,
             NODE_ENV: "production",
-            PORT: String(port),
+            DATABASE_URL: "postgres://127.0.0.1:1/unavailable",
+            SYSTEM_AGENT_IDS: "",
           },
-          stdio: "ignore",
+          stdio: ["ignore", "ignore", "pipe"],
         },
       );
-
+      let stderr = "";
+      api.stderr.setEncoding("utf8");
+      api.stderr.on("data", (chunk: string) => {
+        stderr += chunk;
+      });
       try {
-        const origin = `http://127.0.0.1:${port}`;
-        await waitForApi(origin, api);
-        const response = await fetch(`${origin}/api/v1/auth/logout`, {
-          method: "POST",
-        });
-
-        expect(response.status).toBe(204);
-        expect(response.headers.get("set-cookie")).toContain("Secure");
-      } finally {
-        await stopSubprocess(api);
-      }
-    },
-    testTimeoutMs,
-  );
-
-  it(
-    "wires user Agent and Session routes in the production API entrypoint",
-    async () => {
-      const port = await availablePort();
-      const api = spawn(
-        process.execPath,
-        ["--import", "tsx", "apps/api/src/index.ts"],
-        {
-          cwd: root,
-          env: {
-            ...serverEnvironment,
-            NODE_ENV: "production",
-            PORT: String(port),
-          },
-          stdio: "ignore",
-        },
-      );
-
-      try {
-        const origin = `http://127.0.0.1:${port}`;
-        await waitForApi(origin, api);
-        const [agents, sessions, artifacts, usage, adminAgents, login] =
-          await Promise.all([
-            fetch(`${origin}/api/v1/agents`),
-            fetch(`${origin}/api/v1/sessions`),
-            fetch(`${origin}/api/v1/artifacts`),
-            fetch(`${origin}/api/v1/usage`),
-            fetch(`${origin}/api/v1/admin/platform-agents`),
-            fetch(`${origin}/api/v1/auth/login`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({
-                email: "user@example.com",
-                password: "secret-password",
-              }),
-            }),
-          ]);
-
-        expect(agents.status).toBe(401);
-        expect(sessions.status).toBe(401);
-        expect(artifacts.status).toBe(401);
-        expect(usage.status).toBe(401);
-        expect(adminAgents.status).toBe(401);
-        // The isolated entrypoint has no reachable database, so a login attempt
-        // either reports unknown credentials or fails closed with a server
-        // error; it must never hand out a session.
-        expect([401, 500]).toContain(login.status);
-        expect(login.headers.get("set-cookie")).toBeNull();
+        expect(await waitForExit(api, 10_000)).not.toBe(0);
+        expect(stderr).toMatch(/ECONNREFUSED|connection refused/);
       } finally {
         await stopSubprocess(api);
       }

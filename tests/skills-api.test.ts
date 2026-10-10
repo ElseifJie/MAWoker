@@ -255,7 +255,9 @@ describe("skills API", () => {
     });
     expect(missing.statusCode).toBe(404);
 
-    service.resolveBindings.mockRejectedValueOnce(new SkillNotSelectableError());
+    service.resolveBindings.mockRejectedValueOnce(
+      new SkillNotSelectableError(),
+    );
     const unavailable = await app.inject({
       method: "POST",
       url: "/api/v1/agents",

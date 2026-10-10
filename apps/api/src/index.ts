@@ -11,9 +11,11 @@ import {
   AuditService,
   DriveFileService,
   LoggingNotifier,
+  MemoryService,
   PlatformAgentService,
   QuotaPolicyService,
   QuotaUsageService,
+  resolveSystemAgents,
   SessionInputService,
   SessionService,
   SkillService,
@@ -37,6 +39,12 @@ const ark = new HttpArkGateway({
   baseDelayMs: config.ark.retryBaseDelayMs,
   maxDelayMs: config.ark.retryMaxDelayMs,
 });
+const systemAgents = await resolveSystemAgents({
+  agentIds: config.systemAgentIds,
+  ark,
+  modelAllowlist: config.modelAllowlist,
+});
+await repositories.platformAgents.synchronizeSystemAgents(systemAgents);
 const artifactStorage = createTosArtifactStorage(config.tos);
 const isProduction = config.nodeEnv === "production";
 const auth = new ApplicationSessionService({
@@ -80,12 +88,23 @@ const adminUserDetail = new AdminUserDetailService({
   },
   audit,
 });
+const memory = new MemoryService({
+  repository: repositories.memories,
+  ark,
+  modelId: config.memory.modelId,
+  monitorIntervalMs: config.memory.monitorIntervalMs,
+  cooldownMs: config.memory.cooldownMs,
+  ...(config.memory.byteBudget === undefined
+    ? {}
+    : { byteBudget: config.memory.byteBudget }),
+});
 const sessions = new SessionService({
   repository: repositories.sessionLifecycle,
   agentResolver: userAgents,
   ark,
   environmentId: config.ark.environmentId,
   createId: randomUUID,
+  memory,
 });
 const skills = new SkillService({
   repository: repositories.skills,
@@ -120,6 +139,7 @@ const app = buildApp({
   userAgents,
   skills,
   sessions,
+  memory,
   inputs,
   artifacts,
   quotaUsage,

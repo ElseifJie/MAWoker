@@ -1,7 +1,14 @@
 import type { FeatureCapabilities, UiEvent } from "@pwa/contracts";
 
 export type UserRole = "user" | "admin";
-export type SessionStatus = "idle" | "running" | "rescheduled" | "terminated";
+export type SessionStatus =
+  | "idle"
+  | "running"
+  | "rescheduled"
+  | "terminated"
+  | "initializing"
+  | "upgrading"
+  | "failed";
 
 export interface CurrentUser {
   userId: string;
@@ -89,6 +96,50 @@ export interface AdminUserAgent {
 
 export interface ClientCapabilities extends FeatureCapabilities {
   personalAgentModels: string[];
+}
+
+export interface MemoryCapacity {
+  count: number;
+  bytes: number;
+  maxEntryBytes: number;
+  countRatio: number;
+  byteRatio: number | null;
+  level: "normal" | "watch" | "high" | "critical" | "full";
+  targetCount: number;
+}
+
+export interface MemoryEntry {
+  path: string;
+  content: string;
+}
+
+export interface MemoryState {
+  status: "provisioning" | "active" | "draining" | "applying" | "repairing";
+  protectedPaths: string[];
+  autoDream: boolean;
+  run: {
+    kind: "edit" | "dream" | "compress";
+    stage:
+      | "queued"
+      | "snapshot"
+      | "submit"
+      | "polling"
+      | "merge"
+      | "apply"
+      | "cleanup"
+      | "completed"
+      | "failed"
+      | "repairing";
+    error: string | null;
+    before: MemoryCapacity | null;
+    after: MemoryCapacity | null;
+  } | null;
+}
+
+export interface MemoryList {
+  entries: MemoryEntry[];
+  capacity: MemoryCapacity;
+  state: MemoryState;
 }
 
 export interface SessionSummary {
@@ -569,6 +620,35 @@ export const apiClient = {
       },
     ),
   getCapabilities: () => request<ClientCapabilities>("/capabilities"),
+  listMemory: () => request<MemoryList>("/memory"),
+  getMemoryStatus: () => request<MemoryState>("/memory/status"),
+  writeMemory: (input: {
+    path: string;
+    content: string;
+    expectedHash?: string;
+  }) =>
+    request<MemoryState>("/memory/entry", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  removeMemory: (path: string) =>
+    request<MemoryState>("/memory/entry", {
+      method: "DELETE",
+      body: JSON.stringify({ path }),
+    }),
+  protectMemory: (path: string, protectedValue: boolean) =>
+    request<MemoryState>("/memory/protect", {
+      method: "POST",
+      body: JSON.stringify({ path, protected: protectedValue }),
+    }),
+  dreamMemory: () => request<MemoryState>("/memory/dream", { method: "POST" }),
+  compressMemory: () =>
+    request<MemoryState>("/memory/compress", { method: "POST" }),
+  setMemorySettings: (autoDream: boolean) =>
+    request<MemoryState>("/memory/settings", {
+      method: "PATCH",
+      body: JSON.stringify({ autoDream }),
+    }),
   listAgents: () => request<AgentList>("/agents"),
   getAgent: (id: string) => request<AgentDetail>(`/agents/${id}`),
   createAgent: (input: {

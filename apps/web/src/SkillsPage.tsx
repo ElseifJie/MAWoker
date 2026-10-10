@@ -282,7 +282,9 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       if (isAuthError(error)) {
         onAuthRequired();
       } else {
-        setFeedback(skillErrorMessage(error, "The Skill could not be deleted."));
+        setFeedback(
+          skillErrorMessage(error, "The Skill could not be deleted."),
+        );
         setDeleteTarget(null);
       }
     } finally {
@@ -326,11 +328,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       ) : null}
 
       <div className="skills-toolbar">
-        <div
-          className="skills-tabs"
-          role="tablist"
-          aria-label="Skill scope"
-        >
+        <div className="skills-tabs" role="tablist" aria-label="Skill scope">
           <button
             type="button"
             role="tab"
@@ -446,8 +444,17 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       >
         {editor ? (
           <>
-            <div className="skills-source-tabs" role="tablist" aria-label="Source">
-              <button type="button" className="is-active" role="tab" aria-selected>
+            <div
+              className="skills-source-tabs"
+              role="tablist"
+              aria-label="Source"
+            >
+              <button
+                type="button"
+                className="is-active"
+                role="tab"
+                aria-selected
+              >
                 Local upload
               </button>
               <button

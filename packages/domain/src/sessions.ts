@@ -31,6 +31,7 @@ export interface SessionRecord {
   agentName: string;
   agentVersion: string;
   environmentId: string;
+  memoryStoreId?: string | null;
   title: string;
   status: SessionStatus;
   lastErrorCode: string | null;
@@ -148,7 +149,7 @@ export interface SessionRepository {
   finishMessage(
     userId: string,
     id: string,
-    outcome: "accepted_or_unknown" | "definite_failure",
+    outcome: "accepted_or_unknown" | "unknown" | "definite_failure",
   ): PromiseLike<void>;
   projectEvent(
     userId: string,
@@ -280,19 +281,32 @@ export class SessionService {
         | "streamEvents"
       >;
       environmentId: string;
+      memory?: {
+        ensure(userId: string): Promise<string>;
+        gate(userId: string): Promise<void>;
+      };
       createId: () => string;
       now?: () => Date;
     },
   ) {}
 
   async create(
-    input: { agentId: string; title?: string; uploadIds?: string[] },
+    input: {
+      agentId: string;
+      title?: string;
+      uploadIds?: string[];
+      temporary?: boolean;
+    },
     context: SessionContext,
   ): Promise<SessionRecord & { inputs?: SessionInputRecord[] }> {
     const agent = await this.dependencies.agentResolver.resolveForNewSession(
       context.userId,
       input.agentId,
     );
+    const memoryStoreId =
+      !input.temporary && this.dependencies.memory
+        ? await this.dependencies.memory.ensure(context.userId)
+        : null;
     const id = this.dependencies.createId();
     const timestamp = (this.dependencies.now ?? (() => new Date()))();
     const intent: SessionRecord = {
@@ -306,6 +320,7 @@ export class SessionService {
       agentName: agent.name,
       agentVersion: agent.arkVersion,
       environmentId: this.dependencies.environmentId,
+      memoryStoreId,
       title: input.title?.trim() ?? "",
       status: "idle",
       lastErrorCode: null,
@@ -454,6 +469,12 @@ export class SessionService {
     input: { content: string },
     context: SessionContext,
   ): Promise<{ eventId: string; delivery: "accepted" | "queued" }> {
+    if (this.dependencies.memory) {
+      const session = await this.requireOwned(context.userId, id);
+      if (session.memoryStoreId != null) {
+        await this.dependencies.memory.gate(context.userId);
+      }
+    }
     let prepared;
     try {
       prepared = await this.dependencies.repository.beginMessage(
@@ -490,7 +511,7 @@ export class SessionService {
         context.userId,
         id,
         isArkCategory(error, "unknown_write_outcome")
-          ? "accepted_or_unknown"
+          ? "unknown"
           : "definite_failure",
       );
       await this.audit(context, "session.message", id, "failed", error);
@@ -704,6 +725,12 @@ export class SessionService {
       ? await this.dependencies.repository.listInputs(context.userId, id)
       : [];
 
+    if (
+      intent.arkSessionId.startsWith("pending:") &&
+      intent.memoryStoreId != null
+    ) {
+      await this.dependencies.memory?.gate(context.userId);
+    }
     const upstream = intent.arkSessionId.startsWith("pending:")
       ? await this.dependencies.ark.createSession(
           this.arkCreateInput(intent, inputs),
@@ -872,10 +899,21 @@ export class SessionService {
       agentId: session.arkAgentId,
       agentVersion: Number(session.agentVersion),
       environmentId: session.environmentId,
-      resources: inputs.map((input) => ({
-        fileId: input.arkFileId!,
-        mountPath: input.mountPath,
-      })),
+      resources: [
+        ...inputs.map((input) => ({
+          fileId: input.arkFileId!,
+          mountPath: input.mountPath,
+        })),
+        ...(session.memoryStoreId != null
+          ? [
+              {
+                type: "memory_store" as const,
+                memoryStoreId: session.memoryStoreId,
+                access: "read_write" as const,
+              },
+            ]
+          : []),
+      ],
     };
   }
 

@@ -7,7 +7,9 @@ async function signIn(page: Page, email: string) {
     page.getByRole("heading", { name: "Sign in to your workspace" }),
   ).toBeVisible();
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill("acceptance-password");
+  await page
+    .getByLabel("Password", { exact: true })
+    .fill("acceptance-password");
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
@@ -96,15 +98,15 @@ test("ordinary user completes the production browser workflow", async ({
 
   await page.getByRole("link", { name: "Agents" }).click();
   await page.getByRole("button", { name: "New personal Agent" }).click();
-  await page.getByLabel("Agent name").fill("Private reviewer");
+  await page.getByLabel("Name", { exact: true }).fill("Private reviewer");
   await page.getByLabel("Description").fill("Checks reports");
-  await page.getByLabel("Model").selectOption("model-a");
-  await page.getByLabel("System Prompt").fill("Review safely.");
+  await page.getByLabel("Model", { exact: true }).selectOption("model-a");
+  await page.getByLabel("System", { exact: true }).fill("Review safely.");
   await page.getByRole("button", { name: "Create Agent" }).click();
   await expect(page.getByText("Private reviewer")).toBeVisible();
 
   await page.getByRole("button", { name: "Edit Private reviewer" }).click();
-  await page.getByLabel("Agent name").fill("Private editor");
+  await page.getByLabel("Name", { exact: true }).fill("Private editor");
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Private editor")).toBeVisible();
   await page.getByRole("button", { name: "Delete Private editor" }).click();
@@ -152,22 +154,23 @@ test("administrator completes core lifecycle in Chromium", async ({ page }) => {
   await signIn(page, "admin@example.com");
 
   await expect(
-    page.getByRole("heading", { name: "Platform Agents" }),
+    page.getByRole("heading", { name: "Agents", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "New platform Agent" }).click();
-  await page.getByLabel("Agent name").fill("Operations Agent");
-  await page.getByLabel("Description").fill("Runs operations");
-  await page.getByLabel("Model").fill("model-a");
-  await page.getByLabel("System Prompt").fill("Operate safely.");
-  await page.getByRole("button", { name: "Create Agent" }).click();
-  await expect(page.getByText("Operations Agent")).toBeVisible();
-
-  await page.getByRole("button", { name: "Edit Operations Agent" }).click();
-  await page.getByLabel("Agent name").fill("Operations Lead");
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Operations Lead")).toBeVisible();
+  await expect(
+    page.getByRole("tab", { name: "System Agents", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("button", { name: "New platform Agent" }),
+  ).toHaveCount(0);
+  await expect(page.getByText("Research assistant")).toBeVisible();
 
   await page.getByRole("link", { name: "Users" }).click();
+  await page
+    .getByRole("link", { name: "user-a@example.com", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "user-a@example.com", exact: true }),
+  ).toBeVisible();
   await page
     .getByLabel("Default Agent for user-a@example.com", { exact: true })
     .selectOption("00000000-0000-4000-8000-000000000102");
@@ -192,21 +195,11 @@ test("administrator completes core lifecycle in Chromium", async ({ page }) => {
     .click();
   await expect(page.getByText("Quotas saved.")).toBeVisible();
 
-  await page.getByRole("link", { name: "Platform Agents" }).click();
-  await page.getByRole("button", { name: "Disable Operations Lead" }).click();
-  await expect(
-    page.getByRole("button", { name: "Enable Operations Lead" }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Delete Operations Lead" }).click();
-  const dialog = page.getByRole("dialog", {
-    name: "Delete platform Agent?",
-  });
-  await dialog.getByRole("button", { name: "Delete Agent" }).click();
-  await expect(
-    dialog.getByText(
-      "This Agent is still assigned to users or referenced by Sessions.",
-    ),
-  ).toBeVisible();
+  await page.getByRole("link", { name: "Agents", exact: true }).click();
+  await expect(page.getByText("Research assistant")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Actions for/ })).toHaveCount(
+    0,
+  );
 });
 
 test("theme preference is painted before the bundle and survives a reload", async ({
@@ -234,7 +227,7 @@ test("theme preference is painted before the bundle and survives a reload", asyn
   ).toBe("dark");
   expect(
     await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
-  ).toBe("rgb(17, 23, 25)");
+  ).toBe("rgb(8, 9, 10)");
 
   await page.goto("/settings");
   expect(

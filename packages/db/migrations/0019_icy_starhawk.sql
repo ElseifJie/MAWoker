@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "message_unknown_outcome" boolean DEFAULT false NOT NULL;

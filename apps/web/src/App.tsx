@@ -37,6 +37,7 @@ import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { SessionList } from "./components/SessionList.js";
 import { SessionSearch } from "./components/SessionSearch.js";
 import { FilesPage } from "./FilesPage.js";
+import { MemoryPage } from "./MemoryPage.js";
 import { SessionPage } from "./SessionPage.js";
 import { SkillsPage } from "./SkillsPage.js";
 import {
@@ -570,6 +571,16 @@ function Workspace({
       onSignOut={signOut}
     >
       <Routes>
+        <Route
+          path="/context"
+          element={
+            data.capabilities.memoryStores.available ? (
+              <MemoryPage onAuthRequired={onAuthRequired} />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
         <Route
           path="/"
           element={

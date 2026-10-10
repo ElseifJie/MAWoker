@@ -13,8 +13,16 @@ import {
 const userId = "00000000-0000-4000-8000-000000000001";
 const requestId = "req-skills";
 
-function zip(name = "demo.zip"): { name: string; contentType: string; bytes: Uint8Array } {
-  return { name, contentType: "application/zip", bytes: new Uint8Array([80, 75]) };
+function zip(name = "demo.zip"): {
+  name: string;
+  contentType: string;
+  bytes: Uint8Array;
+} {
+  return {
+    name,
+    contentType: "application/zip",
+    bytes: new Uint8Array([80, 75]),
+  };
 }
 
 function skillRecord(overrides: Partial<SkillRecord> = {}): SkillRecord {
@@ -54,13 +62,13 @@ function createRepository(initial: SkillRecord[] = []) {
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
     },
     async listPlatform() {
-      return [...skills.values()].filter(
-        (skill) => skill.ownerUserId === null,
-      );
+      return [...skills.values()].filter((skill) => skill.ownerUserId === null);
     },
     async listActiveBindingsForOwner(owner) {
       return [...skills.values()]
-        .filter((skill) => skill.ownerUserId === owner && skill.status === "active")
+        .filter(
+          (skill) => skill.ownerUserId === owner && skill.status === "active",
+        )
         .map((skill) => ({
           skillId: skill.id,
           arkSkillId: skill.arkSkillId,
@@ -107,7 +115,12 @@ function createRepository(initial: SkillRecord[] = []) {
     },
     async markProvisioned(id, upstream) {
       const current = skills.get(id)!;
-      const updated = { ...current, ...upstream, status: "active" as const, lastErrorCode: null };
+      const updated = {
+        ...current,
+        ...upstream,
+        status: "active" as const,
+        lastErrorCode: null,
+      };
       skills.set(id, updated);
       return updated;
     },
@@ -121,8 +134,12 @@ function createRepository(initial: SkillRecord[] = []) {
       const current = skills.get(id)!;
       const updated = {
         ...current,
-        ...(input.displayTitle !== undefined ? { displayTitle: input.displayTitle } : {}),
-        ...(input.description !== undefined ? { description: input.description } : {}),
+        ...(input.displayTitle !== undefined
+          ? { displayTitle: input.displayTitle }
+          : {}),
+        ...(input.description !== undefined
+          ? { description: input.description }
+          : {}),
       };
       skills.set(id, updated);
       return updated;
@@ -157,9 +174,11 @@ function createSync() {
   }> = [];
   return {
     calls,
-    ensureAndBind: vi.fn(async (owner: string, bindings: AgentSkillBinding[]) => {
-      calls.push({ kind: "ensure", userId: owner, bindings });
-    }),
+    ensureAndBind: vi.fn(
+      async (owner: string, bindings: AgentSkillBinding[]) => {
+        calls.push({ kind: "ensure", userId: owner, bindings });
+      },
+    ),
     unbindEverywhere: vi.fn(async (skillId: string) => {
       calls.push({ kind: "unbind", skillId });
     }),
@@ -220,7 +239,11 @@ describe("SkillService", () => {
     const state = createRepository([existing]);
     const ark = new InMemoryArkGateway();
     await ark.createSkill({
-      file: { name: "seed.zip", contentType: "application/zip", bytes: new Uint8Array([1]) },
+      file: {
+        name: "seed.zip",
+        contentType: "application/zip",
+        bytes: new Uint8Array([1]),
+      },
     });
     const { service } = createService(state.repository, ark);
 
@@ -232,8 +255,9 @@ describe("SkillService", () => {
     // The freshly uploaded Ark package is attached to the existing row and the
     // throwaway row is gone: one active row per (owner, skill name).
     expect(defaultAgentSync).toEqual({ synced: true });
-    expect([...state.skills.values()].filter((s) => s.status === "active"))
-      .toHaveLength(1);
+    expect(
+      [...state.skills.values()].filter((s) => s.status === "active"),
+    ).toHaveLength(1);
     expect(skill.id).toBe(existing.id);
     expect(skill).toMatchObject({
       arkSkillId: "skill-2",
@@ -250,7 +274,13 @@ describe("SkillService", () => {
 
     await expect(
       service.upload(
-        { file: { name: "skill.txt", contentType: "text/plain", bytes: new Uint8Array([1]) } },
+        {
+          file: {
+            name: "skill.txt",
+            contentType: "text/plain",
+            bytes: new Uint8Array([1]),
+          },
+        },
         { userId, requestId },
       ),
     ).rejects.toBeInstanceOf(InvalidSkillPackageError);
@@ -278,7 +308,13 @@ describe("SkillService", () => {
     const state = createRepository([existing]);
     const ark = new InMemoryArkGateway();
     // Bump the stub counter so the replacement package gets a fresh id.
-    await ark.createSkill({ file: { name: "seed.zip", contentType: "application/zip", bytes: new Uint8Array([1]) } });
+    await ark.createSkill({
+      file: {
+        name: "seed.zip",
+        contentType: "application/zip",
+        bytes: new Uint8Array([1]),
+      },
+    });
     const { service, sync } = createService(state.repository, ark);
 
     await service.update(
@@ -292,7 +328,11 @@ describe("SkillService", () => {
       arkSkillId: "skill-1",
     });
 
-    await service.update(existing.id, { file: zip("v2.zip") }, { userId, requestId });
+    await service.update(
+      existing.id,
+      { file: zip("v2.zip") },
+      { userId, requestId },
+    );
     const updated = state.skills.get(existing.id)!;
     expect(updated.arkSkillId).toBe("skill-2");
     expect(updated.fileName).toBe("v2.zip");
@@ -331,7 +371,10 @@ describe("SkillService", () => {
       { userId, requestId },
     );
     expect(skill.status).toBe("active");
-    expect(defaultAgentSync).toEqual({ synced: false, errorCode: "QUOTA_EXCEEDED" });
+    expect(defaultAgentSync).toEqual({
+      synced: false,
+      errorCode: "QUOTA_EXCEEDED",
+    });
   });
 
   it("lists owned skills separately from platform presets", async () => {
@@ -377,12 +420,19 @@ describe("SkillService", () => {
   });
 
   it("does not let a user edit or delete a platform preset through the user path", async () => {
-    const preset = skillRecord({ id: "00000000-0000-4000-8000-000000000020", ownerUserId: null });
+    const preset = skillRecord({
+      id: "00000000-0000-4000-8000-000000000020",
+      ownerUserId: null,
+    });
     const state = createRepository([preset]);
     const { service } = createService(state.repository);
 
     await expect(
-      service.update(preset.id, { displayTitle: "Hijack" }, { userId, requestId }),
+      service.update(
+        preset.id,
+        { displayTitle: "Hijack" },
+        { userId, requestId },
+      ),
     ).rejects.toBeInstanceOf(ResourceNotFoundError);
     await expect(
       service.delete(preset.id, { userId, requestId }),

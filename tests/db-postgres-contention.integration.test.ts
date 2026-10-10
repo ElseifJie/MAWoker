@@ -79,9 +79,44 @@ describeWithPostgres("background job contention in real PostgreSQL", () => {
       `create table sessions (
         id uuid primary key,
         owner_user_id uuid not null references users(id),
-        platform_agent_id uuid not null references platform_agents(id)
+        platform_agent_id uuid not null references platform_agents(id),
+        status text not null default 'idle',
+        deletion_state text not null default 'none',
+        updated_at timestamptz not null default now()
       )`,
     );
+    // The claim query's exhausted-lease CTEs reference these even with no rows.
+    await workerPool.query(`
+      create table session_inputs (
+        id uuid primary key,
+        owner_user_id uuid,
+        session_id uuid,
+        status text,
+        last_error_code text,
+        updated_at timestamptz
+      );
+      create table artifacts (
+        id uuid primary key,
+        owner_user_id uuid,
+        deletion_state text,
+        last_error_code text,
+        updated_at timestamptz
+      );
+      create table drive_files (
+        id uuid primary key,
+        owner_user_id uuid,
+        deletion_state text,
+        write_lease_until timestamptz,
+        last_error_code text,
+        updated_at timestamptz
+      );
+      create table quota_reservations (
+        id uuid primary key,
+        user_id uuid,
+        status text,
+        resolved_at timestamptz
+      );
+    `);
   });
 
   afterAll(async () => {

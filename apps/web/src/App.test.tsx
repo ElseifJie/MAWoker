@@ -781,9 +781,7 @@ describe("Agent management", () => {
       name: "New personal Agent",
     });
     expect(editorHeading).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Create Agent" }),
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Create Agent" })).toBeDisabled();
   });
 
   it("uses only the server capability allowlist for personal Agent models", async () => {
@@ -894,10 +892,7 @@ describe("Agent management", () => {
     await user.type(screen.getByLabelText("Name"), "Code reviewer");
     await user.type(screen.getByLabelText("Description"), "Reviews changes");
     await user.selectOptions(screen.getByLabelText("Model"), "model-a");
-    await user.type(
-      screen.getByLabelText("System"),
-      "Review carefully.",
-    );
+    await user.type(screen.getByLabelText("System"), "Review carefully.");
     await user.click(screen.getByRole("button", { name: "Create Agent" }));
     await screen.findByRole("heading", { name: "Agents" });
     expect(await screen.findByText("Code reviewer")).toBeInTheDocument();
@@ -2629,6 +2624,9 @@ describe("artifact chips in replies", () => {
       await screen.findByRole("heading", { name: "Quarterly plan" }),
     ).toBeInTheDocument();
 
+    await waitFor(() =>
+      expect(MockEventSource.instances.length).toBeGreaterThan(0),
+    );
     emitTimelineMessage(
       "agent.message",
       "event-chip-1",

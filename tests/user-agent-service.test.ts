@@ -370,6 +370,24 @@ describe("UserAgentService", () => {
     );
   });
 
+  it("uses the built-in prompt when creating an automatic default from a System Agent", async () => {
+    const state = createRepository();
+    const { service, ark } = createService(state.repository);
+
+    await service.ensureAutoDefault(userId, [], { userId, requestId });
+
+    expect(ark.calls[0]).toMatchObject({
+      operation: "createAgent",
+      input: {
+        name: "My Agent",
+        description: "Shared",
+        modelId: "model-a",
+        systemPrompt:
+          "You are a helpful personal work agent. Complete the user's task with the tools and Skills available to you.",
+      },
+    });
+  });
+
   it("creates with the fixed toolset and enforces model and personal quota", async () => {
     const state = createRepository(1);
     const { service, ark } = createService(state.repository);

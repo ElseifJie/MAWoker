@@ -1,4 +1,4 @@
-import type { ArkEvent, ArkGateway } from "@pwa/ark-client";
+import type { ArkEvent, ArkGateway, SessionStatus } from "@pwa/ark-client";
 import {
   projectArkEvent,
   type ArkEventProjection,
@@ -11,7 +11,7 @@ interface UsageReconciliationRepository {
       sessionId: string;
       ownerUserId: string;
       arkSessionId: string;
-      status: "idle" | "running" | "rescheduled" | "terminated";
+      status: SessionStatus;
     }>
   >;
   /** Resolves to `true` when the projection recorded new token usage. */

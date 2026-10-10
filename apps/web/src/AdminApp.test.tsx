@@ -131,26 +131,6 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function noContent() {
-  return new Response(null, { status: 204 });
-}
-
-function apiError(code: string, status: number, retryable = false) {
-  return json(
-    {
-      error: {
-        code,
-        message: "Upstream failure",
-        requestId: "request-1",
-        retryable,
-        arkAgentId: "must-not-render-ark-id",
-        apiKey: "must-not-render-api-key",
-      },
-    },
-    status,
-  );
-}
-
 function requestPath(input: RequestInfo | URL) {
   return new URL(String(input), "http://localhost").pathname;
 }
@@ -339,7 +319,6 @@ describe("administrator role routing", () => {
     expect(requestedPaths).toEqual([
       "/api/v1/me",
       "/api/v1/admin/platform-agents",
-      "/api/v1/capabilities",
       "/api/v1/admin/users",
     ]);
     expect(requestedPaths).not.toContain("/api/v1/sessions");
@@ -464,391 +443,74 @@ describe("administrator role routing", () => {
 });
 
 describe("platform Agent administration", () => {
-  // The dense row actions live behind the "…" overflow menu.
-  async function openRowMenu(
-    user: ReturnType<typeof userEvent.setup>,
-    rowName: string,
-  ) {
-    await user.click(
-      screen.getByRole("button", { name: `Actions for ${rowName}` }),
-    );
-    return screen.getByRole("menu");
-  }
-
-  it("opens the platform Agent editor page with a disabled submit while idle", async () => {
-    vi.stubGlobal("fetch", vi.fn(adminHandler()));
-
+  it("shows multiple System Agents without mutation controls or provider secrets", async () => {
+    const fetchMock = vi.fn(adminHandler());
+    vi.stubGlobal("fetch", fetchMock);
     renderApp("/admin/platform-agents");
-    const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", { name: "New platform Agent" }),
+    const table = await screen.findByRole("table", { name: "Platform Agents" });
+    expect(within(table).getByText("Research assistant")).toBeInTheDocument();
+    expect(within(table).getByText("Legacy assistant")).toBeInTheDocument();
+    expect(within(table).getByText(longModelId).closest("td")).toHaveAttribute(
+      "data-label",
+      "Model",
     );
-
-    await screen.findByRole("heading", { name: "New platform Agent" });
-    const saveButton = screen.getByRole("button", { name: "Create Agent" });
-    expect(saveButton).toBeDisabled();
-    expect(screen.getByLabelText("Name")).toBeInTheDocument();
-  });
-
-  it("uses responsive labeled records without hiding long model identifiers", async () => {
-    vi.stubGlobal("fetch", vi.fn(adminHandler()));
-
-    renderApp("/admin/platform-agents");
-
-    const table = await screen.findByRole("table", {
-      name: "Platform Agents",
-    });
-    expect(table).toHaveClass("ui-data-table");
-    const modelCell = within(table).getByText(longModelId).closest("td");
-    expect(modelCell).toHaveAttribute("data-label", "Model");
-    expect(modelCell).toHaveClass("admin-agent-model");
     expect(
-      within(table).getByRole("button", {
-        name: "Edit Research assistant",
-      }),
+      screen.getByText(/System Agents are configured through SYSTEM_AGENT_IDS/),
     ).toBeInTheDocument();
     expect(
-      within(table).getByRole("button", {
-        name: "Actions for Research assistant",
-      }),
-    ).toBeInTheDocument();
-  });
-
-  it("switches Platform Agents to labeled records before the 1024px table overflows", () => {
-    const tableRule = adminStyles.indexOf(".admin-agent-table.ui-data-table");
-    const mediaRule = adminStyles.lastIndexOf("@media", tableRule);
-    const mediaHeader = adminStyles.slice(
-      mediaRule,
-      adminStyles.indexOf("{", mediaRule),
-    );
-
-    expect(mediaHeader).toContain("max-width: 1240px");
-  });
-
-  it("creates, version-updates, disables, enables, and confirms deletion", async () => {
-    let agents = structuredClone(platformAgents.agents);
-    const calls: Array<{ method: string; path: string; body: unknown }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = requestPath(input);
-        const method = init?.method ?? "GET";
-        const body =
-          typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
-        calls.push({ method, path, body });
-        if (path === "/api/v1/me") {
-          return json({
-            user: {
-              userId: "admin-1",
-              authSubject: "managed:admin@example.com",
-              role: "admin",
-            },
-          });
-        }
-        if (path === "/api/v1/admin/users") return json(adminUsers);
-        if (path === "/api/v1/admin/platform-agents" && method === "GET") {
-          return json({ agents });
-        }
-        if (path === "/api/v1/admin/platform-agents" && method === "POST") {
-          const created = {
-            id: "00000000-0000-4000-8000-000000000004",
-            ...body,
-            arkVersion: "1",
-            status: "active",
-            lastErrorCode: null,
-          };
-          agents = [...agents, created];
-          return json(created, 201);
-        }
-        if (
-          path === `/api/v1/admin/platform-agents/${agentId}` &&
-          method === "PATCH"
-        ) {
-          const current = agents.find((agent) => agent.id === agentId)!;
-          const updated = {
-            ...current,
-            ...body,
-            arkVersion: "status" in (body as object) ? current.arkVersion : "5",
-          };
-          agents = agents.map((agent) =>
-            agent.id === agentId ? updated : agent,
-          );
-          return json(updated);
-        }
-        if (
-          path === `/api/v1/admin/platform-agents/${disabledAgentId}` &&
-          method === "PATCH"
-        ) {
-          const current = agents.find((agent) => agent.id === disabledAgentId)!;
-          const updated = { ...current, ...body };
-          agents = agents.map((agent) =>
-            agent.id === disabledAgentId ? updated : agent,
-          );
-          return json(updated);
-        }
-        if (
-          path === `/api/v1/admin/platform-agents/${disabledAgentId}` &&
-          method === "DELETE"
-        ) {
-          agents = agents.filter((agent) => agent.id !== disabledAgentId);
-          return noContent();
-        }
-        if (path === "/api/v1/capabilities") {
-          return json({
-            skills: { available: false },
-            mcpServers: { available: false },
-            vaults: { available: false },
-            memoryStores: { available: false },
-            personalAgentModels: [longModelId, "model-a", "model-b", "model-c"],
-          });
-        }
-        throw new Error(`Unexpected request: ${method} ${path}`);
-      }),
-    );
-
-    renderApp("/admin/platform-agents");
-    const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
-
-    const createTrigger = screen.getByRole("button", {
-      name: "New platform Agent",
-    });
-    await user.click(createTrigger);
-    await screen.findByRole("heading", { name: "New platform Agent" });
-    await user.type(screen.getByLabelText("Name"), "Code reviewer");
-    await user.type(screen.getByLabelText("Description"), "Reviews changes");
-    await user.selectOptions(screen.getByLabelText("Model"), "model-c");
-    await user.type(screen.getByLabelText("System"), "Review carefully.");
-    await user.click(screen.getByRole("button", { name: "Create Agent" }));
-    await screen.findByRole("heading", { name: "Agents" });
-    expect(await screen.findByText("Code reviewer")).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: "Edit Research assistant" }),
-    );
-    const name = await screen.findByLabelText("Name");
-    await user.clear(name);
-    await user.type(name, "Research lead");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByRole("heading", { name: "Agents" });
-    expect(await screen.findByText("Research lead")).toBeInTheDocument();
-    expect(screen.getByText("5")).toBeInTheDocument();
-
-    await openRowMenu(user, "Research lead");
-    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
-    await waitFor(() =>
-      expect(
-        calls.some(
-          (call) =>
-            call.method === "PATCH" &&
-            call.path.endsWith(agentId) &&
-            (call.body as { status?: string }).status === "disabled",
-        ),
-      ).toBe(true),
-    );
-
-    await openRowMenu(user, "Legacy assistant");
-    await user.click(screen.getByRole("menuitem", { name: "Enable" }));
-    await waitFor(() =>
-      expect(
-        calls.some(
-          (call) =>
-            call.method === "PATCH" &&
-            call.path.endsWith(disabledAgentId) &&
-            (call.body as { status?: string }).status === "active",
-        ),
-      ).toBe(true),
-    );
-
-    const menuTrigger = screen.getByRole("button", {
-      name: "Actions for Legacy assistant",
-    });
-    await user.click(menuTrigger);
-    const deleteMenuItem = screen.getByRole("menuitem", { name: "Delete" });
-    await user.click(deleteMenuItem);
-    const firstDialog = screen.getByRole("dialog", {
-      name: "Delete platform Agent?",
-    });
-    await waitFor(() =>
-      expect(
-        within(firstDialog).getByRole("button", { name: "Cancel" }),
-      ).toHaveFocus(),
-    );
-    within(firstDialog)
-      .getByRole("button", { name: "Close platform Agent deletion" })
-      .focus();
-    await user.tab({ shift: true });
-    expect(
-      within(firstDialog).getByRole("button", { name: "Delete Agent" }),
-    ).toHaveFocus();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-
-    await user.click(menuTrigger);
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
-    await user.click(
-      within(
-        screen.getByRole("dialog", { name: "Delete platform Agent?" }),
-      ).getByRole("button", { name: "Delete Agent" }),
-    );
-    await waitFor(() =>
-      expect(screen.queryByText("Legacy assistant")).not.toBeInTheDocument(),
-    );
-
-    expect(
-      calls.find(
-        (call) =>
-          call.method === "POST" &&
-          call.path === "/api/v1/admin/platform-agents",
-      )?.body,
-    ).toEqual({
-      name: "Code reviewer",
-      description: "Reviews changes",
-      modelId: "model-c",
-      systemPrompt: "Review carefully.",
-    });
-    expect(
-      calls.find(
-        (call) =>
-          call.method === "PATCH" &&
-          call.path.endsWith(agentId) &&
-          (call.body as { name?: string }).name === "Research lead",
-      )?.body,
-    ).toEqual({
-      name: "Research lead",
-      description: "Company research",
-      modelId: longModelId,
-      systemPrompt: "Use primary sources.",
-      arkVersion: "4",
-    });
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "PATCH" &&
-          call.path.endsWith(agentId) &&
-          (call.body as { status?: string }).status === "disabled",
-      ),
-    ).toBe(true);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "PATCH" &&
-          call.path.endsWith(disabledAgentId) &&
-          (call.body as { status?: string }).status === "active",
-      ),
-    ).toBe(true);
-  });
-
-  it("keeps the current-version editor open when Ark reports a conflict", async () => {
-    const base = adminHandler();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = requestPath(input);
-        if (
-          path === `/api/v1/admin/platform-agents/${agentId}` &&
-          init?.method === "PATCH"
-        ) {
-          return apiError("ARK_CONFLICT", 409);
-        }
-        return base(input);
-      }),
-    );
-
-    renderApp("/admin/platform-agents");
-    const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Edit Research assistant",
-      }),
-    );
-    await screen.findByRole("heading", { name: "Edit platform Agent" });
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-
-    expect(
-      await screen.findByText(
-        "This Agent changed elsewhere. Go back and reopen the editor, then try again.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Edit platform Agent" }),
-    ).toBeInTheDocument();
-  });
-
-  it("shows retryable Ark failures without leaking provider details", async () => {
-    const base = adminHandler();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = requestPath(input);
-        if (
-          path === `/api/v1/admin/platform-agents/${agentId}` &&
-          init?.method === "PATCH"
-        ) {
-          return apiError("ARK_UNAVAILABLE", 503, true);
-        }
-        return base(input);
-      }),
-    );
-
-    renderApp("/admin/platform-agents");
-    const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Actions for Research assistant",
-      }),
-    );
-    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
-
-    expect(
-      await screen.findByText("Ark is temporarily unavailable. Try again."),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "New platform Agent" }),
+    ).not.toBeInTheDocument();
+    expect(within(table).queryByRole("button")).not.toBeInTheDocument();
     expect(
       screen.queryByText("must-not-render-ark-id"),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByText("must-not-render-api-key"),
     ).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.every(
+        ([, init]) => !init?.method || init.method === "GET",
+      ),
+    ).toBe(true);
   });
 
-  it("keeps protected deletion open and explains reference conflicts", async () => {
+  it.each([
+    "/admin/platform-agents/new",
+    `/admin/platform-agents/${agentId}/edit`,
+  ])(
+    "redirects obsolete editor route %s to the read-only list",
+    async (path) => {
+      vi.stubGlobal("fetch", vi.fn(adminHandler()));
+      renderApp(path);
+      expect(
+        await screen.findByRole("table", { name: "Platform Agents" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows an empty state when no System Agents are configured", async () => {
     const base = adminHandler();
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = requestPath(input);
-        if (
-          path === `/api/v1/admin/platform-agents/${agentId}` &&
-          init?.method === "DELETE"
-        ) {
-          return apiError("VALIDATION_FAILED", 409);
-        }
-        return base(input);
-      }),
-    );
-
-    renderApp("/admin/platform-agents");
-    const user = userEvent.setup();
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Actions for Research assistant",
-      }),
-    );
-    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
-    const dialog = screen.getByRole("dialog", {
-      name: "Delete platform Agent?",
-    });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete Agent" }),
-    );
-
-    expect(
-      await within(dialog).findByText(
-        "This Agent is still assigned to users or referenced by Sessions.",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+        requestPath(input) === "/api/v1/admin/platform-agents"
+          ? json({ agents: [] })
+          : base(input, init),
       ),
+    );
+    renderApp("/admin/platform-agents");
+    expect(
+      await screen.findByText("No System Agents configured."),
     ).toBeInTheDocument();
-    expect(screen.getAllByText("Research assistant")).toHaveLength(2);
-    expect(dialog).toBeInTheDocument();
+  });
+
+  it("switches Platform Agents to labeled records before the 1024px table overflows", () => {
+    const tableRule = adminStyles.indexOf(".admin-agent-table.ui-data-table");
+    const mediaRule = adminStyles.lastIndexOf("@media", tableRule);
+    expect(
+      adminStyles.slice(mediaRule, adminStyles.indexOf("{", mediaRule)),
+    ).toContain("max-width: 1240px");
   });
 });
 

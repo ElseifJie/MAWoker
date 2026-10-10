@@ -16,6 +16,23 @@ function readPackage(path = "package.json") {
 }
 
 describe("production container structure", () => {
+  it("rejects resets with durable memory manifests before any mutation", () => {
+    const reset = read("scripts/reset-data.ts");
+    const preflight = reset.indexOf("select 1 from user_memory_stores");
+    const rejection = reset.indexOf("throw new Error(", preflight);
+    const truncate = reset.indexOf("`truncate table");
+
+    expect(preflight).toBeGreaterThan(-1);
+    expect(rejection).toBeGreaterThan(preflight);
+    expect(truncate).toBeGreaterThan(rejection);
+    expect(reset.indexOf("await ensureDefaultQuotaPolicy")).toBeGreaterThan(
+      rejection,
+    );
+    expect(reset.indexOf("await ensureAdministrator")).toBeGreaterThan(
+      rejection,
+    );
+  });
+
   it("builds one non-root OCI image with every runtime artifact", () => {
     const dockerfile = read("Dockerfile");
 
@@ -69,6 +86,7 @@ describe("production container structure", () => {
         "ARK_API_BASE_URL",
         "ARK_API_KEY",
         "ARK_ENVIRONMENT_ID",
+        "SYSTEM_AGENT_IDS",
         "ARK_REQUEST_TIMEOUT_MS",
         "ARK_MAX_ATTEMPTS",
         "ARK_RETRY_BASE_DELAY_MS",
@@ -82,6 +100,10 @@ describe("production container structure", () => {
         "MODEL_ALLOWLIST",
         "OUTBOUND_HOST_ALLOWLIST",
         "DRIVE_ORPHAN_RETENTION_MS",
+        "MEMORY_BYTE_BUDGET",
+        "MEMORY_DREAM_MODEL",
+        "MEMORY_MONITOR_INTERVAL_MS",
+        "MEMORY_COOLDOWN_MS",
         "PERSONAL_AGENT_LIMIT",
         "CONCURRENT_SESSION_LIMIT",
         "SESSION_DAILY_LIMIT",

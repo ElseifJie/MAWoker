@@ -185,6 +185,16 @@ export function createTask18BrowserBackend() {
       status: "active",
       lastErrorCode: null,
     },
+    {
+      id: createdPlatformAgentId,
+      name: "Operations Agent",
+      description: "Configured system Agent",
+      modelId: "model-a",
+      systemPrompt: "Operate safely.",
+      arkVersion: "1",
+      status: "active",
+      lastErrorCode: null,
+    },
   ];
   const userAgents: UserAgent[] = [
     {

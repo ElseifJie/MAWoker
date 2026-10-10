@@ -1,10 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { ArkGatewayError } from "../packages/ark-client/src/index.js";
-import {
-  AgentConflictError,
-  AgentReferencedError,
-  ResourceNotFoundError,
-} from "../packages/domain/src/index.js";
 import {
   AUTH_COOKIE_NAME,
   buildApp,
@@ -103,7 +97,7 @@ function adminService() {
 }
 
 describe("admin platform Agent API", () => {
-  it("serves create/list/update/delete with strict schemas and minimized output", async () => {
+  it("lists Agents and rejects create/update/delete with no mutations", async () => {
     const admin = adminService();
     const app = buildApp({ auth: auth(), admin });
     const cookie = { [AUTH_COOKIE_NAME]: "admin-token" };
@@ -140,14 +134,16 @@ describe("admin platform Agent API", () => {
       list.statusCode,
       update.statusCode,
       remove.statusCode,
-    ]).toEqual([201, 200, 200, 204]);
-    expect(create.json()).not.toHaveProperty("arkAgentId");
-    expect(create.json()).not.toHaveProperty("createdBy");
+    ]).toEqual([405, 200, 405, 405]);
+    expect(create.json().error.code).toBe("SYSTEM_AGENTS_READ_ONLY");
+    expect(create.headers.allow).toBe("GET");
+    expect(update.headers.allow).toBe("GET");
+    expect(remove.headers.allow).toBe("GET");
+    expect(list.json().agents[0]).not.toHaveProperty("arkAgentId");
     expect(list.json().agents[0]).not.toHaveProperty("updatedBy");
-    expect(admin.createPlatformAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ modelId: "model-a" }),
-      expect.objectContaining({ adminId }),
-    );
+    expect(admin.createPlatformAgent).not.toHaveBeenCalled();
+    expect(admin.updatePlatformAgent).not.toHaveBeenCalled();
+    expect(admin.deletePlatformAgent).not.toHaveBeenCalled();
 
     const invalid = await app.inject({
       method: "POST",
@@ -161,7 +157,7 @@ describe("admin platform Agent API", () => {
       },
     });
     expect(invalid.statusCode).toBe(400);
-    expect(admin.createPlatformAgent).toHaveBeenCalledTimes(1);
+    expect(admin.createPlatformAgent).not.toHaveBeenCalled();
 
     const mixedUpdate = await app.inject({
       method: "PATCH",
@@ -174,21 +170,12 @@ describe("admin platform Agent API", () => {
       },
     });
     expect(mixedUpdate.statusCode).toBe(400);
-    expect(admin.updatePlatformAgent).toHaveBeenCalledTimes(1);
+    expect(admin.updatePlatformAgent).not.toHaveBeenCalled();
     await app.close();
   });
 
-  it("maps version conflicts, Ark failures, missing resources, and references", async () => {
+  it("rejects status changes and deletion even for nonexistent Agents", async () => {
     const admin = adminService();
-    admin.updatePlatformAgent
-      .mockRejectedValueOnce(new AgentConflictError())
-      .mockRejectedValueOnce(new ArkGatewayError("unavailable"));
-    admin.deletePlatformAgent.mockRejectedValueOnce(
-      new AgentReferencedError(1, 2),
-    );
-    admin.updatePlatformAgent.mockRejectedValueOnce(
-      new ResourceNotFoundError(),
-    );
     const app = buildApp({ auth: auth(), admin });
     const request = (method: "PATCH" | "DELETE", payload?: object) =>
       app.inject({
@@ -203,16 +190,15 @@ describe("admin platform Agent API", () => {
     const referenced = await request("DELETE");
     const missing = await request("PATCH", { status: "disabled" });
 
-    expect(conflict.statusCode).toBe(409);
-    expect(conflict.json().error.code).toBe("ARK_CONFLICT");
-    expect(unavailable.statusCode).toBe(503);
-    expect(unavailable.json().error.code).toBe("ARK_UNAVAILABLE");
-    expect(referenced.statusCode).toBe(409);
-    expect(referenced.json().error).toMatchObject({
-      code: "VALIDATION_FAILED",
-      retryable: false,
-    });
-    expect(missing.statusCode).toBe(404);
+    for (const response of [conflict, unavailable, referenced, missing]) {
+      expect(response.statusCode).toBe(405);
+      expect(response.json().error).toMatchObject({
+        code: "SYSTEM_AGENTS_READ_ONLY",
+        retryable: false,
+      });
+    }
+    expect(admin.updatePlatformAgent).not.toHaveBeenCalled();
+    expect(admin.deletePlatformAgent).not.toHaveBeenCalled();
     await app.close();
   });
 

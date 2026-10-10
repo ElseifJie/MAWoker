@@ -1,11 +1,7 @@
 import { ArrowLeft } from "lucide-react";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import {
-  ApiClientError,
-  apiClient,
-  type AdminPlatformAgent,
-} from "../api.js";
+import { ApiClientError, apiClient, type AdminPlatformAgent } from "../api.js";
 import {
   Alert,
   Badge,
@@ -18,11 +14,7 @@ import {
   Textarea,
 } from "../ui/index.js";
 
-const UNCONFIGURABLE_CAPABILITIES = [
-  "Custom Tools",
-  "Multi Agents",
-  "MCPs",
-];
+const UNCONFIGURABLE_CAPABILITIES = ["Custom Tools", "Multi Agents", "MCPs"];
 
 interface AdminAgentEditorPageProps {
   models: string[];
@@ -87,7 +79,9 @@ export function AdminAgentEditorPage({
       .listAdminPlatformAgents()
       .then((result) => {
         if (!active) return;
-        const found = result.agents.find((candidate) => candidate.id === agentId);
+        const found = result.agents.find(
+          (candidate) => candidate.id === agentId,
+        );
         if (!found) {
           setLoadFailed(true);
         } else {
@@ -294,10 +288,7 @@ export function AdminAgentEditorPage({
               </div>
             </header>
             <div className="agent-form-section__body">
-              <Field
-                label="System"
-                hint={`${value.systemPrompt.length}/32000`}
-              >
+              <Field label="System" hint={`${value.systemPrompt.length}/32000`}>
                 <Textarea
                   value={value.systemPrompt}
                   maxLength={32_000}

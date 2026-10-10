@@ -60,7 +60,10 @@ export interface SkillAuditEntry {
 export interface SkillRepository {
   findOwned(userId: string, id: string): PromiseLike<SkillRecord | undefined>;
   findPlatform(id: string): PromiseLike<SkillRecord | undefined>;
-  listForOwner(userId: string, search: string | null): PromiseLike<SkillRecord[]>;
+  listForOwner(
+    userId: string,
+    search: string | null,
+  ): PromiseLike<SkillRecord[]>;
   listPlatform(search: string | null): PromiseLike<SkillRecord[]>;
   /**
    * The bindings a user's exclusive default Agent must carry: every active
@@ -85,7 +88,12 @@ export interface SkillRepository {
   createProvisioning(
     record: Pick<
       SkillRecord,
-      "id" | "ownerUserId" | "displayTitle" | "description" | "fileName" | "fileSize"
+      | "id"
+      | "ownerUserId"
+      | "displayTitle"
+      | "description"
+      | "fileName"
+      | "fileSize"
     >,
   ): PromiseLike<SkillRecord>;
   markProvisioned(
@@ -156,8 +164,7 @@ export class SkillNotSelectableError extends Error {
 }
 
 export type SyncOutcome =
-  | { synced: true }
-  | { synced: false; errorCode: string };
+  { synced: true } | { synced: false; errorCode: string };
 
 /**
  * The production {@link DefaultAgentSync}: the user's exclusive default Agent
@@ -177,7 +184,11 @@ export class UserDefaultAgentSynchronizer implements DefaultAgentSync {
     bindings: AgentSkillBinding[],
     context: { userId: string; requestId: string },
   ): Promise<void> {
-    const agent = await this.agents.ensureAutoDefault(userId, bindings, context);
+    const agent = await this.agents.ensureAutoDefault(
+      userId,
+      bindings,
+      context,
+    );
     if (!sameAgentSkillBindings(agent.skills, bindings)) {
       await this.agents.updateAgentSkills(agent.id, bindings, context);
     }
@@ -233,10 +244,7 @@ export class SkillService {
     },
   ) {}
 
-  list(
-    userId: string,
-    query: SkillListQuery,
-  ): PromiseLike<SkillRecord[]> {
+  list(userId: string, query: SkillListQuery): PromiseLike<SkillRecord[]> {
     const search = query.search?.trim() ?? "";
     return query.scope === "preset"
       ? this.dependencies.repository.listPlatform(search || null)
@@ -248,8 +256,8 @@ export class SkillService {
     context: SkillMutationContext,
   ): Promise<{ skill: SkillRecord; defaultAgentSync: SyncOutcome }> {
     assertPackage(input.file);
-    const displayTitle = (input.displayTitle ?? "").trim() ||
-      defaultTitle(input.file.name);
+    const displayTitle =
+      (input.displayTitle ?? "").trim() || defaultTitle(input.file.name);
     const id = this.dependencies.createId();
     await this.dependencies.repository.createProvisioning({
       id,
@@ -337,8 +345,7 @@ export class SkillService {
     context: SkillMutationContext,
   ): Promise<{ skill: SkillRecord; defaultAgentSync: SyncOutcome }> {
     const current = await this.requireEditable(id, context);
-    const hasFile =
-      input.file !== undefined && input.file.bytes.byteLength > 0;
+    const hasFile = input.file !== undefined && input.file.bytes.byteLength > 0;
     if (hasFile && input.file) assertPackage(input.file);
     const displayTitle = input.displayTitle?.trim() || undefined;
     const description = input.description?.trim();
@@ -347,7 +354,10 @@ export class SkillService {
     if (hasFile && input.file) {
       try {
         const upstream = await this.dependencies.ark.createSkill(
-          this.arkUpload({ file: input.file }, displayTitle ?? current.displayTitle),
+          this.arkUpload(
+            { file: input.file },
+            displayTitle ?? current.displayTitle,
+          ),
           { correlationId: context.requestId },
         );
         skill = await this.dependencies.repository.replaceUpstream(
@@ -458,7 +468,9 @@ export class SkillService {
       return {
         synced: false,
         errorCode:
-          error instanceof Error && "code" in error && typeof error.code === "string"
+          error instanceof Error &&
+          "code" in error &&
+          typeof error.code === "string"
             ? error.code
             : arkErrorCode(error),
       };

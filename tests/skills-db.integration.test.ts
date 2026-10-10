@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createRepositories } from "../packages/db/src/index.js";
-import { UserDefaultAgentSynchronizer, UserAgentService } from "../packages/domain/src/index.js";
+import {
+  UserDefaultAgentSynchronizer,
+  UserAgentService,
+} from "../packages/domain/src/index.js";
 import { createTestDatabase, id } from "./support/test-database.js";
 
 async function seedUsers(
@@ -42,7 +45,11 @@ async function seedPlatformAgent(
 async function seedSkill(
   client: Awaited<ReturnType<typeof createTestDatabase>>["client"],
   ownerUserId: string | null,
-  overrides: Partial<{ displayTitle: string; arkSkillId: string; status: string }> = {},
+  overrides: Partial<{
+    displayTitle: string;
+    arkSkillId: string;
+    status: string;
+  }> = {},
 ) {
   const skillId = id();
   await client.query(
@@ -124,7 +131,9 @@ describe("skills database integration", () => {
 
     // The default Agent is available and flagged in the workspace listing.
     const available = await repositories.userAgents.listAvailable(userId);
-    const personalEntry = available.find((agent) => agent.id === autoDefault?.id);
+    const personalEntry = available.find(
+      (agent) => agent.id === autoDefault?.id,
+    );
     expect(personalEntry).toMatchObject({
       kind: "personal",
       editable: true,
@@ -197,7 +206,9 @@ describe("skills database integration", () => {
 
     // listAgentsBoundToSkill spans owners and feeds the unbind flow. The
     // Agent still carries the pre-dedup binding until the next sync runs.
-    const bound = await repositories.userAgents.listAgentsBoundToSkill(firstSkill.id);
+    const bound = await repositories.userAgents.listAgentsBoundToSkill(
+      firstSkill.id,
+    );
     expect(bound.map((agent) => agent.id)).toEqual([autoDefault?.id]);
     await database.close();
   });
@@ -233,14 +244,14 @@ describe("skills database integration", () => {
     );
 
     const repositories = createRepositories(database.db);
-    const selectable = await repositories.skills.findSelectableBindings(userId, [
-      owned,
-      preset,
-      foreign,
+    const selectable = await repositories.skills.findSelectableBindings(
+      userId,
+      [owned, preset, foreign],
+    );
+    expect(selectable.map((binding) => binding.arkSkillId).sort()).toEqual([
+      "ark-owned",
+      "ark-preset",
     ]);
-    expect(
-      selectable.map((binding) => binding.arkSkillId).sort(),
-    ).toEqual(["ark-owned", "ark-preset"]);
 
     expect(
       (await repositories.skills.listForOwner(userId, null))

@@ -72,26 +72,20 @@ export interface UserAgentRepository {
   findDefaultActive(userId: string): PromiseLike<string | undefined>;
   findAutoDefault(userId: string): PromiseLike<PersonalAgentRecord | undefined>;
   /**
-   * The configuration the user's exclusive default Agent is modelled on: the
-   * assigned platform default Agent when there is one, otherwise the oldest
-   * active platform Agent, otherwise undefined (the service falls back to the
-   * model allowlist defaults).
+   * The name, description, and model for the user's exclusive default Agent:
+   * the assigned platform default when there is one, otherwise the oldest
+   * active platform Agent. The service supplies its own prompt.
    */
   findPlatformTemplate(
     userId: string,
   ): PromiseLike<
-    Pick<
-      AgentConfiguration,
-      "name" | "description" | "modelId" | "systemPrompt"
-    > | undefined
+    Pick<AgentConfiguration, "name" | "description" | "modelId"> | undefined
   >;
   findAvailableById(
     userId: string,
     id: string,
   ): PromiseLike<AvailableAgentRecord | undefined>;
-  listAgentsBoundToSkill(
-    skillId: string,
-  ): PromiseLike<PersonalAgentRecord[]>;
+  listAgentsBoundToSkill(skillId: string): PromiseLike<PersonalAgentRecord[]>;
   replaceSkillBindings(
     agentId: string,
     userId: string,
@@ -271,9 +265,8 @@ export class UserAgentService {
     const agents = (
       await this.dependencies.repository.listAvailable(userId)
     ).map((agent) => ({ ...agent, version: agent.arkVersion }));
-    const autoDefault = await this.dependencies.repository.findAutoDefault(
-      userId,
-    );
+    const autoDefault =
+      await this.dependencies.repository.findAutoDefault(userId);
     if (autoDefault && autoDefault.status === "active") {
       return {
         agents,
@@ -284,9 +277,8 @@ export class UserAgentService {
         blocker: null,
       };
     }
-    const recent = await this.dependencies.repository.findRecentAvailable(
-      userId,
-    );
+    const recent =
+      await this.dependencies.repository.findRecentAvailable(userId);
     if (recent) {
       return {
         agents,
@@ -314,9 +306,8 @@ export class UserAgentService {
   }
 
   async resolveSelection(userId: string): Promise<AvailableAgentRecord> {
-    const autoDefault = await this.dependencies.repository.findAutoDefault(
-      userId,
-    );
+    const autoDefault =
+      await this.dependencies.repository.findAutoDefault(userId);
     const primary =
       autoDefault && autoDefault.status === "active"
         ? autoDefault.id
@@ -366,13 +357,10 @@ export class UserAgentService {
     let upstream;
     try {
       const operationId = createCorrelationId(id);
-      upstream = await this.dependencies.ark.createAgent(
-        this.arkInput(input),
-        {
-          correlationId: operationId,
-          idempotencyKey: operationId,
-        },
-      );
+      upstream = await this.dependencies.ark.createAgent(this.arkInput(input), {
+        correlationId: operationId,
+        idempotencyKey: operationId,
+      });
     } catch (error) {
       const errorCode = arkErrorCode(error);
       if (isArkCategory(error, "unknown_write_outcome")) {
@@ -421,8 +409,8 @@ export class UserAgentService {
 
   /**
    * The user's exclusive default Agent: created once from the platform
-   * default Agent's configuration with every owned Skill bound, then kept in
-   * sync by the Skill service whenever their Skill library changes.
+   * default Agent's identity/model and the built-in personal prompt, with every
+   * owned Skill bound, then kept in sync as their Skill library changes.
    */
   async ensureAutoDefault(
     userId: string,
@@ -440,13 +428,13 @@ export class UserAgentService {
         name: AUTO_DEFAULT_AGENT_NAME,
         description: AUTO_DEFAULT_AGENT_DESCRIPTION,
         modelId: this.allowlistDefaultModel(),
-        systemPrompt: AUTO_DEFAULT_AGENT_PROMPT,
-      } satisfies AgentConfiguration);
+      } satisfies Pick<AgentConfiguration, "name" | "description" | "modelId">);
     try {
       return await this.create(
         {
           ...template,
           name: AUTO_DEFAULT_AGENT_NAME,
+          systemPrompt: AUTO_DEFAULT_AGENT_PROMPT,
           isAutoDefault: true,
           skills: bindings,
         },

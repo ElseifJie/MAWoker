@@ -41,6 +41,9 @@ const statusLabels: Record<SessionStatus, string> = {
   idle: "Idle",
   running: "Running",
   rescheduled: "Rescheduled",
+  initializing: "Initializing",
+  upgrading: "Upgrading",
+  failed: "Failed",
   terminated: "Terminated",
 };
 

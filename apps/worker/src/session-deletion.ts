@@ -1,4 +1,4 @@
-import type { ArkGateway } from "@pwa/ark-client";
+import type { ArkGateway, SessionStatus } from "@pwa/ark-client";
 
 type CompletedSteps = {
   interruptRequested?: true;
@@ -63,7 +63,7 @@ interface SessionDeletionRepository {
         id: string;
         ownerUserId: string;
         arkSessionId: string;
-        status: "idle" | "running" | "rescheduled" | "terminated";
+        status: SessionStatus;
       }
     | undefined
   >;

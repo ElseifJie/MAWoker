@@ -11,6 +11,12 @@ import type {
   ArkFile,
   ArkFileInput,
   ArkGateway,
+  ArkDream,
+  ArkDreamInput,
+  ArkMemory,
+  ArkMemoryInput,
+  ArkMemoryStore,
+  ArkMemoryStoreInput,
   ArkRequestOptions,
   ArkResource,
   ArkSession,
@@ -71,13 +77,28 @@ function toArkAgent(response: ArkAgentResponse, written?: ArkAgentInput) {
   };
 }
 
+const sessionStatusSchema = z
+  .enum([
+    "idle",
+    "running",
+    "rescheduled",
+    "rescheduling",
+    "terminated",
+    "initializing",
+    "upgrading",
+    "failed",
+  ])
+  .transform((status) =>
+    status === "rescheduling" ? ("rescheduled" as const) : status,
+  );
+
 const normalizedSessionSchema = z
   .object({
     id: z.string().min(1),
     agentId: z.string().min(1),
     agentVersion: z.number().int().positive(),
     environmentId: z.string().min(1),
-    status: z.enum(["idle", "running", "rescheduled", "terminated"]),
+    status: sessionStatusSchema,
   })
   .strict();
 
@@ -93,7 +114,7 @@ const sessionSchema = z.union([
         })
         .passthrough(),
       environment_id: z.string().min(1),
-      status: z.enum(["idle", "running", "rescheduled", "terminated"]),
+      status: sessionStatusSchema,
     })
     .passthrough()
     .transform(({ id, agent, environment_id, status }) => ({
@@ -188,6 +209,115 @@ const resourceSchema = z
     mountPath: z.string().min(1),
   })
   .strict();
+
+const sessionResourceSchema = z.union([
+  resourceSchema,
+  z
+    .object({
+      id: z.string().min(1),
+      type: z.literal("file"),
+      file_id: z.string().min(1),
+      mount_path: z.string().min(1),
+    })
+    .passthrough()
+    .transform((resource) => ({
+      id: resource.id,
+      fileId: resource.file_id,
+      mountPath: resource.mount_path,
+    })),
+  z
+    .object({
+      type: z.literal("memory_store"),
+      memory_store_id: z.string().min(1),
+      access: z.enum(["read_write", "read_only"]),
+    })
+    .passthrough()
+    .transform(() => null),
+]);
+
+const memoryStoreSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string(),
+    memory_count: z.number().int().nonnegative(),
+    storage_bytes: z.number().int().nonnegative(),
+  })
+  .passthrough()
+  .transform((store) => ({
+    id: store.id,
+    name: store.name,
+    memoryCount: store.memory_count,
+    storageBytes: store.storage_bytes,
+  }));
+
+const memoryMetadataSchema = z
+  .object({
+    id: z.string().min(1),
+    path: z.string().min(1),
+    content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    memory_version_id: z.string().min(1),
+    content_size_bytes: z.number().int().nonnegative(),
+  })
+  .passthrough();
+
+function toArkMemory(
+  memory: z.infer<typeof memoryMetadataSchema>,
+  content: string,
+): ArkMemory {
+  return {
+    id: memory.id,
+    path: memory.path,
+    content,
+    contentSha256: memory.content_sha256,
+    memoryVersionId: memory.memory_version_id,
+    sizeBytes: memory.content_size_bytes,
+  };
+}
+
+const memorySchema = memoryMetadataSchema
+  .extend({
+    content: z.string(),
+  })
+  .transform((memory) => toArkMemory(memory, memory.content));
+
+// jsonRequest unwraps data-only envelopes, including the final list page.
+const memoryPageSchema = z.union([
+  z.array(memoryMetadataSchema).transform((data) => ({ data, nextPage: null })),
+  z
+    .object({
+      data: z.array(memoryMetadataSchema),
+      next_page: z.string().nullish(),
+    })
+    .passthrough()
+    .transform(({ data, next_page }) => ({
+      data,
+      nextPage: next_page || null,
+    })),
+]);
+
+const dreamSchema = z
+  .object({
+    id: z.string().min(1),
+    status: z.enum(["pending", "running", "completed", "failed", "canceled"]),
+    outputs: z
+      .array(
+        z
+          .object({
+            type: z.literal("memory_store"),
+            memory_store_id: z.string().min(1),
+          })
+          .passthrough(),
+      )
+      .nullish(),
+    usage: z.record(z.string(), z.unknown()).nullish(),
+  })
+  .passthrough()
+  .transform((dream) => ({
+    id: dream.id,
+    status: dream.status,
+    outputMemoryStoreId: dream.outputs?.[0]?.memory_store_id ?? null,
+    usage: dream.usage ?? null,
+  }));
 
 /**
  * Skill responses tolerate Ark's evolving shape: `latest_version` started as a
@@ -395,6 +525,203 @@ export class HttpArkGateway implements ArkGateway {
     this.now = options.now ?? (() => new Date());
   }
 
+  createMemoryStore(
+    input: ArkMemoryStoreInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemoryStore> {
+    return this.jsonRequest({
+      method: "POST",
+      path: "/api/v3/memory_stores",
+      safe: false,
+      body: JSON.stringify(input),
+      contentType: "application/json",
+      schema: memoryStoreSchema,
+      options,
+    });
+  }
+
+  getMemoryStore(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemoryStore> {
+    return this.jsonRequest({
+      method: "GET",
+      path: this.memoryStorePath(memoryStoreId),
+      safe: true,
+      schema: memoryStoreSchema,
+      options,
+    });
+  }
+
+  async deleteMemoryStore(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<void> {
+    await this.request(
+      {
+        method: "DELETE",
+        path: this.memoryStorePath(memoryStoreId),
+        safe: false,
+        options,
+      },
+      async () => undefined,
+    );
+  }
+
+  async listMemories(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory[]> {
+    const ids: string[] = [];
+    const seenPages = new Set<string>();
+    let page: string | null = null;
+    do {
+      const query = new URLSearchParams({ limit: "100", order_by: "path" });
+      if (page) query.set("page", page);
+      const result: z.infer<typeof memoryPageSchema> = await this.jsonRequest({
+        method: "GET",
+        path: `${this.memoryStorePath(memoryStoreId)}/memories?${query}`,
+        safe: true,
+        schema: memoryPageSchema,
+        options,
+      });
+      ids.push(...result.data.map((memory) => memory.id));
+      page = result.nextPage;
+      if (page && seenPages.has(page))
+        throw new ArkGatewayError("invalid_response");
+      if (page) seenPages.add(page);
+    } while (page);
+    const memories: ArkMemory[] = [];
+    for (const id of ids)
+      memories.push(await this.getMemory(memoryStoreId, id, options));
+    return memories;
+  }
+
+  getMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    return this.jsonRequest({
+      method: "GET",
+      path: this.memoryPath(memoryStoreId, memoryId),
+      safe: true,
+      schema: memorySchema,
+      options,
+    });
+  }
+
+  createMemory(
+    memoryStoreId: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    return this.writeMemory(
+      `${this.memoryStorePath(memoryStoreId)}/memories`,
+      input,
+      options,
+    );
+  }
+
+  updateMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    return this.writeMemory(
+      this.memoryPath(memoryStoreId, memoryId),
+      input,
+      options,
+    );
+  }
+
+  async deleteMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    options?: ArkRequestOptions,
+  ): Promise<void> {
+    await this.request(
+      {
+        method: "DELETE",
+        path: this.memoryPath(memoryStoreId, memoryId),
+        safe: false,
+        options,
+      },
+      async () => undefined,
+    );
+  }
+
+  createDream(
+    input: ArkDreamInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkDream> {
+    return this.jsonRequest({
+      method: "POST",
+      path: "/api/v3/dreams",
+      safe: false,
+      body: JSON.stringify({
+        inputs: [
+          { type: "memory_store", memory_store_id: input.memoryStoreId },
+          { type: "sessions", session_ids: input.sessionIds },
+        ],
+        model: input.modelId,
+        instructions: input.instructions,
+        output_memory_store_name: "dream-curated-memory",
+      }),
+      contentType: "application/json",
+      schema: dreamSchema,
+      options,
+    });
+  }
+
+  getDream(dreamId: string, options?: ArkRequestOptions): Promise<ArkDream> {
+    return this.jsonRequest({
+      method: "GET",
+      path: `/api/v3/dreams/${encodeURIComponent(dreamId)}`,
+      safe: true,
+      schema: dreamSchema,
+      options,
+    });
+  }
+
+  cancelDream(dreamId: string, options?: ArkRequestOptions): Promise<ArkDream> {
+    return this.jsonRequest({
+      method: "POST",
+      path: `/api/v3/dreams/${encodeURIComponent(dreamId)}/cancel`,
+      safe: false,
+      body: "{}",
+      contentType: "application/json",
+      schema: dreamSchema,
+      options,
+    });
+  }
+
+  private memoryStorePath(memoryStoreId: string): string {
+    return `/api/v3/memory_stores/${encodeURIComponent(memoryStoreId)}`;
+  }
+
+  private memoryPath(memoryStoreId: string, memoryId: string): string {
+    return `${this.memoryStorePath(memoryStoreId)}/memories/${encodeURIComponent(memoryId)}`;
+  }
+
+  private writeMemory(
+    path: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory> {
+    // Write responses contain metadata only; echo the content accepted by this write.
+    return this.jsonRequest({
+      method: "POST",
+      path,
+      safe: false,
+      body: JSON.stringify({ path: input.path, content: input.content }),
+      contentType: "application/json",
+      schema: memoryMetadataSchema,
+      options,
+    }).then((memory) => toArkMemory(memory, input.content));
+  }
+
   createAgent(
     input: ArkAgentInput,
     options?: ArkRequestOptions,
@@ -465,11 +792,19 @@ export class HttpArkGateway implements ArkGateway {
       body: JSON.stringify({
         agent: input.agentId,
         environment_id: input.environmentId,
-        resources: input.resources.map((resource) => ({
-          type: "file",
-          file_id: resource.fileId,
-          mount_path: resource.mountPath,
-        })),
+        resources: input.resources.map((resource) =>
+          "type" in resource
+            ? {
+                type: "memory_store",
+                memory_store_id: resource.memoryStoreId,
+                access: resource.access,
+              }
+            : {
+                type: "file",
+                file_id: resource.fileId,
+                mount_path: resource.mountPath,
+              },
+        ),
       }),
       contentType: "application/json",
       schema: sessionSchema,
@@ -730,7 +1065,13 @@ export class HttpArkGateway implements ArkGateway {
       method: "GET",
       path: `/api/v3/sessions/${encodeURIComponent(sessionId)}/resources`,
       safe: true,
-      schema: z.array(resourceSchema),
+      schema: z
+        .array(sessionResourceSchema)
+        .transform((resources) =>
+          resources.filter(
+            (resource): resource is ArkResource => resource !== null,
+          ),
+        ),
       options,
     });
   }

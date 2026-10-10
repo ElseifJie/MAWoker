@@ -1,4 +1,10 @@
-import type { ArkEvent, SessionStatus } from "@pwa/contracts";
+import type {
+  ArkEvent,
+  SessionStatus as ContractSessionStatus,
+} from "@pwa/contracts";
+
+export type SessionStatus =
+  ContractSessionStatus | "initializing" | "upgrading" | "failed";
 
 export interface ArkRequestOptions {
   correlationId?: string;
@@ -43,13 +49,61 @@ export interface ArkAgentUpdate extends ArkAgentInput {
   currentVersion: number;
 }
 
-export interface ArkResourceInput {
+export interface ArkFileResourceInput {
   fileId: string;
   mountPath: string;
 }
 
-export interface ArkResource extends ArkResourceInput {
+export interface ArkMemoryStoreResourceInput {
+  type: "memory_store";
+  memoryStoreId: string;
+  access: "read_write" | "read_only";
+}
+
+export type ArkResourceInput =
+  ArkFileResourceInput | ArkMemoryStoreResourceInput;
+
+/** File inventory stays file-only for existing consumers. */
+export interface ArkResource extends ArkFileResourceInput {
   id: string;
+}
+
+export interface ArkMemoryStoreInput {
+  name: string;
+  description?: string;
+}
+
+export interface ArkMemoryStore {
+  id: string;
+  name: string;
+  memoryCount: number;
+  storageBytes: number;
+}
+
+export interface ArkMemoryInput {
+  path: string;
+  content: string;
+}
+
+export interface ArkMemory extends ArkMemoryInput {
+  id: string;
+  contentSha256: string;
+  memoryVersionId: string;
+  sizeBytes: number;
+}
+
+export interface ArkDreamInput {
+  memoryStoreId: string;
+  sessionIds: string[];
+  modelId: string;
+  instructions: string;
+}
+
+export interface ArkDream {
+  id: string;
+  status: "pending" | "running" | "completed" | "failed" | "canceled";
+  outputMemoryStoreId: string | null;
+  usage: Record<string, unknown> | null;
 }
 
 export interface ArkSession {
@@ -130,6 +184,51 @@ export interface ArkArtifact {
 }
 
 export interface ArkGateway {
+  createMemoryStore(
+    input: ArkMemoryStoreInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemoryStore>;
+  getMemoryStore(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemoryStore>;
+  deleteMemoryStore(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<void>;
+  /** Complete inventory: metadata pages followed by detail reads for every entry. */
+  listMemories(
+    memoryStoreId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory[]>;
+  getMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory>;
+  createMemory(
+    memoryStoreId: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory>;
+  updateMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    input: ArkMemoryInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkMemory>;
+  deleteMemory(
+    memoryStoreId: string,
+    memoryId: string,
+    options?: ArkRequestOptions,
+  ): Promise<void>;
+  createDream(
+    input: ArkDreamInput,
+    options?: ArkRequestOptions,
+  ): Promise<ArkDream>;
+  getDream(dreamId: string, options?: ArkRequestOptions): Promise<ArkDream>;
+  cancelDream(dreamId: string, options?: ArkRequestOptions): Promise<ArkDream>;
+
   createAgent(
     input: ArkAgentInput,
     options?: ArkRequestOptions,
@@ -187,6 +286,17 @@ export interface ArkGateway {
 }
 
 export type ArkOperation =
+  | "createMemoryStore"
+  | "getMemoryStore"
+  | "deleteMemoryStore"
+  | "listMemories"
+  | "getMemory"
+  | "createMemory"
+  | "updateMemory"
+  | "deleteMemory"
+  | "createDream"
+  | "getDream"
+  | "cancelDream"
   | "createAgent"
   | "getAgent"
   | "updateAgent"
@@ -211,4 +321,4 @@ export interface ArkCall {
   idempotencyKey?: string;
 }
 
-export type { ArkEvent, SessionStatus };
+export type { ArkEvent };

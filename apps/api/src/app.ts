@@ -34,6 +34,8 @@ import {
   type SkillRecord,
   type SkillScope,
   type QuotaUsageSummary,
+  type MemoryService,
+  type MemoryState,
   type TenantAuthorizationService,
   type TenantResource,
   type TenantResourceKind,
@@ -412,7 +414,12 @@ type SyncOutcome = { synced: true } | { synced: false; errorCode: string };
 
 export interface SessionApiService {
   create(
-    input: { agentId: string; title?: string; uploadIds?: string[] },
+    input: {
+      agentId: string;
+      title?: string;
+      uploadIds?: string[];
+      temporary?: boolean;
+    },
     context: { userId: string; requestId: string },
   ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
   list(userId: string, archived: boolean): PromiseLike<SessionRecord[]>;
@@ -523,6 +530,17 @@ interface BuildAppOptions {
   adminUserDetail?: AdminUserDetailApiService;
   userAgents?: UserAgentApiService;
   skills?: SkillApiService;
+  memory?: Pick<
+    MemoryService,
+    | "list"
+    | "status"
+    | "write"
+    | "remove"
+    | "protect"
+    | "dream"
+    | "compress"
+    | "settings"
+  >;
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
   artifacts?: ArtifactApiService;
@@ -788,6 +806,7 @@ const createSessionBodySchema = {
   required: ["agentId"],
   properties: {
     agentId: { type: "string", format: "uuid" },
+    temporary: { type: "boolean" },
     title: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
     uploadIds: {
       type: "array",
@@ -1035,6 +1054,45 @@ function applicationError(
 ) {
   return { error: { code, message, requestId, retryable } };
 }
+
+function publicMemoryState(state: MemoryState) {
+  return {
+    status: state.status,
+    protectedPaths: state.protectedPaths,
+    autoDream: state.autoDream,
+    run: state.run
+      ? {
+          kind: state.run.kind,
+          stage: state.run.stage,
+          error: state.run.error
+            ? "Memory operation failed. Reload or contact support."
+            : null,
+          before: state.run.before,
+          after: state.run.after,
+        }
+      : null,
+  };
+}
+
+const memoryErrors = {
+  MEMORY_BUSY: {
+    status: 409,
+    message: "Memory is busy. Wait for the current operation.",
+  },
+  MEMORY_CONFLICT: {
+    status: 409,
+    message: "Memory content changed. Reload before editing.",
+  },
+  MEMORY_INVALID: {
+    status: 400,
+    message: "Invalid memory path, content, or operation.",
+  },
+  MEMORY_CAPACITY: { status: 413, message: "Memory capacity exceeded." },
+  MEMORY_REPAIR_REQUIRED: {
+    status: 503,
+    message: "Memory requires repair. Contact support.",
+  },
+} as const;
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2013,6 +2071,28 @@ export function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.setErrorHandler((error, request, reply) => {
+    if (
+      hasErrorName(error, "MemoryError") &&
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error
+    ) {
+      const code = error.code;
+      if (typeof code === "string" && Object.hasOwn(memoryErrors, code)) {
+        const memoryCode = code as keyof typeof memoryErrors;
+        const mapped = memoryErrors[memoryCode];
+        return reply
+          .code(mapped.status)
+          .send(
+            applicationError(
+              request.id,
+              memoryCode,
+              mapped.message,
+              memoryCode === "MEMORY_BUSY",
+            ),
+          );
+      }
+    }
     const validation =
       typeof error === "object" &&
       error !== null &&
@@ -2249,10 +2329,166 @@ export function buildApp(options: BuildAppOptions = {}) {
 
     app.get("/api/v1/capabilities", async () => ({
       ...featureCapabilities,
+      memoryStores: { available: !!options.memory },
       personalAgentModels: [
         ...(options.capabilities?.personalAgentModels ?? []),
       ],
     }));
+
+    if (options.memory) {
+      const memory = options.memory;
+      const pathProperty = {
+        type: "string",
+        minLength: 1,
+        maxLength: 512,
+      } as const;
+      const pathBody = {
+        type: "object",
+        additionalProperties: false,
+        required: ["path"],
+        properties: { path: pathProperty },
+      } as const;
+      app.addHook("preValidation", async (request) => {
+        const route = request.routeOptions.url ?? "";
+        if (!route.startsWith("/api/v1/memory/") || request.body === undefined)
+          return;
+        const body = request.body as Record<string, unknown>;
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          Array.isArray(body) ||
+          (Object.hasOwn(body, "path") && typeof body.path !== "string") ||
+          (Object.hasOwn(body, "content") &&
+            typeof body.content !== "string") ||
+          (Object.hasOwn(body, "expectedHash") &&
+            typeof body.expectedHash !== "string") ||
+          (Object.hasOwn(body, "protected") &&
+            typeof body.protected !== "boolean") ||
+          (Object.hasOwn(body, "autoDream") &&
+            typeof body.autoDream !== "boolean")
+        ) {
+          throw Object.assign(new Error("Invalid memory payload type"), {
+            name: "MemoryError",
+            code: "MEMORY_INVALID",
+          });
+        }
+      });
+      // Check empty action bodies in the handler: requests with no body are valid.
+      const emptyActionBody = (body: unknown) => {
+        if (body === undefined) return;
+        if (
+          typeof body !== "object" ||
+          body === null ||
+          Array.isArray(body) ||
+          Object.keys(body).length
+        ) {
+          throw Object.assign(new Error("Invalid memory action payload"), {
+            name: "MemoryError",
+            code: "MEMORY_INVALID",
+          });
+        }
+      };
+      app.get("/api/v1/memory", async (request) => {
+        const result = await memory.list(request.auth!.userId);
+        return {
+          entries: result.entries.map(({ path, content }) => ({
+            path,
+            content,
+          })),
+          capacity: result.capacity,
+          state: publicMemoryState(result.state),
+        };
+      });
+      app.get("/api/v1/memory/status", async (request) =>
+        publicMemoryState(await memory.status(request.auth!.userId)),
+      );
+      app.post<{
+        Body: { path: string; content: string; expectedHash?: string };
+      }>(
+        "/api/v1/memory/entry",
+        {
+          schema: {
+            body: {
+              ...pathBody,
+              required: ["path", "content"],
+              properties: {
+                path: pathProperty,
+                content: { type: "string" },
+                expectedHash: { type: "string" },
+              },
+            },
+          },
+        },
+        async (request, reply) =>
+          reply
+            .code(202)
+            .send(
+              publicMemoryState(
+                await memory.write(request.auth!.userId, request.body),
+              ),
+            ),
+      );
+      app.delete<{ Body: { path: string } }>(
+        "/api/v1/memory/entry",
+        { schema: { body: pathBody } },
+        async (request, reply) =>
+          reply
+            .code(202)
+            .send(
+              publicMemoryState(
+                await memory.remove(request.auth!.userId, request.body.path),
+              ),
+            ),
+      );
+      app.post<{ Body: { path: string; protected: boolean } }>(
+        "/api/v1/memory/protect",
+        {
+          schema: {
+            body: {
+              ...pathBody,
+              required: ["path", "protected"],
+              properties: {
+                path: pathProperty,
+                protected: { type: "boolean" },
+              },
+            },
+          },
+        },
+        async (request) => {
+          await memory.protect(
+            request.auth!.userId,
+            request.body.path,
+            request.body.protected,
+          );
+          return publicMemoryState(await memory.status(request.auth!.userId));
+        },
+      );
+      for (const kind of ["dream", "compress"] as const) {
+        app.post(`/api/v1/memory/${kind}`, async (request, reply) => {
+          emptyActionBody(request.body);
+          return reply
+            .code(202)
+            .send(publicMemoryState(await memory[kind](request.auth!.userId)));
+        });
+      }
+      app.patch<{ Body: { autoDream: boolean } }>(
+        "/api/v1/memory/settings",
+        {
+          schema: {
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["autoDream"],
+              properties: { autoDream: { type: "boolean" } },
+            },
+          },
+        },
+        async (request) => {
+          await memory.settings(request.auth!.userId, request.body.autoDream);
+          return publicMemoryState(await memory.status(request.auth!.userId));
+        },
+      );
+    }
 
     if (options.quotaUsage) {
       app.get("/api/v1/usage", async (request, reply) => {
@@ -2461,7 +2697,12 @@ export function buildApp(options: BuildAppOptions = {}) {
       });
 
       app.post<{
-        Body: { agentId: string; title?: string; uploadIds?: string[] };
+        Body: {
+          agentId: string;
+          title?: string;
+          uploadIds?: string[];
+          temporary?: boolean;
+        };
       }>(
         "/api/v1/sessions",
         { schema: { body: createSessionBodySchema } },
@@ -2470,6 +2711,9 @@ export function buildApp(options: BuildAppOptions = {}) {
             const created = await sessions.create(
               {
                 agentId: request.body.agentId,
+                ...(request.body.temporary !== undefined
+                  ? { temporary: request.body.temporary }
+                  : {}),
                 ...(request.body.title !== undefined
                   ? { title: request.body.title.trim() }
                   : {}),
@@ -2885,7 +3129,9 @@ export function buildApp(options: BuildAppOptions = {}) {
             } catch {
               record = undefined;
             }
-            return reply.code(201).send(publicUserAgent(record ?? created, true));
+            return reply
+              .code(201)
+              .send(publicUserAgent(record ?? created, true));
           } catch (error) {
             return sendAdminError(error, request, reply);
           }
@@ -2971,21 +3217,27 @@ export function buildApp(options: BuildAppOptions = {}) {
       });
 
       /** Per-request limits: a Skill package may exceed the 20 MB uploads cap. */
-      const skillUploadLimits = { files: 1, fields: 5, fileSize: 50 * 1024 * 1024 };
+      const skillUploadLimits = {
+        files: 1,
+        fields: 5,
+        fileSize: 50 * 1024 * 1024,
+      };
 
       const readSkillUpload = async (
         request: FastifyRequest,
         reply: FastifyReply,
       ) => {
         let file:
-          | { name: string; contentType: string; bytes: Uint8Array }
-          | undefined;
+          { name: string; contentType: string; bytes: Uint8Array } | undefined;
         const fields: Record<string, string> = {};
         let invalid = false;
         let truncated = false;
         for await (const part of request.parts({ limits: skillUploadLimits })) {
           if (part.type !== "file") {
-            if (part.fieldname === "displayTitle" || part.fieldname === "description") {
+            if (
+              part.fieldname === "displayTitle" ||
+              part.fieldname === "description"
+            ) {
               if (typeof part.value === "string" && !fields[part.fieldname]) {
                 fields[part.fieldname] = part.value;
               }
@@ -3114,7 +3366,10 @@ export function buildApp(options: BuildAppOptions = {}) {
         { schema: { params: uuidParamsSchema } },
         async (request, reply) => {
           try {
-            const result = await skills.delete(request.params.id, context(request));
+            const result = await skills.delete(
+              request.params.id,
+              context(request),
+            );
             return reply.code(200).send({ defaultAgentSync: result });
           } catch (error) {
             return sendAdminError(error, request, reply);
@@ -3150,21 +3405,18 @@ export function buildApp(options: BuildAppOptions = {}) {
       }>(
         "/api/v1/admin/platform-agents",
         { schema: { body: createPlatformAgentBodySchema } },
-        async (request, reply) => {
-          try {
-            const created = await admin.createPlatformAgent(
-              {
-                name: request.body.name.trim(),
-                description: request.body.description?.trim() ?? "",
-                modelId: request.body.modelId.trim(),
-                systemPrompt: request.body.systemPrompt,
+        async (_request, reply) => {
+          return reply
+            .code(405)
+            .header("Allow", "GET")
+            .send({
+              error: {
+                code: "SYSTEM_AGENTS_READ_ONLY",
+                message:
+                  "System Agents are configured through SYSTEM_AGENT_IDS in .env.",
+                retryable: false,
               },
-              context(request),
-            );
-            return reply.code(201).send(publicAgent(created));
-          } catch (error) {
-            return sendAdminError(error, request, reply);
-          }
+            });
         },
       );
 
@@ -3186,33 +3438,36 @@ export function buildApp(options: BuildAppOptions = {}) {
             body: updatePlatformAgentBodySchema,
           },
         },
-        async (request, reply) => {
-          try {
-            const updated = await admin.updatePlatformAgent(
-              request.params.id,
-              request.body,
-              context(request),
-            );
-            return reply.send(publicAgent(updated));
-          } catch (error) {
-            return sendAdminError(error, request, reply);
-          }
+        async (_request, reply) => {
+          return reply
+            .code(405)
+            .header("Allow", "GET")
+            .send({
+              error: {
+                code: "SYSTEM_AGENTS_READ_ONLY",
+                message:
+                  "System Agents are configured through SYSTEM_AGENT_IDS in .env.",
+                retryable: false,
+              },
+            });
         },
       );
 
       app.delete<{ Params: { id: string } }>(
         "/api/v1/admin/platform-agents/:id",
         { schema: { params: uuidParamsSchema } },
-        async (request, reply) => {
-          try {
-            await admin.deletePlatformAgent(
-              request.params.id,
-              context(request),
-            );
-            return reply.code(204).send();
-          } catch (error) {
-            return sendAdminError(error, request, reply);
-          }
+        async (_request, reply) => {
+          return reply
+            .code(405)
+            .header("Allow", "GET")
+            .send({
+              error: {
+                code: "SYSTEM_AGENTS_READ_ONLY",
+                message:
+                  "System Agents are configured through SYSTEM_AGENT_IDS in .env.",
+                retryable: false,
+              },
+            });
         },
       );
 

@@ -195,14 +195,15 @@ function setup() {
     async finishMessage(
       ownerUserId: string,
       id: string,
-      outcome: "accepted_or_unknown" | "definite_failure",
+      outcome: "accepted_or_unknown" | "unknown" | "definite_failure",
     ) {
       const current = records.get(id);
       const accounting = messageAccounting.get(id);
       if (!current || current.ownerUserId !== ownerUserId || !accounting)
         return;
       accounting.inFlight = Math.max(accounting.inFlight - 1, 0);
-      if (outcome === "accepted_or_unknown") accounting.startPending = false;
+      if (outcome === "accepted_or_unknown" || outcome === "unknown")
+        accounting.startPending = false;
       if (
         outcome === "definite_failure" &&
         accounting.startPending &&
@@ -582,6 +583,26 @@ describe("SessionService", () => {
     ).rejects.toMatchObject({ category: "runtime_busy" });
 
     expect(state.records.get(sessionId)?.status).toBe("idle");
+  });
+
+  it("records unknown message outcomes separately from accepted writes", async () => {
+    const state = setup();
+    state.records.set(sessionId, session({ status: "idle" }));
+    const finish = vi.spyOn(state.repository, "finishMessage");
+    state.ark.submitEvent.mockRejectedValueOnce(
+      new ArkGatewayError("unknown_write_outcome"),
+    );
+
+    await expect(
+      state.service.sendMessage(
+        sessionId,
+        { content: "Start" },
+        { userId, requestId: "request-unknown" },
+      ),
+    ).rejects.toMatchObject({ category: "unknown_write_outcome" });
+
+    expect(finish).toHaveBeenCalledWith(userId, sessionId, "unknown");
+    expect(state.records.get(sessionId)?.status).toBe("running");
   });
 
   it("never converts an accepted Ark write into a definite start failure", async () => {

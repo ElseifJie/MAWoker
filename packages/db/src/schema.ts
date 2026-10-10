@@ -47,6 +47,9 @@ export const sessionStatus = pgEnum("session_status", [
   "running",
   "rescheduled",
   "terminated",
+  "initializing",
+  "upgrading",
+  "failed",
 ]);
 export const deletionState = pgEnum("deletion_state", [
   "none",
@@ -138,6 +141,15 @@ export const authSessions = pgTable(
     index("auth_sessions_expires_at_idx").on(table.expiresAt),
   ],
 );
+
+export const userMemoryStores = pgTable("user_memory_stores", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "restrict" }),
+  fixedStoreId: text("fixed_store_id").unique(),
+  state: jsonb("state").notNull(),
+  revision: integer("revision").notNull(),
+});
 
 export const platformAgents = pgTable(
   "platform_agents",
@@ -307,6 +319,7 @@ export const sessions = pgTable(
     agentName: text("agent_name").default("").notNull(),
     agentVersion: text("agent_version").notNull(),
     environmentId: text("environment_id").notNull(),
+    memoryStoreId: text("memory_store_id"),
     title: text("title").default("").notNull(),
     status: sessionStatus("status").default("idle").notNull(),
     lastErrorCode: text("last_error_code"),
@@ -315,6 +328,9 @@ export const sessions = pgTable(
       .default(0)
       .notNull(),
     messageStartPending: boolean("message_start_pending")
+      .default(false)
+      .notNull(),
+    messageUnknownOutcome: boolean("message_unknown_outcome")
       .default(false)
       .notNull(),
     archivedAt: timestamp("archived_at", { withTimezone: true }),
