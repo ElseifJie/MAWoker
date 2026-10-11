@@ -38,7 +38,7 @@ async function seedUsers(
 }
 
 describe("user Agent database integration", () => {
-  it("lists only assigned active platform and owned personal Agents", async () => {
+  it("lists active System Agents for every user and falls back to the first as default", async () => {
     const database = await createTestDatabase();
     const { adminId, userId, otherUserId } = await seedUsers(database.client);
     const assignedId = id();
@@ -48,16 +48,18 @@ describe("user Agent database integration", () => {
     await database.client.query(
       `insert into platform_agents
         (id, ark_agent_id, name, model_id, system_prompt, ark_version, status,
-         created_by, updated_by)
+         created_by, updated_by, updated_at)
        values
-        ($1, 'ark-assigned', 'Assigned', 'model-a', 'Prompt', '2', 'active', $3, $3),
-        ($2, 'ark-unassigned', 'Unassigned', 'model-a', 'Prompt', '4', 'active', $3, $3)`,
+        ($1, 'ark-assigned', 'Assigned', 'model-a', 'Prompt', '2', 'active',
+         $3, $3, '2026-09-01T00:00:00Z'),
+        ($2, 'ark-unassigned', 'Unassigned', 'model-a', 'Prompt', '4', 'active',
+         $3, $3, '2026-09-02T00:00:00Z')`,
       [assignedId, unassignedId, adminId],
     );
     await database.client.query(
       `insert into user_default_agents (user_id, platform_agent_id, assigned_by)
        values ($1, $2, $3)`,
-      [userId, assignedId, adminId],
+      [userId, unassignedId, adminId],
     );
     await database.client.query(
       `insert into personal_agents
@@ -80,6 +82,12 @@ describe("user Agent database integration", () => {
         arkVersion: "2",
       }),
       expect.objectContaining({
+        id: unassignedId,
+        kind: "platform",
+        editable: false,
+        arkVersion: "4",
+      }),
+      expect.objectContaining({
         id: personalId,
         kind: "personal",
         editable: true,
@@ -87,6 +95,44 @@ describe("user Agent database integration", () => {
         arkVersion: "3",
       }),
     ]);
+    await expect(
+      repositories.userAgents.listAvailable(otherUserId),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: assignedId, kind: "platform" }),
+      expect.objectContaining({ id: unassignedId, kind: "platform" }),
+      expect.objectContaining({ id: otherPersonalId, kind: "personal" }),
+    ]);
+    await expect(
+      repositories.userAgents.findDefaultActive(otherUserId),
+    ).resolves.toBe(assignedId);
+    await expect(
+      repositories.userAgents.findDefaultActive(userId),
+    ).resolves.toBe(unassignedId);
+    await expect(
+      repositories.userAgents.findAvailableById(otherUserId, unassignedId),
+    ).resolves.toMatchObject({ id: unassignedId, kind: "platform" });
+    await expect(
+      repositories.platformAgents.findAssignedToUser(adminId, assignedId),
+    ).resolves.toBeUndefined();
+
+    await database.client.query(
+      `update users set status = 'disabled' where id = $1`,
+      [otherUserId],
+    );
+    expect(
+      (await repositories.userAgents.listAvailable(otherUserId)).filter(
+        (agent) => agent.kind === "platform",
+      ),
+    ).toEqual([]);
+    await expect(
+      repositories.userAgents.findDefaultActive(otherUserId),
+    ).resolves.toBeUndefined();
+    await expect(
+      repositories.userAgents.findAvailableById(otherUserId, assignedId),
+    ).resolves.toBeUndefined();
+    await expect(
+      repositories.userAgents.findPlatformTemplate(otherUserId),
+    ).resolves.toBeUndefined();
     await database.close();
   });
 
@@ -153,6 +199,10 @@ describe("user Agent database integration", () => {
     await database.client.query(
       `update personal_agents set status = 'disabled' where id = $1`,
       [personalId],
+    );
+    await database.client.query(
+      `delete from user_default_agents where user_id = $1`,
+      [userId],
     );
     await expect(
       repositories.userAgents.findRecentAvailable(userId),

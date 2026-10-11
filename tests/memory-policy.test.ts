@@ -24,6 +24,11 @@ describe("personal memory policy", () => {
       validateMemory("/memories/profile.md", "中".repeat(34134)),
     ).toThrow();
     expect(() => validateMemory("/memories/../secret", "hi")).toThrow();
+    expect(() => validateMemory("/sessions/legacy.md", "hi")).toThrow();
+    expect(() =>
+      validateMemory("/procedures/conventions.md", "hi"),
+    ).not.toThrow();
+    expect(() => validateMemory("/episodes/handoff.md", "hi")).not.toThrow();
     expect(() =>
       validateMemory("/memories/profile.md", "ARK_API_KEY=secret"),
     ).toThrow();
@@ -106,14 +111,16 @@ describe("personal memory policy", () => {
   });
   it("packs related events by updating a survivor before deleting sources, even at full capacity", () => {
     const entries = Array.from({ length: 2000 }, (_, i) =>
-      entry(`/memories/events/2026/10/${i}.md`, `factId: ${i}\n决定 ${i}`),
+      entry(`/episodes/digest/2026/10/${i}.md`, `factId: ${i}\n决定 ${i}`),
     );
-    const plan = compactPlan(entries, [entries[0]!.path]);
+    const outside = entry("/memories/profile.md", "fact");
+    const plan = compactPlan([...entries, outside], [entries[0]!.path]);
     expect(plan[0]?.kind).toBe("put");
     const summary = plan[0]!.content!;
     expect(summary).toContain("factId: 1");
     expect(plan[1]?.kind).toBe("delete");
     expect(plan.some((s) => s.path === entries[0]!.path)).toBe(false);
+    expect(plan.some((s) => s.path === outside.path)).toBe(false);
     expect(plan.filter((s) => s.kind === "delete").length).toBeGreaterThan(800);
     expect(
       plan

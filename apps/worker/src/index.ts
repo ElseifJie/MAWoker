@@ -84,6 +84,7 @@ const sessionDeletionProcessor = new SessionDeletionProcessor({
   jobs: repositories.jobs,
   repository: repositories.sessionDeletion,
   ark,
+  memory,
   workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
   alert: (event) =>
     logger.error(

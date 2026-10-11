@@ -582,6 +582,16 @@ function Workspace({
           }
         />
         <Route
+          path="/context/store"
+          element={
+            data.capabilities.memoryStores.available ? (
+              <MemoryPage onAuthRequired={onAuthRequired} />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
+        <Route
           path="/"
           element={
             <SessionIntro
@@ -759,20 +769,27 @@ function SettingsPage({
         aria-labelledby="appearance-heading"
       >
         <h2 id="appearance-heading">Appearance</h2>
-        <Field label="Theme">
-          <Select
-            id="appearance"
-            value={theme.preference}
-            onChange={(event) => {
-              const next = event.target.value;
-              if (isThemePreference(next)) theme.setPreference(next);
-            }}
-          >
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-            <option value="system">Match system</option>
-          </Select>
-        </Field>
+        <dl className="settings-list">
+          <div>
+            <dt>
+              <label htmlFor="appearance">Theme</label>
+            </dt>
+            <dd>
+              <Select
+                id="appearance"
+                value={theme.preference}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  if (isThemePreference(next)) theme.setPreference(next);
+                }}
+              >
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="system">Match system</option>
+              </Select>
+            </dd>
+          </div>
+        </dl>
       </section>
 
       <section

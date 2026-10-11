@@ -66,6 +66,9 @@ describe("Task 18 tenant and quota acceptance", () => {
         ).resolves.toBeUndefined();
       }
 
+      // Platform Agents are shared presets: resolvable by every active user,
+      // hidden from administrators (who are not session users). Personal data
+      // isolation is asserted per resource above.
       await expect(
         harness.repositories.platformAgents.findAssignedToUser(
           harness.first.userId,
@@ -77,7 +80,7 @@ describe("Task 18 tenant and quota acceptance", () => {
           harness.second.userId,
           harness.platformAgentId,
         ),
-      ).resolves.toBeUndefined();
+      ).resolves.toBeDefined();
       await expect(
         harness.repositories.platformAgents.findAssignedToUser(
           harness.adminId,

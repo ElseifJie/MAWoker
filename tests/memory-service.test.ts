@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryArkGateway } from "../packages/ark-client/src/index.js";
+import { hashMemory } from "../packages/domain/src/memory-policy.js";
 import {
   MemoryService,
   type MemoryState,
@@ -38,6 +39,13 @@ function setup() {
     async get(userId) {
       return structuredClone(states.get(userId));
     },
+    async meta(userId) {
+      if (!states.has(userId)) return undefined;
+      return {
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      };
+    },
     async save(userId, revision, state) {
       if (states.get(userId)?.revision !== revision)
         throw new Error("CAS conflict");
@@ -55,13 +63,21 @@ function setup() {
     },
   };
   const ark = new InMemoryArkGateway();
+  let clock = 1_000_000;
   const service = new MemoryService({
     repository,
     ark,
     modelId: "model-a",
-    now: () => 1_000_000,
+    now: () => clock,
   });
-  return { service, repository, states, ark, sessions };
+  return {
+    service,
+    repository,
+    states,
+    ark,
+    sessions,
+    setNow: (value: number) => (clock = value),
+  };
 }
 
 async function finish(service: MemoryService, userId: string, ticks = 30) {
@@ -75,6 +91,59 @@ async function finish(service: MemoryService, userId: string, ticks = 30) {
     await service.advance(userId);
   }
   return service.status(userId);
+}
+
+async function reachPolling(
+  harness: ReturnType<typeof setup>,
+  options: { trailingThreadEvent?: boolean } = {},
+) {
+  const { service, ark, sessions } = harness;
+  const store = await service.ensure("a");
+  const agent = await ark.createAgent({
+    name: "A",
+    description: "",
+    modelId: "model-a",
+    systemPrompt: "",
+  });
+  const session = await ark.createSession({
+    agentId: agent.id,
+    agentVersion: 1,
+    environmentId: "env",
+    resources: [
+      { type: "memory_store", memoryStoreId: store, access: "read_write" },
+    ],
+  });
+  sessions.push({
+    id: "local",
+    arkSessionId: session.id,
+    memoryStoreId: store,
+    pending: false,
+    userId: "a",
+  });
+  ark.emitEvent(session.id, {
+    type: "agent.message",
+    data: { content: "done" },
+  });
+  ark.emitEvent(session.id, {
+    type: "session.status_idle",
+    data: { stop_reason: { type: "end_turn" } },
+  });
+  if (options.trailingThreadEvent)
+    ark.emitEvent(session.id, {
+      type: "session.thread_status_idle",
+      data: {},
+    });
+  await service.dream("a");
+  await service.advance("a");
+  let guard = 12;
+  while (
+    ((await service.status("a")).run?.stage ?? "") !== "polling" &&
+    guard-- > 0
+  )
+    await service.advance("a");
+  const state = await service.status("a");
+  if (state.run?.stage !== "polling") throw new Error("polling not reached");
+  return state;
 }
 
 describe("personal memory coordinator", () => {
@@ -166,19 +235,19 @@ describe("personal memory coordinator", () => {
     const { service, ark } = setup();
     const store = await service.ensure("a");
     await ark.createMemory(store, {
-      path: "/memories/events/a.md",
+      path: "/episodes/digest/a.md",
       content: "same",
     });
     await ark.createMemory(store, {
-      path: "/memories/events/b.md",
+      path: "/episodes/digest/b.md",
       content: "same",
     });
-    await service.protect("a", "/memories/events/b.md", true);
+    await service.protect("a", "/episodes/digest/b.md", true);
     await service.compress("a");
     await finish(service, "a");
     const paths = (await service.list("a")).entries.map((e) => e.path);
-    expect(paths).toContain("/memories/events/b.md");
-    expect(paths).not.toContain("/memories/events/a.md");
+    expect(paths).toContain("/episodes/digest/b.md");
+    expect(paths).not.toContain("/episodes/digest/a.md");
     expect(ark.calls.some((c) => c.operation === "createDream")).toBe(false);
   });
   it("recovers an observed successful write without submitting it again", async () => {
@@ -330,7 +399,7 @@ describe("personal memory coordinator", () => {
     const store = await service.ensure("a");
     for (let i = 0; i < 30; i++)
       await ark.createMemory(store, {
-        path: `/memories/events/topic/${i}.md`,
+        path: `/episodes/digest/topic/${i}.md`,
         content: `fact ${i}`,
       });
     await service.compress("a");
@@ -430,5 +499,376 @@ describe("personal memory coordinator", () => {
       entries.some((e) => e.path === "/memories/preferences/workflow.md"),
     ).toBe(true);
     expect((await service.status("a")).run?.stage).toBe("completed");
+  });
+  it("reconciles interrupted provisioning when the Store survived", async () => {
+    const { service, states, ark } = setup();
+    const store = await ark.createMemoryStore({ name: "mawoker-a" });
+    await ark.createMemory(store.id, {
+      path: "/memories/.navigation.md",
+      content: "stale",
+    });
+    states.set("a", {
+      userId: "a",
+      revision: 0,
+      status: "repairing",
+      storeId: store.id,
+      policyEpoch: 0,
+      protectedPaths: [],
+      revokedPaths: [],
+      autoDream: true,
+      run: null,
+      lastMonitorAt: 0,
+      lastCompactAt: 0,
+    });
+    const result = await service.list("a");
+    expect(result.state.status).toBe("active");
+    expect(result.state.storeId).toBe(store.id);
+    expect(
+      result.entries.find((e) => e.path === "/memories/.navigation.md")
+        ?.content,
+    ).toBe("stale");
+    expect(result.entries.map((e) => e.path)).toContain("/memories/profile.md");
+  });
+  it("recreates the Store when provisioning crashed before the id was saved", async () => {
+    const { service, states } = setup();
+    states.set("a", {
+      userId: "a",
+      revision: 0,
+      status: "provisioning",
+      storeId: null,
+      policyEpoch: 0,
+      protectedPaths: [],
+      revokedPaths: [],
+      autoDream: true,
+      run: null,
+      lastMonitorAt: 0,
+      lastCompactAt: 0,
+    });
+    const result = await service.list("a");
+    expect(result.state.status).toBe("active");
+    expect(result.state.storeId).toBeTruthy();
+    expect(result.entries.map((e) => e.path)).toEqual([
+      "/episodes/handoff.md",
+      "/memories/.index.md",
+      "/memories/preferences.md",
+      "/memories/profile.md",
+      "/procedures/conventions.md",
+      "/resources/README.md",
+    ]);
+  });
+  it("keeps a quarantined run locked until recover observes the outcome", async () => {
+    const { service, states, ark } = setup();
+    const store = await service.ensure("a");
+    await service.write("a", {
+      path: "/memories/profile.md",
+      content: "crashed write",
+    });
+    const quarantined = await service.status("a");
+    quarantined.run!.steps[0].status = "sending";
+    quarantined.run!.stage = "repairing";
+    quarantined.run!.error = "crashed mid-send";
+    quarantined.status = "repairing";
+    states.set("a", quarantined);
+    await expect(service.list("a")).rejects.toMatchObject({
+      code: "MEMORY_BUSY",
+    });
+    await expect(service.recover("a")).rejects.toMatchObject({
+      code: "MEMORY_REPAIR_REQUIRED",
+    });
+    await ark.updateMemory(
+      store,
+      (await ark.listMemories(store)).find(
+        (e) => e.path === "/memories/profile.md",
+      )!.id,
+      { path: "/memories/profile.md", content: "crashed write" },
+    );
+    await service.recover("a");
+    const recovered = await service.status("a");
+    expect(recovered.status).toBe("applying");
+    expect(recovered.run?.stage).toBe("apply");
+    expect(recovered.run?.steps[0]?.status).toBe("verified");
+    await finish(service, "a");
+    expect((await service.status("a")).run?.stage).toBe("completed");
+    expect((await service.list("a")).state.status).toBe("active");
+  });
+  it("treats trailing thread status events as an ended turn", async () => {
+    const harness = setup();
+    await reachPolling(harness, { trailingThreadEvent: true });
+    const { service, ark } = harness;
+    const state = await service.status("a");
+    const candidate = await ark.createMemoryStore({ name: "candidate" });
+    ark.setDreamResult(state.run!.dreamId!, candidate.id);
+    const finished = await finish(service, "a");
+    expect(finished.run?.stage).toBe("completed");
+    expect(finished.summarizedSources).toHaveLength(1);
+  });
+  it("fails a dream whose upstream wait exceeds the timeout", async () => {
+    const harness = setup();
+    await reachPolling(harness);
+    const { service, ark } = harness;
+    await service.advance("a"); // First pending observation anchors the wait.
+    harness.setNow(1_000_000 + 1_800_001);
+    await service.advance("a");
+    // The failure routes through cleanup to drop the snapshot first.
+    expect((await service.status("a")).run?.stage).toBe("cleanup");
+    await service.advance("a");
+    const state = await service.status("a");
+    expect(state.run?.stage).toBe("failed");
+    expect(state.status).toBe("active");
+    expect(state.run?.snapshotId).toBeNull();
+    expect(ark.calls.some((c) => c.operation === "deleteMemoryStore")).toBe(
+      true,
+    );
+  });
+  it("cancels a waiting dream and releases intermediate stores", async () => {
+    const harness = setup();
+    await reachPolling(harness);
+    const { service, ark } = harness;
+    const state = await service.cancel("a");
+    expect(state.run?.stage).toBe("failed");
+    expect(state.status).toBe("active");
+    expect(state.run?.snapshotId).toBeNull();
+    expect(ark.calls.some((c) => c.operation === "cancelDream")).toBe(true);
+    expect(ark.calls.some((c) => c.operation === "deleteMemoryStore")).toBe(
+      true,
+    );
+    await service.dream("a");
+    expect((await service.status("a")).run?.stage).toBe("queued");
+  });
+  it("migrates legacy session handoffs into the episodes skeleton", async () => {
+    const { service, ark, states } = setup();
+    const store = await ark.createMemoryStore({ name: "mawoker-a" });
+    await ark.createMemory(store.id, {
+      path: "/.abstract.md",
+      content: "旧导航",
+    });
+    await ark.createMemory(store.id, {
+      path: "/memories/profile.md",
+      content: "knows TypeScript",
+    });
+    await ark.createMemory(store.id, {
+      path: "/sessions/README.md",
+      content: "进行中：记忆结构固化",
+    });
+    await ark.createMemory(store.id, {
+      path: "/sessions/2026-10-11.md",
+      content: "fact",
+    });
+    states.set("a", {
+      userId: "a",
+      revision: 0,
+      status: "active",
+      storeId: store.id,
+      policyEpoch: 0,
+      protectedPaths: [],
+      revokedPaths: [],
+      autoDream: false,
+      run: null,
+      lastMonitorAt: 0,
+      lastCompactAt: 0,
+    });
+    await service.ensure("a");
+    // Missing anchors are written immediately; moves complete through the run.
+    const staged = (await ark.listMemories(store.id)).map((e) => e.path);
+    expect(staged).toContain("/memories/preferences.md");
+    expect(staged).toContain("/procedures/conventions.md");
+    expect(staged).toContain("/episodes/handoff.md");
+    expect((await service.status("a")).run?.stage).toBe("queued");
+    await finish(service, "a");
+    const entries = await ark.listMemories(store.id);
+    const paths = entries.map((e) => e.path);
+    expect(paths).not.toContain("/.abstract.md");
+    expect(paths).not.toContain("/sessions/README.md");
+    expect(paths).not.toContain("/sessions/2026-10-11.md");
+    expect(paths).toContain("/episodes/digest/2026-10-11.md");
+    expect(
+      entries.find((e) => e.path === "/episodes/handoff.md")?.content,
+    ).toContain("进行中：记忆结构固化");
+    expect(
+      entries.find((e) => e.path === "/memories/profile.md")?.content,
+    ).toBe("knows TypeScript");
+    expect((await service.status("a")).structureVersion).toBe(2);
+  });
+  it("marks an already-conforming store as current without scheduling a run", async () => {
+    const { service, states } = setup();
+    await service.ensure("a");
+    const state = states.get("a")!;
+    delete state.structureVersion;
+    states.set("a", state);
+    await service.ensure("a");
+    const after = await service.status("a");
+    expect(after.structureVersion).toBe(2);
+    expect(after.run).toBeNull();
+  });
+  it("migrates a store carrying an inert terminal run from a failed dream", async () => {
+    const { service, ark, states } = setup();
+    const store = await ark.createMemoryStore({ name: "mawoker-a" });
+    await ark.createMemory(store.id, {
+      path: "/memories/profile.md",
+      content: "knows TypeScript",
+    });
+    states.set("a", {
+      userId: "a",
+      revision: 0,
+      status: "active",
+      storeId: store.id,
+      policyEpoch: 3,
+      protectedPaths: [],
+      revokedPaths: [],
+      autoDream: false,
+      run: {
+        kind: "dream",
+        stage: "failed",
+        epoch: 3,
+        baseline: [],
+        snapshotId: null,
+        candidateId: null,
+        dreamId: "dream-stale",
+        sources: [],
+        steps: [],
+        error: "来源会话已有新内容，需重新整理",
+        before: null,
+        after: null,
+        pendingOperation: null,
+        awaitedAt: null,
+      },
+      lastMonitorAt: 0,
+      lastCompactAt: 0,
+    });
+    await service.ensure("a");
+    const after = await service.status("a");
+    expect(after.structureVersion).toBe(2);
+    expect(after.run).toBeNull();
+    const paths = (await ark.listMemories(store.id)).map((e) => e.path);
+    expect(paths).toContain("/procedures/conventions.md");
+    expect(paths).toContain("/episodes/handoff.md");
+    expect(paths).toContain("/resources/README.md");
+  });
+  it("expedites the monitor and captures explicit remember-me sentences first", async () => {
+    const { service, ark, sessions, states } = setup();
+    const store = await service.ensure("a");
+    const agent = await ark.createAgent({
+      name: "A",
+      description: "",
+      modelId: "model-a",
+      systemPrompt: "",
+    });
+    const session = await ark.createSession({
+      agentId: agent.id,
+      agentVersion: 1,
+      environmentId: "env",
+      resources: [
+        { type: "memory_store", memoryStoreId: store, access: "read_write" },
+      ],
+    });
+    ark.emitEvent(session.id, {
+      type: "user.message",
+      data: { content: "记住我喜欢简洁的回复。今天天气不错。" },
+    });
+    ark.emitEvent(session.id, {
+      type: "agent.message",
+      data: { content: "好的。" },
+    });
+    ark.emitEvent(session.id, {
+      type: "session.status_idle",
+      data: { stop_reason: { type: "end_turn" } },
+    });
+    sessions.push({
+      id: "local",
+      arkSessionId: session.id,
+      memoryStoreId: store,
+      pending: false,
+      userId: "a",
+    });
+    // Outside the monitor window nothing runs.
+    states.get("a")!.lastMonitorAt = 1_000_000;
+    await service.runOnce();
+    expect((await service.status("a")).run).toBeNull();
+    // The turn-end trigger re-arms the monitor for the very next tick.
+    await service.expedite("a");
+    await service.runOnce();
+    const planned = await service.status("a");
+    expect(planned.run?.kind).toBe("edit");
+    expect(planned.lastMonitorAt).toBe(0);
+    await finish(service, "a");
+    const digest = (await ark.listMemories(store)).find(
+      (e) => e.path === `/episodes/digest/${session.id}.md`,
+    );
+    expect(digest?.content).toContain("sourceSessionId:");
+    expect(digest?.content).toContain("记住我喜欢简洁的回复。");
+    expect(digest?.content).not.toContain("今天天气不错。");
+    // The re-armed monitor follows up with the semantic dream.
+    await service.runOnce();
+    expect((await service.status("a")).run?.kind).toBe("dream");
+  });
+  it("fences session deletion until the increments are captured", async () => {
+    const { service, ark, sessions, states } = setup();
+    const store = await service.ensure("a");
+    const agent = await ark.createAgent({
+      name: "A",
+      description: "",
+      modelId: "model-a",
+      systemPrompt: "",
+    });
+    const session = await ark.createSession({
+      agentId: agent.id,
+      agentVersion: 1,
+      environmentId: "env",
+      resources: [
+        { type: "memory_store", memoryStoreId: store, access: "read_write" },
+      ],
+    });
+    ark.emitEvent(session.id, {
+      type: "user.message",
+      data: { content: "预算 8000，评审周五。" },
+    });
+    ark.emitEvent(session.id, {
+      type: "session.status_idle",
+      data: { stop_reason: { type: "end_turn" } },
+    });
+    sessions.push({
+      id: "local",
+      arkSessionId: session.id,
+      memoryStoreId: store,
+      pending: false,
+      userId: "a",
+    });
+    // Unconsolidated: the fence plans a verbatim capture and holds deletion.
+    expect(await service.fenceDeletion("a", session.id)).toBe("capturing");
+    expect((await service.status("a")).run?.kind).toBe("edit");
+    await finish(service, "a");
+    const digest = (await ark.listMemories(store)).find(
+      (e) => e.path === `/episodes/digest/${session.id}.md`,
+    );
+    expect(digest?.content).toContain("预算 8000，评审周五。");
+    expect(await service.fenceDeletion("a", session.id)).toBe("clear");
+    // An already-summarized source clears immediately without a digest entry.
+    const other = await ark.createSession({
+      agentId: agent.id,
+      agentVersion: 1,
+      environmentId: "env",
+      resources: [
+        { type: "memory_store", memoryStoreId: store, access: "read_write" },
+      ],
+    });
+    ark.emitEvent(other.id, {
+      type: "user.message",
+      data: { content: "again" },
+    });
+    ark.emitEvent(other.id, {
+      type: "session.status_idle",
+      data: { stop_reason: { type: "end_turn" } },
+    });
+    sessions.push({
+      id: "local-2",
+      arkSessionId: other.id,
+      memoryStoreId: store,
+      pending: false,
+      userId: "a",
+    });
+    states.get("a")!.summarizedSources = [
+      hashMemory(JSON.stringify(await ark.listEvents(other.id))),
+    ];
+    expect(await service.fenceDeletion("a", other.id)).toBe("clear");
   });
 });

@@ -71,14 +71,20 @@ function service() {
           storeId: "private-store",
         },
       ];
-      return { entries, capacity: capacity(entries), state: state(userId) };
+      return {
+        entries,
+        capacity: capacity(entries),
+        state: state(userId),
+        store: { id: "memstore-1", updatedAt: null },
+        sessionCount: 1,
+      };
     }),
     status: vi.fn(async (userId: string) => state(userId)),
     write: vi.fn(async () => state()),
     remove: vi.fn(async () => state()),
     protect: vi.fn(async () => {}),
-    dream: vi.fn(async () => state()),
-    compress: vi.fn(async () => state()),
+    recover: vi.fn(async () => {}),
+    cancel: vi.fn(async () => state()),
     settings: vi.fn(async () => {}),
   } satisfies Pick<
     MemoryService,
@@ -87,8 +93,8 @@ function service() {
     | "write"
     | "remove"
     | "protect"
-    | "dream"
-    | "compress"
+    | "recover"
+    | "cancel"
     | "settings"
   >;
 }
@@ -119,8 +125,8 @@ const routes = [
     url: "/api/v1/memory/protect",
     payload: { path: "/memories/a.md", protected: true },
   },
-  { method: "POST", url: "/api/v1/memory/dream" },
-  { method: "POST", url: "/api/v1/memory/compress" },
+  { method: "POST", url: "/api/v1/memory/recover" },
+  { method: "POST", url: "/api/v1/memory/cancel" },
   {
     method: "PATCH",
     url: "/api/v1/memory/settings",
@@ -155,6 +161,8 @@ describe("personal memory API", () => {
             after: null,
           },
         },
+        store: { id: "memstore-1", updatedAt: null },
+        sessionCount: 1,
       });
       expect(memory.list).toHaveBeenLastCalledWith(token);
       expect(response.body).not.toContain("private");
@@ -184,9 +192,12 @@ describe("personal memory API", () => {
     for (const route of routes.slice(2)) {
       const response = await app.inject({ ...route, cookies });
       expect(response.statusCode).toBe(
-        ["/api/v1/memory/protect", "/api/v1/memory/settings"].includes(
-          route.url,
-        )
+        [
+          "/api/v1/memory/protect",
+          "/api/v1/memory/settings",
+          "/api/v1/memory/recover",
+          "/api/v1/memory/cancel",
+        ].includes(route.url)
           ? 200
           : 202,
       );
@@ -201,8 +212,10 @@ describe("personal memory API", () => {
     });
     expect(memory.remove).toHaveBeenCalledWith("A", "/memories/a.md");
     expect(memory.protect).toHaveBeenCalledWith("A", "/memories/a.md", true);
-    expect(memory.dream).toHaveBeenCalledWith("A");
-    expect(memory.compress).toHaveBeenCalledWith("A");
+    expect(memory.dream).toBeUndefined();
+    expect(memory.compress).toBeUndefined();
+    expect(memory.recover).toHaveBeenCalledWith("A");
+    expect(memory.cancel).toHaveBeenCalledWith("A");
     expect(memory.settings).toHaveBeenCalledWith("A", false);
     const response = await app.inject({ ...routes[1], cookies });
     expect(response.json()).toEqual({

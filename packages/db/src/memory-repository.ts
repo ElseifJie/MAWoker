@@ -9,6 +9,8 @@ export interface MemoryState {
   protectedPaths: string[];
   revokedPaths: string[];
   autoDream: boolean;
+  /** Skeleton generation; absent means a pre-episodes layout. */
+  structureVersion?: number;
   // The domain owns the versioned run/cleanup manifest; persist it opaquely.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   run: any | null;
@@ -17,9 +19,15 @@ export interface MemoryState {
   summarizedSources?: string[];
 }
 
+interface MemoryStoreMeta {
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MemoryRepository {
   reserve(userId: string): Promise<{ created: boolean; state: MemoryState }>;
   get(userId: string): Promise<MemoryState | undefined>;
+  meta(userId: string): Promise<MemoryStoreMeta | undefined>;
   save(
     userId: string,
     expectedRevision: number,
@@ -62,6 +70,22 @@ export function createMemoryRepository(database: unknown): MemoryRepository {
     return result.rows[0]?.state;
   };
 
+  const meta = async (userId: string): Promise<MemoryStoreMeta | undefined> => {
+    const result = await db.execute<{
+      createdAt: Date | string;
+      updatedAt: Date | string;
+    }>(
+      sql`select created_at as "createdAt", updated_at as "updatedAt"
+            from user_memory_stores where user_id = ${userId}`,
+    );
+    const row = result.rows[0];
+    if (!row) return undefined;
+    return {
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: new Date(row.updatedAt).toISOString(),
+    };
+  };
+
   return {
     async reserve(userId) {
       const state: MemoryState = {
@@ -90,6 +114,7 @@ export function createMemoryRepository(database: unknown): MemoryRepository {
       return { created: false, state: existing };
     },
     get,
+    meta,
     async save(userId, expectedRevision, state) {
       if (
         state.userId !== userId ||
@@ -108,7 +133,8 @@ export function createMemoryRepository(database: unknown): MemoryRepository {
           sql`update user_memory_stores
                  set state = ${serialized}::jsonb,
                      revision = revision + 1,
-                     fixed_store_id = ${state.storeId}
+                     fixed_store_id = ${state.storeId},
+                     updated_at = now()
                where user_id = ${userId} and revision = ${expectedRevision}
                returning user_id`,
         );

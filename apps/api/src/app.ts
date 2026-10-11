@@ -537,9 +537,10 @@ interface BuildAppOptions {
     | "write"
     | "remove"
     | "protect"
-    | "dream"
-    | "compress"
+    | "recover"
+    | "cancel"
     | "settings"
+    | "expedite"
   >;
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
@@ -2320,8 +2321,21 @@ export function buildApp(options: BuildAppOptions = {}) {
     );
 
     app.post("/api/v1/auth/logout", async (request, reply) => {
-      await auth.logout(request.cookies[AUTH_COOKIE_NAME]);
+      const token = request.cookies[AUTH_COOKIE_NAME];
+      // The logout flush marks the end of a work session: memory
+      // consolidation for everything this user left pending is expedited
+      // fire-and-forget so the next login starts from a fresh handoff.
+      const userId = token
+        ? await auth
+            .authenticate(token)
+            .then((context) => context.userId)
+            .catch(() => undefined)
+        : undefined;
+      await auth.logout(token);
       reply.clearCookie(AUTH_COOKIE_NAME, cookieOptions(isProduction));
+      if (userId) {
+        void options.memory?.expedite?.(userId).catch(() => undefined);
+      }
       return reply.code(204).send();
     });
 
@@ -2397,6 +2411,8 @@ export function buildApp(options: BuildAppOptions = {}) {
           })),
           capacity: result.capacity,
           state: publicMemoryState(result.state),
+          store: result.store,
+          sessionCount: result.sessionCount,
         };
       });
       app.get("/api/v1/memory/status", async (request) =>
@@ -2463,14 +2479,21 @@ export function buildApp(options: BuildAppOptions = {}) {
           return publicMemoryState(await memory.status(request.auth!.userId));
         },
       );
-      for (const kind of ["dream", "compress"] as const) {
-        app.post(`/api/v1/memory/${kind}`, async (request, reply) => {
-          emptyActionBody(request.body);
-          return reply
-            .code(202)
-            .send(publicMemoryState(await memory[kind](request.auth!.userId)));
-        });
-      }
+      // Consolidation is system-driven (autoDream monitor / capacity guard);
+      // no manual dream/compress interface is exposed to users.
+      app.post("/api/v1/memory/recover", async (request, reply) => {
+        emptyActionBody(request.body);
+        await memory.recover(request.auth!.userId);
+        return reply
+          .code(200)
+          .send(publicMemoryState(await memory.status(request.auth!.userId)));
+      });
+      app.post("/api/v1/memory/cancel", async (request, reply) => {
+        emptyActionBody(request.body);
+        return reply
+          .code(200)
+          .send(publicMemoryState(await memory.cancel(request.auth!.userId)));
+      });
       app.patch<{ Body: { autoDream: boolean } }>(
         "/api/v1/memory/settings",
         {

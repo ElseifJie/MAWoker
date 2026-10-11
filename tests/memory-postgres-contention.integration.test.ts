@@ -38,7 +38,9 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         user_id uuid primary key references users(id),
         fixed_store_id text unique,
         state jsonb not null,
-        revision integer not null default 0
+        revision integer not null default 0,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now()
       );
       create table sessions (
         id uuid primary key,

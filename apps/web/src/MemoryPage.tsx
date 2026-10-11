@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 import {
   ApiClientError,
   apiClient,
@@ -10,6 +12,7 @@ import {
   Alert,
   Badge,
   Button,
+  DataTable,
   EmptyState,
   Field,
   Input,
@@ -40,27 +43,241 @@ function memoryError(error: unknown): string {
   return "Memory could not be loaded or updated. Retry when your connection is available.";
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kib = bytes / 1024;
+  if (kib < 1024) return `${kib.toFixed(kib < 10 ? 1 : 0)} KB`;
+  return `${(kib / 1024).toFixed(1)} MB`;
+}
+
+function formatDateTime(value: string | null): string {
+  return value ? `${value.slice(0, 10)} ${value.slice(11, 19)}` : "—";
+}
+
+interface PathNode {
+  name: string;
+  path: string;
+  folder: boolean;
+  children: PathNode[];
+}
+
+function buildPathTree(paths: string[]): PathNode[] {
+  const roots: PathNode[] = [];
+  for (const path of paths) {
+    const parts = path.split("/").filter(Boolean);
+    let level = roots;
+    let prefix = "";
+    for (const [index, part] of parts.entries()) {
+      prefix += `/${part}`;
+      const folder = index < parts.length - 1;
+      let node = level.find((candidate) => candidate.name === part);
+      if (!node) {
+        node = { name: part, path: prefix, folder, children: [] };
+        level.push(node);
+      }
+      if (folder) level = node.children;
+    }
+  }
+  const sort = (nodes: PathNode[]): PathNode[] => {
+    nodes.sort((a, b) =>
+      a.folder === b.folder ? a.name.localeCompare(b.name) : a.folder ? -1 : 1,
+    );
+    for (const node of nodes) if (node.folder) sort(node.children);
+    return nodes;
+  };
+  return sort(roots);
+}
+
+function PathTree({
+  nodes,
+  selectedPath,
+  disabled,
+  onSelect,
+}: {
+  nodes: PathNode[];
+  selectedPath: string | null;
+  disabled: boolean;
+  onSelect: (node: PathNode) => void;
+}) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const render = (level: PathNode[]) =>
+    level.map((node) =>
+      node.folder ? (
+        <div key={node.path}>
+          <button
+            type="button"
+            className="memory-tree__row memory-tree__row--folder"
+            onClick={() =>
+              setCollapsed((current) => {
+                const next = new Set(current);
+                if (next.has(node.path)) next.delete(node.path);
+                else next.add(node.path);
+                return next;
+              })
+            }
+          >
+            {collapsed.has(node.path) ? (
+              <ChevronRight size={14} aria-hidden="true" />
+            ) : (
+              <ChevronDown size={14} aria-hidden="true" />
+            )}
+            <Folder size={14} aria-hidden="true" />
+            <span>{node.name}</span>
+          </button>
+          {!collapsed.has(node.path) ? render(node.children) : null}
+        </div>
+      ) : (
+        <button
+          key={node.path}
+          type="button"
+          disabled={disabled}
+          className={
+            selectedPath === node.path
+              ? "memory-tree__row memory-tree__row--file is-selected"
+              : "memory-tree__row memory-tree__row--file"
+          }
+          onClick={() => onSelect(node)}
+        >
+          <FileText size={14} aria-hidden="true" />
+          <span>{node.name}</span>
+        </button>
+      ),
+    );
+  return <div className="memory-tree__nodes">{render(nodes)}</div>;
+}
+
 export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
+  const location = useLocation();
+  const detailView = location.pathname === "/context/store";
+  return detailView ? (
+    <MemoryStoreDetail onAuthRequired={onAuthRequired} />
+  ) : (
+    <MemoryStoreList onAuthRequired={onAuthRequired} />
+  );
+}
+
+function MemoryStoreList({ onAuthRequired }: { onAuthRequired: () => void }) {
+  const navigate = useNavigate();
+  const [list, setList] = useState<MemoryList | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+  const authRef = useRef(onAuthRequired);
+  authRef.current = onAuthRequired;
+  const alive = useRef(true);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    setError(null);
+    apiClient
+      .listMemory()
+      .then((result) => {
+        if (active) setList(result);
+      })
+      .catch((loadError) => {
+        if (!active) return;
+        if (loadError instanceof ApiClientError && loadError.isAuthRequired)
+          authRef.current();
+        else setError(memoryError(loadError));
+      });
+    return () => {
+      active = false;
+    };
+  }, [reload]);
+
+  return (
+    <div className="page page--wide">
+      <PageHeader
+        title="Memory Stores"
+        description="Persistent memory for Agents, provisioned automatically with your sessions and mounted read-write at runtime."
+      />
+      {error ? <Alert tone="danger">{error}</Alert> : null}
+      {!list ? (
+        error ? (
+          <EmptyState
+            title="Memory Store unavailable"
+            action={
+              <Button onClick={() => setReload((value) => value + 1)}>
+                Retry
+              </Button>
+            }
+          />
+        ) : (
+          <Spinner label="Loading memory" />
+        )
+      ) : (
+        <DataTable caption="Memory Stores">
+          <thead>
+            <tr>
+              <th scope="col">Name/ID</th>
+              <th scope="col">Sessions</th>
+              <th scope="col">Memories</th>
+              <th scope="col">Storage</th>
+              <th scope="col">Updated</th>
+              <th scope="col">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              className="memory-store-row"
+              onClick={() => navigate("/context/store")}
+            >
+              <td data-label="Name/ID">
+                <span className="memory-store-name">Personal Memory</span>
+                <span className="memory-store-id">{list.store.id}</span>
+              </td>
+              <td data-label="Sessions">
+                <span className="memory-store-count">{list.sessionCount}</span>
+              </td>
+              <td data-label="Memories">{list.capacity.count}</td>
+              <td data-label="Storage">{formatBytes(list.capacity.bytes)}</td>
+              <td data-label="Updated">
+                {formatDateTime(list.store.updatedAt)}
+              </td>
+              <td data-label="Actions">
+                <Button
+                  variant="text"
+                  onClick={() => navigate("/context/store")}
+                >
+                  View
+                </Button>
+              </td>
+            </tr>
+          </tbody>
+        </DataTable>
+      )}
+    </div>
+  );
+}
+
+function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
+  const navigate = useNavigate();
   const [list, setList] = useState<MemoryList | null>(null);
   const [state, setState] = useState<MemoryState | null>(null);
   const [editor, setEditor] = useState<MemoryEntry | null>(null);
   const [existing, setExisting] = useState(false);
   const [pending, setPending] = useState(false);
+  const [repairPending, setRepairPending] = useState(false);
+  const [cancelPending, setCancelPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const authRef = useRef(onAuthRequired);
   authRef.current = onAuthRequired;
-  const accepted = useRef<"Save" | "Delete" | "Dream" | "Compress" | null>(
-    null,
-  );
+  const accepted = useRef<"Save" | "Delete" | null>(null);
   const alive = useRef(true);
 
-  const handleError = useCallback((error: unknown) => {
+  const handleError = useCallback((loadError: unknown) => {
     if (!alive.current) return;
-    if (error instanceof ApiClientError && error.isAuthRequired)
+    if (loadError instanceof ApiClientError && loadError.isAuthRequired)
       authRef.current();
-    else setError(memoryError(error));
+    else setError(memoryError(loadError));
   }, []);
 
   useEffect(() => {
@@ -80,11 +297,14 @@ export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
         setList(result);
         setState(result.state);
       })
-      .catch(async (error) => {
+      .catch(async (loadError) => {
         if (!active) return;
-        handleError(error);
+        handleError(loadError);
         // Listing is unavailable while the worker drains/applies; status still works.
-        if (error instanceof ApiClientError && error.code === "MEMORY_BUSY") {
+        if (
+          loadError instanceof ApiClientError &&
+          loadError.code === "MEMORY_BUSY"
+        ) {
           try {
             const next = await apiClient.getMemoryStatus();
             if (active) setState(next);
@@ -119,18 +339,14 @@ export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
           } else if (accepted.current) {
             const action = accepted.current;
             setFeedback(
-              action === "Save"
-                ? "Memory saved."
-                : action === "Delete"
-                  ? "Memory deleted."
-                  : `${action} completed.`,
+              action === "Save" ? "Memory saved." : "Memory deleted.",
             );
             if (action === "Save") {
               setEditor(
-                (current) =>
+                (currentEntry) =>
                   result.entries.find(
-                    (entry) => entry.path === current?.path,
-                  ) ?? current,
+                    (entry) => entry.path === currentEntry?.path,
+                  ) ?? currentEntry,
               );
               setExisting(true);
             }
@@ -143,10 +359,11 @@ export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
           return;
         }
         setState(next);
-      } catch (error) {
+      } catch (pollError) {
         if (!active) return;
-        handleError(error);
-        if (error instanceof ApiClientError && error.isAuthRequired) return;
+        handleError(pollError);
+        if (pollError instanceof ApiClientError && pollError.isAuthRequired)
+          return;
       }
       if (active)
         timer = setTimeout(() => {
@@ -164,7 +381,7 @@ export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
 
   async function mutate(
     operation: () => Promise<MemoryState>,
-    action?: "Save" | "Delete" | "Dream" | "Compress",
+    action?: "Save" | "Delete",
   ) {
     if (pending || running || state?.status !== "active") return;
     setPending(true);
@@ -176,220 +393,273 @@ export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
       if (action) {
         accepted.current = action;
         setFeedback(
-          `${action} queued; ${action === "Save" ? "not saved" : action === "Delete" ? "not deleted" : "not completed"} yet.`,
+          `${action} queued; ${action === "Save" ? "not saved" : "not deleted"} yet.`,
         );
       }
       setState(next);
-    } catch (error) {
-      handleError(error);
+    } catch (mutationError) {
+      handleError(mutationError);
     } finally {
       if (alive.current) setPending(false);
     }
   }
 
+  async function repair() {
+    if (repairPending) return;
+    setRepairPending(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      const next = await apiClient.recoverMemory();
+      if (!alive.current) return;
+      setState(next);
+      setFeedback("Repair accepted; memory resumes in the background.");
+    } catch (repairError) {
+      handleError(repairError);
+    } finally {
+      if (alive.current) setRepairPending(false);
+    }
+  }
+
+  async function cancelOperation() {
+    if (cancelPending) return;
+    setCancelPending(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      const next = await apiClient.cancelMemory();
+      if (!alive.current) return;
+      setState(next);
+      setFeedback("Operation cancelled.");
+      setReload((value) => value + 1);
+    } catch (cancelError) {
+      handleError(cancelError);
+    } finally {
+      if (alive.current) setCancelPending(false);
+    }
+  }
+
   const blocked = pending || running || state?.status !== "active";
-  const usage = list?.capacity;
+  const entries = list?.entries ?? [];
+  const tree = useMemo(
+    () => buildPathTree(entries.map((entry) => entry.path)),
+    [entries],
+  );
+
   return (
-    <div className="page page--wide">
-      <PageHeader
-        title="Context"
-        description="Review and edit the personal memory your Agents use."
-        actions={
-          <Button
-            disabled={blocked}
-            onClick={() => {
-              setEditor({ path: "", content: "" });
-              setExisting(false);
-              setFeedback(null);
-            }}
-          >
-            New entry
-          </Button>
-        }
-      />
+    <div className="page page--wide memory-detail">
+      <Button
+        variant="text"
+        className="memory-back"
+        onClick={() => navigate("/context")}
+      >
+        ‹ Memory Stores
+      </Button>
+
       {error ? <Alert tone="danger">{error}</Alert> : null}
       {feedback ? (
         <Alert tone={running ? "info" : "success"}>{feedback}</Alert>
       ) : null}
+
+      {!list && !error ? <Spinner label="Loading memory" /> : null}
+
       {state ? (
-        <section className="settings-section" aria-label="Memory status">
-          <Badge tone={running ? "warning" : "neutral"}>{state.status}</Badge>
-          {state.run ? (
-            <p>
-              Operation: {state.run.kind} / {state.run.stage}
-            </p>
-          ) : null}
-          {state.run?.error ? (
-            <Alert tone="danger">{state.run.error}</Alert>
-          ) : null}
-          {state.run?.before && state.run.after ? (
-            <p>
-              Before: {state.run.before.count} entries, {state.run.before.bytes}{" "}
-              bytes. After: {state.run.after.count} entries,{" "}
-              {state.run.after.bytes} bytes.
-            </p>
-          ) : null}
-          <Button
-            variant="secondary"
-            disabled={pending}
-            onClick={() => setReload((value) => value + 1)}
-          >
-            Reload
-          </Button>
-        </section>
+        <>
+          <header className="memory-detail__header">
+            <div className="memory-detail__title">
+              <h2>Personal Memory</h2>
+              <Badge tone={running ? "warning" : "neutral"}>
+                {state.status}
+              </Badge>
+              {running ? (
+                <span className="memory-detail__running">
+                  Consolidating memories…
+                </span>
+              ) : null}
+            </div>
+            <div className="memory-detail__actions">
+              <label className="memory-autodream">
+                <Input
+                  type="checkbox"
+                  checked={state.autoDream ?? false}
+                  disabled={blocked}
+                  onChange={(event) =>
+                    void mutate(() =>
+                      apiClient.setMemorySettings(event.target.checked),
+                    )
+                  }
+                />
+                Auto consolidation
+              </label>
+              <Button
+                variant="secondary"
+                disabled={pending}
+                onClick={() => setReload((value) => value + 1)}
+              >
+                Refresh
+              </Button>
+              {running ? (
+                <Button
+                  variant="secondary"
+                  loading={cancelPending}
+                  onClick={() => void cancelOperation()}
+                >
+                  Cancel
+                </Button>
+              ) : null}
+              {state.status === "repairing" ? (
+                <Button
+                  variant="secondary"
+                  loading={repairPending}
+                  onClick={() => void repair()}
+                >
+                  Repair
+                </Button>
+              ) : null}
+            </div>
+          </header>
+          <p className="memory-detail__meta">
+            <span>
+              ID: <span className="memory-mono">{list?.store.id ?? "…"}</span>
+            </span>
+            {list ? (
+              <>
+                <span>
+                  Memories: {list.capacity.count} (
+                  {formatBytes(list.capacity.bytes)})
+                </span>
+                <span>Sessions: {list.sessionCount}</span>
+                <span>Updated: {formatDateTime(list.store.updatedAt)}</span>
+              </>
+            ) : null}
+          </p>
+        </>
       ) : null}
-      {usage ? (
-        <section className="settings-section" aria-label="Memory capacity">
-          <h2>Capacity</h2>
-          <p>
-            {usage.count} / 2,000 entries ({(usage.countRatio * 100).toFixed(1)}
-            %)
-          </p>
-          <p>
-            {usage.bytes} bytes total; largest entry {usage.maxEntryBytes} /
-            102,400 bytes ({((usage.maxEntryBytes / 102400) * 100).toFixed(1)}%)
-          </p>
-          <p>
-            Byte budget:{" "}
-            {usage.byteRatio === null
-              ? "Not configured"
-              : `${(usage.byteRatio * 100).toFixed(1)}%`}
-            . Level: {usage.level}. Target: {usage.targetCount} entries.
-          </p>
-        </section>
-      ) : null}
-      <section className="settings-section" aria-label="Memory maintenance">
-        <Button
-          disabled={blocked}
-          onClick={() => void mutate(apiClient.dreamMemory, "Dream")}
-        >
-          Dream
-        </Button>
-        <Button
-          variant="secondary"
-          disabled={blocked}
-          onClick={() => void mutate(apiClient.compressMemory, "Compress")}
-        >
-          Compress
-        </Button>
-        <Field label="Automatic Dream">
-          <Input
-            type="checkbox"
-            checked={state?.autoDream ?? false}
-            disabled={blocked}
-            onChange={(event) =>
-              void mutate(() =>
-                apiClient.setMemorySettings(event.target.checked),
-              )
-            }
-          />
-        </Field>
-      </section>
+
       {!list ? (
         error ? (
           <EmptyState
-            title="Memory unavailable"
+            title="Memory Store unavailable"
             action={
               <Button onClick={() => setReload((value) => value + 1)}>
                 Retry
               </Button>
             }
           />
-        ) : (
-          <Spinner label="Loading memory" />
-        )
+        ) : null
       ) : (
-        <section className="settings-section" aria-label="Memory directory">
-          <h2>Directory</h2>
-          {list.entries.length ? (
-            <ul aria-label="Memory entries">
-              {list.entries.map((entry) => (
-                <li key={entry.path}>
+        <div className="memory-detail__body">
+          <aside className="memory-tree" aria-label="Memory files">
+            <div className="memory-tree__head">
+              <span>Files</span>
+              <span className="memory-tree__count">{entries.length}</span>
+            </div>
+            <PathTree
+              nodes={tree}
+              selectedPath={editor?.path ?? null}
+              disabled={pending}
+              onSelect={(node) => {
+                const entry = entries.find((item) => item.path === node.path);
+                if (!entry) return;
+                setEditor(entry);
+                setExisting(true);
+                setFeedback(null);
+              }}
+            />
+            <div className="memory-tree__footer">
+              <Button
+                variant="text"
+                disabled={blocked}
+                onClick={() => {
+                  setEditor({ path: "", content: "" });
+                  setExisting(false);
+                  setFeedback(null);
+                }}
+              >
+                + New memory
+              </Button>
+            </div>
+          </aside>
+
+          <section className="memory-editor" aria-label="Memory editor">
+            {editor ? (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void mutate(() => apiClient.writeMemory(editor), "Save");
+                }}
+              >
+                <Field
+                  label="Path"
+                  hint="Use /memories/, /procedures/, /episodes/, or /resources/."
+                >
+                  <Input
+                    value={editor.path}
+                    required
+                    maxLength={512}
+                    disabled={blocked || existing}
+                    onChange={(event) =>
+                      setEditor({ ...editor, path: event.target.value })
+                    }
+                  />
+                </Field>
+                <Field label="Content">
+                  <Textarea
+                    rows={16}
+                    value={editor.content}
+                    disabled={blocked}
+                    onChange={(event) =>
+                      setEditor({ ...editor, content: event.target.value })
+                    }
+                  />
+                </Field>
+                <Field label="Protected">
+                  <Input
+                    type="checkbox"
+                    checked={
+                      state?.protectedPaths.includes(editor.path) ?? false
+                    }
+                    disabled={blocked || !existing}
+                    onChange={(event) =>
+                      void mutate(() =>
+                        apiClient.protectMemory(
+                          editor.path,
+                          event.target.checked,
+                        ),
+                      )
+                    }
+                  />
+                </Field>
+                <div className="memory-editor__actions">
                   <Button
-                    variant="text"
-                    disabled={pending || running}
-                    onClick={() => {
-                      setEditor(entry);
-                      setExisting(true);
-                      setFeedback(null);
-                    }}
+                    type="submit"
+                    disabled={blocked || !editor.path}
+                    loading={pending}
                   >
-                    {entry.path}
+                    Save
                   </Button>
-                  {state?.protectedPaths.includes(entry.path) ? (
-                    <Badge>Protected</Badge>
+                  {existing ? (
+                    <Button
+                      variant="danger"
+                      disabled={blocked}
+                      onClick={() =>
+                        void mutate(
+                          () => apiClient.removeMemory(editor.path),
+                          "Delete",
+                        )
+                      }
+                    >
+                      Delete
+                    </Button>
                   ) : null}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <EmptyState title="No memory entries yet." />
-          )}
-        </section>
+                </div>
+              </form>
+            ) : (
+              <EmptyState title="Select a file from the tree to view or edit it." />
+            )}
+          </section>
+        </div>
       )}
-      {editor ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            void mutate(() => apiClient.writeMemory(editor), "Save");
-          }}
-        >
-          <Field
-            label="Path"
-            hint="Use /memories/, /resources/, or /sessions/."
-          >
-            <Input
-              value={editor.path}
-              required
-              maxLength={512}
-              disabled={blocked || existing}
-              onChange={(event) =>
-                setEditor({ ...editor, path: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Content">
-            <Textarea
-              rows={16}
-              value={editor.content}
-              disabled={blocked}
-              onChange={(event) =>
-                setEditor({ ...editor, content: event.target.value })
-              }
-            />
-          </Field>
-          <Field label="Protected">
-            <Input
-              type="checkbox"
-              checked={state?.protectedPaths.includes(editor.path) ?? false}
-              disabled={blocked || !existing}
-              onChange={(event) =>
-                void mutate(() =>
-                  apiClient.protectMemory(editor.path, event.target.checked),
-                )
-              }
-            />
-          </Field>
-          <Button
-            type="submit"
-            disabled={blocked || !editor.path}
-            loading={pending}
-          >
-            Save
-          </Button>
-          {existing ? (
-            <Button
-              variant="danger"
-              disabled={blocked}
-              onClick={() =>
-                void mutate(() => apiClient.removeMemory(editor.path), "Delete")
-              }
-            >
-              Delete
-            </Button>
-          ) : null}
-        </form>
-      ) : null}
     </div>
   );
 }

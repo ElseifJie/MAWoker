@@ -1,0 +1,2 @@
+ALTER TABLE "user_memory_stores" ADD COLUMN "created_at" timestamp with time zone DEFAULT now() NOT NULL;--> statement-breakpoint
+ALTER TABLE "user_memory_stores" ADD COLUMN "updated_at" timestamp with time zone DEFAULT now() NOT NULL;

@@ -7,6 +7,10 @@ import {
   PLATFORM_AGENT_TOOLSET_ID,
   type PlatformAgentStatus,
 } from "./platform-agents.js";
+import {
+  MEMORY_STORE_FRAMEWORK_PROMPT,
+  withMemoryFramework,
+} from "./memory.js";
 import { ResourceNotFoundError } from "./errors.js";
 import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
 
@@ -224,8 +228,9 @@ function createCorrelationId(id: string): string {
 const AUTO_DEFAULT_AGENT_NAME = "My Agent";
 const AUTO_DEFAULT_AGENT_DESCRIPTION =
   "Your personal default Agent. Created from the platform default and kept in sync with your Skills.";
-const AUTO_DEFAULT_AGENT_PROMPT =
+const AUTO_DEFAULT_AGENT_BASE_PROMPT =
   "You are a helpful personal work agent. Complete the user's task with the tools and Skills available to you.";
+const AUTO_DEFAULT_AGENT_PROMPT = `${AUTO_DEFAULT_AGENT_BASE_PROMPT}\n\n${MEMORY_STORE_FRAMEWORK_PROMPT}`;
 
 /**
  * Order-insensitive binding equality: the sync rewrites the binding list in a
@@ -420,6 +425,18 @@ export class UserAgentService {
     const existing = await this.dependencies.repository.findAutoDefault(userId);
     if (existing) {
       if (existing.status !== "active") return existing;
+      // The framework prompt is platform-owned: re-assert it so every default
+      // Agent carries the current Memory Store conventions.
+      if (
+        !existing.arkAgentId.startsWith("pending:") &&
+        existing.systemPrompt !== AUTO_DEFAULT_AGENT_PROMPT
+      ) {
+        return this.update(
+          existing.id,
+          { systemPrompt: AUTO_DEFAULT_AGENT_PROMPT, arkVersion: existing.arkVersion },
+          context,
+        );
+      }
       return existing;
     }
     const template =
@@ -627,10 +644,16 @@ export class UserAgentService {
     const upstream = await this.dependencies.ark.getAgent(current.arkAgentId, {
       correlationId: context.requestId,
     });
+    // Upstream echoes the composed instructions, so the expectation for echo
+    // comparisons carries the framework too.
+    const upstreamDesired = {
+      ...desired,
+      systemPrompt: withMemoryFramework(desired.systemPrompt),
+    };
     let resolved = upstream;
     if (
       upstream.version === Number(intent.arkVersion) &&
-      (!this.matchesConfiguration(upstream, desired) || !skillsMatch)
+      (!this.matchesConfiguration(upstream, upstreamDesired) || !skillsMatch)
     ) {
       resolved = await this.dependencies.ark.updateAgent(
         current.arkAgentId,
@@ -642,7 +665,7 @@ export class UserAgentService {
       );
     } else if (
       upstream.version < Number(intent.arkVersion) ||
-      !this.matchesConfiguration(upstream, desired) ||
+      !this.matchesConfiguration(upstream, upstreamDesired) ||
       !skillsMatch
     ) {
       throw new AgentConflictError();
@@ -799,7 +822,9 @@ export class UserAgentService {
       name: input.name,
       description: input.description,
       modelId: input.modelId,
-      systemPrompt: input.systemPrompt,
+      // The stored prompt stays the user's own; the Memory Store framework is
+      // attached here on every upstream write so it cannot be edited away.
+      systemPrompt: withMemoryFramework(input.systemPrompt),
       // Domain bindings carry both local and upstream ids; the gateway only
       // speaks upstream ids.
       skills: input.skills?.map((skill) => ({

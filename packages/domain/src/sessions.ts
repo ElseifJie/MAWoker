@@ -199,6 +199,18 @@ function createOperationId(id: string): string {
   return `session-create:${id}`;
 }
 
+/** The session-level end_turn marker: a completed assistant turn. */
+function turnEnded(event: ArkEvent): boolean {
+  const stop = event.data?.stop_reason;
+  return (
+    (event.type === "session.status_idle" || event.type === "session.status") &&
+    typeof stop === "object" &&
+    stop !== null &&
+    "type" in stop &&
+    stop.type === "end_turn"
+  );
+}
+
 const liveEventBufferCapacity = 100;
 /** Events written per insert while copying the upstream history into the log. */
 const storedEventBatchSize = 50;
@@ -284,6 +296,7 @@ export class SessionService {
       memory?: {
         ensure(userId: string): Promise<string>;
         gate(userId: string): Promise<void>;
+        expedite?(userId: string): Promise<void>;
       };
       createId: () => string;
       now?: () => Date;
@@ -400,6 +413,11 @@ export class SessionService {
       (this.dependencies.now ?? (() => new Date()))(),
     );
     if (!session) throw new ResourceNotFoundError();
+    // Archiving is a natural consolidation point: expedite the memory
+    // monitor fire-and-forget so the session's increments settle soon.
+    if (session.memoryStoreId != null) {
+      void this.dependencies.memory?.expedite?.(userId).catch(() => undefined);
+    }
     return session;
   }
 
@@ -633,6 +651,11 @@ export class SessionService {
         });
     const projectEvent = (source: ArkEvent) =>
       this.projectEvent(session, source, context.userId);
+    // The iterator below is a standalone generator object: capture what it
+    // needs here, `this` does not reach inside.
+    const memoryHooks = this.dependencies.memory;
+    const memoryUserId = context.userId;
+    const memorySessionStoreId = session.memoryStoreId;
     const toStoredEvent = (item: StoredSessionEvent) =>
       this.storedToUiEvent(item);
     const writeBatch = async (events: UiEvent[]) => {
@@ -691,6 +714,14 @@ export class SessionService {
               if (seen.has(source.id)) continue;
               seen.add(source.id);
               const projected = await projectEvent(source);
+              // Turn boundary reached while the user is watching: expedite
+              // memory consolidation fire-and-forget, never blocking the
+              // stream. Absent viewers fall back to the monitor interval.
+              if (memorySessionStoreId != null && turnEnded(source)) {
+                void memoryHooks
+                  ?.expedite?.(memoryUserId)
+                  .catch(() => undefined);
+              }
               if (isPublicSessionEvent(source.type)) {
                 pending.push(normalizeArkEvent(source));
                 for (const event of await drain()) yield event;

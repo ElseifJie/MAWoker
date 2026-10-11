@@ -2572,6 +2572,11 @@ select:not(.ui-select):hover {
   font-size: 0.84rem;
 }
 
+.settings-list dd .ui-select {
+  width: 100%;
+  max-width: 280px;
+}
+
 /* Stacked mode: separators only, since the record is single-column by default. */
 @container admin-users (max-width: 699px) {
   .admin-user-group + .admin-user-group {
@@ -3520,5 +3525,214 @@ select:not(.ui-select):hover {
 
   .skills-search {
     max-width: none;
+  }
+}
+
+/* Memory Store list and detail (Context) */
+
+.memory-store-table {
+  margin-top: var(--ui-space-4);
+}
+
+.memory-store-row {
+  cursor: pointer;
+}
+
+.memory-store-row:hover {
+  background: var(--ui-color-surface-subtle);
+}
+
+.memory-store-name {
+  display: block;
+  color: var(--ui-color-text);
+  font-weight: 590;
+}
+
+.memory-store-id {
+  display: block;
+  color: var(--ui-color-text-muted);
+  font-size: 0.78rem;
+  font-family: var(--ui-font-mono, monospace);
+}
+
+.memory-store-count {
+  display: inline-block;
+  min-width: 24px;
+  padding: 1px 8px;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-small);
+  color: var(--ui-color-text);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.memory-back {
+  align-self: flex-start;
+  margin-bottom: var(--ui-space-2);
+  padding-inline: 0;
+}
+
+.memory-detail {
+  gap: var(--ui-space-3);
+}
+
+.memory-detail__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.memory-detail__title {
+  display: flex;
+  gap: var(--ui-space-3);
+  align-items: center;
+}
+
+.memory-detail__title h2 {
+  margin: 0;
+  color: var(--ui-color-text);
+  font-size: 1.25rem;
+  font-weight: 640;
+}
+
+.memory-detail__running {
+  color: var(--ui-color-text-muted);
+  font-size: 0.84rem;
+}
+
+.memory-detail__actions {
+  display: flex;
+  gap: var(--ui-space-3);
+  align-items: center;
+}
+
+.memory-autodream {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--ui-color-text-muted);
+  font-size: 0.84rem;
+}
+
+.memory-autodream input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.memory-detail__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-4);
+  margin: 0;
+  color: var(--ui-color-text-muted);
+  font-size: 0.84rem;
+}
+
+.memory-mono {
+  font-family: var(--ui-font-mono, monospace);
+}
+
+.memory-detail__body {
+  display: grid;
+  min-height: 480px;
+  grid-template-columns: 260px 1fr;
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-medium);
+  overflow: hidden;
+}
+
+.memory-tree {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--ui-color-border);
+  background: var(--ui-color-surface-subtle);
+}
+
+.memory-tree__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ui-color-border);
+  color: var(--ui-color-text);
+  font-size: 0.84rem;
+  font-weight: 590;
+}
+
+.memory-tree__count {
+  color: var(--ui-color-text-muted);
+  font-weight: 400;
+}
+
+.memory-tree__nodes {
+  flex: 1;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.memory-tree__row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--ui-radius-small, 6px);
+  background: none;
+  color: var(--ui-color-text);
+  font: inherit;
+  font-size: 0.84rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.memory-tree__row--folder {
+  color: var(--ui-color-text);
+  font-weight: 590;
+}
+
+.memory-tree__row--file {
+  padding-left: 34px;
+  color: var(--ui-color-text-muted);
+}
+
+.memory-tree__row--file.is-selected {
+  background: var(--ui-color-accent-subtle);
+  color: var(--ui-color-accent);
+}
+
+.memory-tree__row:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.memory-tree__footer {
+  padding: 8px 6px;
+  border-top: 1px solid var(--ui-color-border);
+}
+
+.memory-editor {
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.memory-editor__actions {
+  display: flex;
+  gap: var(--ui-space-3);
+  margin-top: var(--ui-space-3);
+}
+
+@media (max-width: 900px) {
+  .memory-detail__body {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-tree {
+    max-height: 260px;
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-color-border);
   }
 }

@@ -9,6 +9,7 @@ import {
   InvalidModelError,
   PlatformAgentService,
   ResourceNotFoundError,
+  withMemoryFramework,
   type PlatformAgentRecord,
   type PlatformAgentRepository,
 } from "../packages/domain/src/index.js";
@@ -174,6 +175,8 @@ describe("PlatformAgentService", () => {
       operation: "createAgent",
       input: {
         ...input,
+        // Preset Agents carry the platform-owned Memory Store framework.
+        systemPrompt: withMemoryFramework(input.systemPrompt),
         toolsetId: "agent_toolset_20260701",
         toolPermission: "always_allow",
       },
@@ -419,5 +422,47 @@ describe("PlatformAgentService", () => {
         errorCode: "VALIDATION_FAILED",
       }),
     );
+  });
+  it("provisions the Memory Store at user creation without failing the account", async () => {
+    const state = createRepository();
+    const ensured: string[] = [];
+    let memoryDown = false;
+    const repository = {
+      ...state.repository,
+      async createUser(
+        input: Parameters<PlatformAgentRepository["createUser"]>[0],
+      ) {
+        return { id: input.id };
+      },
+    };
+    const service = new PlatformAgentService({
+      repository,
+      ark: new InMemoryArkGateway(),
+      modelAllowlist: ["model-a"],
+      createId: () => agentId,
+      passwordHasher: {
+        hash: async (password: string) => `hashed:${password}`,
+      },
+      memory: {
+        ensure: async (id: string) => {
+          if (memoryDown) throw new Error("ark down");
+          ensured.push(id);
+          return "store-1";
+        },
+      },
+    });
+
+    const created = await service.createUser(
+      { email: "new@example.com", password: "long-password" },
+      { adminId, requestId },
+    );
+    expect(ensured).toEqual([created.id]);
+
+    memoryDown = true;
+    const resilient = await service.createUser(
+      { email: "other@example.com", password: "long-password" },
+      { adminId, requestId },
+    );
+    expect(resilient.status).toBe("active");
   });
 });

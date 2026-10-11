@@ -149,6 +149,12 @@ export const userMemoryStores = pgTable("user_memory_stores", {
   fixedStoreId: text("fixed_store_id").unique(),
   state: jsonb("state").notNull(),
   revision: integer("revision").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
 });
 
 export const platformAgents = pgTable(

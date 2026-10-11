@@ -9,6 +9,7 @@ import {
   AgentConflictError,
   AgentReferencedError,
   InvalidModelError,
+  MEMORY_STORE_FRAMEWORK_PROMPT,
   NoDefaultAgentError,
   PersonalAgentQuotaExceededError,
   ResourceNotFoundError,
@@ -382,10 +383,31 @@ describe("UserAgentService", () => {
         name: "My Agent",
         description: "Shared",
         modelId: "model-a",
-        systemPrompt:
-          "You are a helpful personal work agent. Complete the user's task with the tools and Skills available to you.",
+        systemPrompt: expect.stringContaining(MEMORY_STORE_FRAMEWORK_PROMPT),
       },
     });
+  });
+
+  it("re-asserts the built-in framework prompt when a default Agent drifts", async () => {
+    const state = createRepository();
+    const { service, ark } = createService(state.repository);
+    const context = { userId, requestId };
+    const created = await service.ensureAutoDefault(userId, [], context);
+    const customized = state.personal.get(created.id)!;
+    customized.systemPrompt = "A user's custom prompt.";
+
+    const reconciled = await service.ensureAutoDefault(userId, [], context);
+    expect(reconciled.systemPrompt).toBe(
+      `You are a helpful personal work agent. Complete the user's task with the tools and Skills available to you.\n\n${MEMORY_STORE_FRAMEWORK_PROMPT}`,
+    );
+    expect(ark.calls.some((call) => call.operation === "updateAgent")).toBe(
+      true,
+    );
+
+    await service.ensureAutoDefault(userId, [], context);
+    expect(
+      ark.calls.filter((call) => call.operation === "updateAgent"),
+    ).toHaveLength(1);
   });
 
   it("creates with the fixed toolset and enforces model and personal quota", async () => {
@@ -403,6 +425,7 @@ describe("UserAgentService", () => {
       operation: "createAgent",
       input: {
         ...input,
+        systemPrompt: expect.stringContaining(MEMORY_STORE_FRAMEWORK_PROMPT),
         toolsetId: "agent_toolset_20260701",
         toolPermission: "always_allow",
       },

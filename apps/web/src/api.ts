@@ -136,10 +136,17 @@ export interface MemoryState {
   } | null;
 }
 
+export interface MemoryStoreInfo {
+  id: string;
+  updatedAt: string | null;
+}
+
 export interface MemoryList {
   entries: MemoryEntry[];
   capacity: MemoryCapacity;
   state: MemoryState;
+  store: MemoryStoreInfo;
+  sessionCount: number;
 }
 
 export interface SessionSummary {
@@ -641,9 +648,10 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ path, protected: protectedValue }),
     }),
-  dreamMemory: () => request<MemoryState>("/memory/dream", { method: "POST" }),
-  compressMemory: () =>
-    request<MemoryState>("/memory/compress", { method: "POST" }),
+  recoverMemory: () =>
+    request<MemoryState>("/memory/recover", { method: "POST" }),
+  cancelMemory: () =>
+    request<MemoryState>("/memory/cancel", { method: "POST" }),
   setMemorySettings: (autoDream: boolean) =>
     request<MemoryState>("/memory/settings", {
       method: "PATCH",

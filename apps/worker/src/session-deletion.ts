@@ -160,6 +160,16 @@ export class SessionDeletionProcessor {
       jobs: SessionDeletionJobs;
       repository: SessionDeletionRepository;
       ark: Pick<ArkGateway, "getSession" | "submitEvent" | "deleteSession">;
+      /**
+       * The memory fence: ended sessions must have their increments captured
+       * into the episodic digest before the upstream record is deleted.
+       */
+      memory?: {
+        fenceDeletion(
+          userId: string,
+          arkSessionId: string,
+        ): Promise<"clear" | "capturing">;
+      };
       workerId: string;
       now?: () => Date;
       batchSize?: number;
@@ -240,6 +250,16 @@ export class SessionDeletionProcessor {
       }
 
       if (!payload.completed.arkDeleted) {
+        // The memory fence re-runs on every attempt until "clear": the
+        // capture edit run it plans is applied by the memory loop in this
+        // same worker, so waiting here is bounded by consolidation progress.
+        const fence = await this.dependencies.memory?.fenceDeletion(
+          ownerUserId,
+          session.arkSessionId,
+        );
+        if (fence === "capturing") {
+          throw new SessionStillRunningError();
+        }
         try {
           await this.dependencies.ark.deleteSession(session.arkSessionId, {
             correlationId: `worker:${job.id}:${job.attempts}:delete`,

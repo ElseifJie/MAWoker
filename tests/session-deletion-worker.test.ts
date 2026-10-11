@@ -230,6 +230,50 @@ describe("SessionDeletionProcessor", () => {
     expect(state.ark.submitEvent).toHaveBeenCalledTimes(2);
   });
 
+  it("holds deletion while the memory fence is capturing increments", async () => {
+    const fence = vi
+      .fn()
+      .mockResolvedValueOnce("capturing")
+      .mockResolvedValueOnce("clear");
+    const state = setup();
+    const processor = new SessionDeletionProcessor({
+      jobs: state.jobs,
+      repository: state.repository,
+      ark: state.ark,
+      memory: { fenceDeletion: fence },
+      workerId: "worker-1",
+      now: () => timestamp,
+    });
+
+    await processor.runOnce();
+
+    // The fence gates the Ark deletion specifically: capture lands in the
+    // episodic digest first, deletion retries as waiting.
+    expect(fence).toHaveBeenCalledWith(ownerUserId, "ark-session-1");
+    expect(state.ark.deleteSession).not.toHaveBeenCalled();
+    expect(state.jobs.retry).toHaveBeenCalledWith(
+      sessionId,
+      "worker-1",
+      "SESSION_DELETE_WAITING",
+      false,
+    );
+
+    state.jobs.claim.mockResolvedValueOnce([
+      job({
+        attempts: 2,
+        payload: {
+          sessionId,
+          completed: { interruptRequested: true, nonRunningObserved: true },
+        },
+      }),
+    ]);
+    await processor.runOnce();
+
+    expect(fence).toHaveBeenCalledTimes(2);
+    expect(state.ark.deleteSession).toHaveBeenCalledOnce();
+    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1");
+  });
+
   it("rejects malformed and ownerless jobs before tenant or provider access", async () => {
     const state = setup();
     state.jobs.claim.mockResolvedValueOnce([

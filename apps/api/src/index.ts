@@ -39,12 +39,15 @@ const ark = new HttpArkGateway({
   baseDelayMs: config.ark.retryBaseDelayMs,
   maxDelayMs: config.ark.retryMaxDelayMs,
 });
-const systemAgents = await resolveSystemAgents({
+// Resolve System Agent metadata before serving requests so startup fails closed.
+const configuredSystemAgents = await resolveSystemAgents({
   agentIds: config.systemAgentIds,
   ark,
   modelAllowlist: config.modelAllowlist,
 });
-await repositories.platformAgents.synchronizeSystemAgents(systemAgents);
+await repositories.platformAgents.synchronizeSystemAgents(
+  configuredSystemAgents,
+);
 const artifactStorage = createTosArtifactStorage(config.tos);
 const isProduction = config.nodeEnv === "production";
 const auth = new ApplicationSessionService({
@@ -57,6 +60,16 @@ const userAgents = new UserAgentService({
   createId: randomUUID,
 });
 const notifier = new LoggingNotifier();
+const memory = new MemoryService({
+  repository: repositories.memories,
+  ark,
+  modelId: config.memory.modelId,
+  monitorIntervalMs: config.memory.monitorIntervalMs,
+  cooldownMs: config.memory.cooldownMs,
+  ...(config.memory.byteBudget === undefined
+    ? {}
+    : { byteBudget: config.memory.byteBudget }),
+});
 const admin = new PlatformAgentService({
   repository: repositories.platformAgents as unknown as PlatformAgentRepository,
   ark,
@@ -65,6 +78,7 @@ const admin = new PlatformAgentService({
   passwordHasher: { hash: hashPassword },
   notifier,
   userAgentLister: () => repositories.adminAgents.listUserAgents(),
+  memory,
 });
 const adminUsage = new AdminUsageService({
   repository: {
@@ -87,16 +101,6 @@ const adminUserDetail = new AdminUserDetailService({
     summary: repositories.usage.summary,
   },
   audit,
-});
-const memory = new MemoryService({
-  repository: repositories.memories,
-  ark,
-  modelId: config.memory.modelId,
-  monitorIntervalMs: config.memory.monitorIntervalMs,
-  cooldownMs: config.memory.cooldownMs,
-  ...(config.memory.byteBudget === undefined
-    ? {}
-    : { byteBudget: config.memory.byteBudget }),
 });
 const sessions = new SessionService({
   repository: repositories.sessionLifecycle,

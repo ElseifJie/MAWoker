@@ -77,11 +77,11 @@ for (const user of Object.values(users)) {
 const storeId = await memory.ensure(users.A.id);
 // Model upstream event writes; compression must pack these real gateway entries.
 await ark.createMemory(storeId, {
-  path: "/memories/events/acceptance/one.md",
+  path: "/episodes/digest/acceptance/one.md",
   content: "First acceptance event: budget 8000.",
 });
 await ark.createMemory(storeId, {
-  path: "/memories/events/acceptance/two.md",
+  path: "/episodes/digest/acceptance/two.md",
   content: "Second acceptance event: review Friday.",
 });
 

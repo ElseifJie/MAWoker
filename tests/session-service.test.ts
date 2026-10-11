@@ -723,4 +723,42 @@ describe("SessionService", () => {
     expect(state.ark.submitEvent).toHaveBeenCalledTimes(1);
     expect(state.repository.audit).toHaveBeenCalledTimes(1);
   });
+
+  it("expedites memory consolidation on archive and on observed turn ends", async () => {
+    const state = setup();
+    const expedite = vi.fn(async () => {});
+    const service = new SessionService({
+      repository: state.repository,
+      agentResolver: { resolveForNewSession: state.resolveForNewSession },
+      ark: state.ark,
+      environmentId: "environment-1",
+      createId: () => sessionId,
+      now: () => now,
+      memory: { ensure: async () => "store-1", gate: async () => {}, expedite },
+    });
+
+    state.records.set(sessionId, session({ memoryStoreId: "store-1" }));
+    await service.archive(sessionId, userId);
+    expect(expedite).toHaveBeenCalledWith(userId);
+
+    // A completed turn observed on the live stream re-arms consolidation
+    // without blocking the event stream.
+    expedite.mockClear();
+    state.records.set(sessionId, session({ memoryStoreId: "store-1" }));
+    state.ark.streamEvents = vi.fn(async function* () {
+      yield {
+        id: "event-9",
+        type: "session.status_idle",
+        createdAt: now.toISOString(),
+        data: { stop_reason: { type: "end_turn" } },
+      };
+    });
+    const opened = await service.openEvents(sessionId, {
+      userId,
+      requestId: "request-events",
+    });
+    const events = opened.events[Symbol.asyncIterator]();
+    await events.next(); // the idle event crosses the expedite seam
+    expect(expedite).toHaveBeenCalledWith(userId);
+  });
 });

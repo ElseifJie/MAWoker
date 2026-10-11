@@ -102,27 +102,25 @@ test("production Context saves, protects, compresses and isolates personal memor
   await expect(
     page.getByRole("link", { name: "Context", exact: true }),
   ).toBeVisible();
-  const directory = page.getByRole("region", { name: "Memory directory" });
-  for (const path of ["/.abstract.md", "/.overview.md", profilePath]) {
-    await expect(
-      directory.getByRole("button", { name: path, exact: true }),
-    ).toBeVisible();
-  }
-  await expect(page.getByLabel("Automatic Dream")).not.toBeChecked();
+  await page.getByText("Personal Memory").click();
+  const tree = page.getByRole("region", { name: "Memory files" });
+  await expect(
+    tree.getByRole("button", { name: "memories", exact: true }),
+  ).toBeVisible();
+  await expect(
+    tree.getByRole("button", { name: "resources", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Auto consolidation")).not.toBeChecked();
 
-  await directory
-    .getByRole("button", { name: profilePath, exact: true })
-    .click();
+  await tree.getByRole("button", { name: "profile.md", exact: true }).click();
   await expect(page.getByLabel("Path", { exact: true })).toBeDisabled();
   await save(page, "User A confirms a preference for short technical reports.");
   await setProtected(page, true);
-  await expect(
-    directory.getByRole("listitem").filter({ hasText: profilePath }),
-  ).toContainText("Protected");
+  await expect(page.getByLabel("Protected", { exact: true })).toBeChecked();
   await setProtected(page, false);
   await setProtected(page, true);
 
-  await page.getByRole("button", { name: "New entry", exact: true }).click();
+  await page.getByRole("button", { name: "+ New memory", exact: true }).click();
   await page.getByLabel("Path", { exact: true }).fill(workflowPath);
   await save(page, workflowContent);
   await expect(page.getByLabel("Path", { exact: true })).toBeDisabled();
@@ -172,16 +170,16 @@ test("production Context saves, protects, compresses and isolates personal memor
     after.entries.find((entry) => entry.path === workflowPath)?.content,
   ).toBe(workflowContent);
   const packed = after.entries.filter((entry) =>
-    entry.path.startsWith("/memories/events/acceptance/"),
+    entry.path.startsWith("/episodes/digest/acceptance/"),
   );
   expect(packed).toHaveLength(1);
   for (const [path, content] of [
     [
-      "/memories/events/acceptance/one.md",
+      "/episodes/digest/acceptance/one.md",
       "First acceptance event: budget 8000.",
     ],
     [
-      "/memories/events/acceptance/two.md",
+      "/episodes/digest/acceptance/two.md",
       "Second acceptance event: review Friday.",
     ],
   ]) {
@@ -199,16 +197,15 @@ test("production Context saves, protects, compresses and isolates personal memor
   });
 
   await page.reload();
+  const tree = page.getByRole("region", { name: "Memory files" });
   await expect(
-    directory.getByRole("button", { name: workflowPath, exact: true }),
+    tree.getByRole("button", { name: "workflow.md", exact: true }),
   ).toBeVisible();
-  await directory
-    .getByRole("button", { name: workflowPath, exact: true })
-    .click();
+  await tree.getByRole("button", { name: "workflow.md", exact: true }).click();
   await expect(page.getByLabel("Content", { exact: true })).toHaveValue(
     workflowContent,
   );
-  await expect(page.getByLabel("Automatic Dream")).not.toBeChecked();
+  await expect(page.getByLabel("Auto consolidation")).toBeChecked();
 
   const other = await browser.newContext({
     baseURL: test.info().project.use.baseURL,
@@ -218,9 +215,12 @@ test("production Context saves, protects, compresses and isolates personal memor
     await signIn(otherPage, "b");
     const bMemory = await readMemory(other.request);
     expect(bMemory.entries.map((entry) => entry.path)).toEqual([
-      "/.abstract.md",
-      "/.overview.md",
-      profilePath,
+      "/episodes/handoff.md",
+      "/memories/.index.md",
+      "/memories/preferences.md",
+      "/memories/profile.md",
+      "/procedures/conventions.md",
+      "/resources/README.md",
     ]);
     expect(bMemory.state.protectedPaths).not.toContain(profilePath);
     expect(

@@ -1178,9 +1178,9 @@ export function createRepositories(database: unknown) {
           db,
           sql`select pa.*
                 from platform_agents pa
-                join user_default_agents uda
-                  on uda.platform_agent_id = pa.id
-               where uda.user_id = ${userId}
+                join users target on target.id = ${userId}
+               where target.status = 'active'
+                 and target.role = 'user'
                  and pa.id = ${platformAgentId}
                  and pa.status = 'active'
                limit 1`,
@@ -1702,11 +1702,11 @@ export function createRepositories(database: unknown) {
                          pa.ark_version as "arkVersion", pa.status,
                          'platform'::text as kind, false as editable,
                          false as "isAutoDefault", '[]'::json as skills,
-                         pa.created_at as "createdAt"
+                         pa.updated_at as "createdAt"
                     from platform_agents pa
-                    join user_default_agents uda
-                      on uda.platform_agent_id = pa.id
-                   where uda.user_id = ${userId}
+                    join users target on target.id = ${userId}
+                   where target.role = 'user'
+                     and target.status = 'active'
                      and pa.status = 'active'
                   union all
                   select ua.id, ua.ark_agent_id as "arkAgentId", ua.name,
@@ -1732,19 +1732,18 @@ export function createRepositories(database: unknown) {
                        else s.personal_agent_id
                      end as "agentId"
                 from sessions s
+                join users target on target.id = ${userId}
                 left join platform_agents pa
                   on pa.id = s.platform_agent_id
-                left join user_default_agents uda
-                  on uda.user_id = s.owner_user_id
-                 and uda.platform_agent_id = s.platform_agent_id
                 left join personal_agents ua
                   on ua.id = s.personal_agent_id
                  and ua.owner_user_id = s.owner_user_id
                where s.owner_user_id = ${userId}
+                 and target.role = 'user'
+                 and target.status = 'active'
                  and (
                    (s.agent_kind = 'platform'
-                    and pa.status = 'active'
-                    and uda.user_id is not null)
+                    and pa.status = 'active')
                    or
                    (s.agent_kind = 'personal' and ua.status = 'active')
                  )
@@ -1757,10 +1756,16 @@ export function createRepositories(database: unknown) {
         const assignment = await first<{ agentId: string }>(
           db,
           sql`select pa.id as "agentId"
-                from user_default_agents uda
-                join platform_agents pa on pa.id = uda.platform_agent_id
-               where uda.user_id = ${userId}
+                from platform_agents pa
+                join users target on target.id = ${userId}
+                left join user_default_agents uda
+                  on uda.platform_agent_id = pa.id
+                 and uda.user_id = ${userId}
+               where target.role = 'user'
+                 and target.status = 'active'
                  and pa.status = 'active'
+               order by (uda.user_id is not null) desc,
+                        pa.updated_at asc, pa.id asc
                limit 1`,
         );
         return assignment?.agentId;
@@ -1784,10 +1789,13 @@ export function createRepositories(database: unknown) {
           db,
           sql`select pa.name, pa.description, pa.model_id as "modelId"
                 from platform_agents pa
+                join users target on target.id = ${userId}
                 left join user_default_agents uda
                   on uda.platform_agent_id = pa.id
                  and uda.user_id = ${userId}
-               where pa.status = 'active'
+               where target.role = 'user'
+                 and target.status = 'active'
+                 and pa.status = 'active'
                order by (uda.user_id is not null) desc,
                         pa.updated_at asc, pa.id asc
                limit 1`,
@@ -1853,9 +1861,9 @@ export function createRepositories(database: unknown) {
                          'platform'::text as kind, false as editable,
                          false as "isAutoDefault", '[]'::json as skills
                     from platform_agents pa
-                    join user_default_agents uda
-                      on uda.platform_agent_id = pa.id
-                   where uda.user_id = ${userId}
+                    join users target on target.id = ${userId}
+                   where target.role = 'user'
+                     and target.status = 'active'
                      and pa.id = ${id}
                      and pa.status = 'active'
                   union all

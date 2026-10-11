@@ -39,10 +39,7 @@ export function validateMemory(path: string, content: string) {
     Buffer.from(content, "utf8").toString("utf8") !== content
   )
     throw new MemoryError("MEMORY_INVALID", "记忆路径或正文编码不符合接口规范");
-  if (
-    !/^\/(?:memories|resources|sessions)\/[^\\\0]+$/.test(path) &&
-    !["/.abstract.md", "/.overview.md"].includes(path)
-  )
+  if (!/^\/(?:memories|procedures|episodes|resources)\/[^\\\0]+$/.test(path))
     throw new MemoryError("MEMORY_INVALID", "记忆路径不在个人目录内");
   if (
     path
@@ -132,9 +129,12 @@ export function mergePlan(
       ...(latest ? { memoryId: latest.id } : {}),
     });
   }
-  // Navigation is published last. Candidate omission is never a deletion.
+  // Navigation (dotfile basenames) is published last. Candidate omission is
+  // never a deletion.
+  const isNavigation = (path: string) =>
+    path.split("/").some((part) => part.startsWith("."));
   return steps.sort(
-    (a, b) => Number(a.path.startsWith("/.")) - Number(b.path.startsWith("/.")),
+    (a, b) => Number(isNavigation(a.path)) - Number(isNavigation(b.path)),
   );
 }
 export function cleanPlan(
@@ -164,8 +164,9 @@ export function cleanPlan(
 }
 
 /** Lossless packing: source paths and exact bodies remain in the survivor.
- * Only event/trajectory siblings are eligible; profiles/entities are not mixed.
- * At a full Store this updates an existing entry before freeing any slots.
+ * Only episodic digest siblings are eligible; semantic facts and handoffs are
+ * not mixed. At a full Store this updates an existing entry before freeing any
+ * slots.
  */
 export function compactPlan(
   entries: MemoryText[],
@@ -177,7 +178,7 @@ export function compactPlan(
   for (const entry of entries) {
     if (protectedPaths.includes(entry.path) || removed.has(entry.path))
       continue;
-    if (!/^\/memories\/(?:events|trajectories)\//.test(entry.path)) continue;
+    if (!/^\/episodes\/digest\//.test(entry.path)) continue;
     const parent = entry.path.slice(0, entry.path.lastIndexOf("/"));
     const group = groups.get(parent) ?? [];
     group.push(entry);

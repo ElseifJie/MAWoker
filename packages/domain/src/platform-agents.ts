@@ -7,6 +7,7 @@ import {
   type ResetPasswordInput,
 } from "@pwa/contracts";
 import { ResourceNotFoundError } from "./errors.js";
+import { withMemoryFramework } from "./memory.js";
 import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
 import { QUOTA_NEAR_LIMIT_RATIO, type Notifier } from "./notifications.js";
 
@@ -341,6 +342,8 @@ export class PlatformAgentService {
       passwordHasher: PasswordHasher;
       notifier?: Notifier;
       userAgentLister?: (() => PromiseLike<AdminUserAgentRecord[]>) | undefined;
+      /** Provisions the user's Memory Store the moment their account exists. */
+      memory?: { ensure(userId: string): Promise<string> } | undefined;
     },
   ) {
     this.models = new Set(dependencies.modelAllowlist);
@@ -817,6 +820,7 @@ export class PlatformAgentService {
         createdBy: context.adminId,
       });
       if (!created) throw new UserEmailConflictError();
+      await this.provisionMemoryStore(created.id);
       await this.audit(context, "user.create", created.id, "succeeded", {
         ownerUserId: created.id,
       });
@@ -831,6 +835,20 @@ export class PlatformAgentService {
               : "USER_CREATE_FAILED",
       });
       throw error;
+    }
+  }
+
+  /**
+   * Every user owns a Memory Store from birth. The reservation row is already
+   * durable, so an upstream failure leaves a reconciling store that `ensure`
+   * repairs on first access — account creation must never fail for it.
+   */
+  private async provisionMemoryStore(userId: string): Promise<void> {
+    if (!this.dependencies.memory) return;
+    try {
+      await this.dependencies.memory.ensure(userId);
+    } catch {
+      // The reserved row reconciles against the Store on next access.
     }
   }
 
@@ -878,6 +896,9 @@ export class PlatformAgentService {
   private arkInput(input: AgentConfiguration): ArkAgentInput {
     return {
       ...input,
+      // Preset Agents host user memory sessions: the framework prompt rides
+      // on every upstream write; the stored prompt stays the admin's own.
+      systemPrompt: withMemoryFramework(input.systemPrompt),
       toolsetId: PLATFORM_AGENT_TOOLSET_ID,
       toolPermission: PLATFORM_AGENT_TOOL_PERMISSION,
     };

@@ -473,7 +473,7 @@ describe("repositories in PGlite", () => {
       undefined,
       undefined,
       undefined,
-      undefined,
+      expect.objectContaining({ id: platformAgentId }),
     ]);
 
     await database.client.query(

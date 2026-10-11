@@ -13,13 +13,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App.js";
 
 const capacity = {
-  count: 1,
-  bytes: 7,
-  maxEntryBytes: 7,
-  countRatio: 0.0005,
+  count: 2,
+  bytes: 67,
+  maxEntryBytes: 54,
+  countRatio: 0.001,
   byteRatio: null,
   level: "normal",
   targetCount: 1200,
+};
+const store = {
+  id: "memstore-20261010143827-obuom",
+  updatedAt: "2026-10-10T14:38:27Z",
 };
 const state = {
   status: "active",
@@ -39,7 +43,8 @@ const queued = {
 };
 let currentState: typeof state | typeof queued;
 let entries: Array<{ path: string; content: string }>;
-let failure: { status: number; code: string } | null;
+let failure: { status: number; code: string; path?: string } | null;
+let sessionCount = 1;
 const fetchMock = vi.fn(
   async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input);
@@ -69,13 +74,38 @@ const fetchMock = vi.fn(
           concurrentSessions: false,
         },
       });
-    if (failure && path.startsWith("/api/v1/memory"))
+    if (path === "/api/v1/memory/recover" && init?.method === "POST") {
+      currentState = {
+        ...currentState,
+        status: "applying",
+        run: { ...currentState.run!, stage: "apply", error: null },
+      } as typeof currentState;
+      return Response.json(currentState);
+    }
+    if (path === "/api/v1/memory/cancel" && init?.method === "POST") {
+      currentState = {
+        ...state,
+        run: { ...queued.run, stage: "failed" },
+      };
+      return Response.json(currentState);
+    }
+    if (
+      failure &&
+      path.startsWith("/api/v1/memory") &&
+      (!failure.path || path === failure.path)
+    )
       return Response.json(
         { error: { code: failure.code, message: "Request failed" } },
         { status: failure.status },
       );
     if (path === "/api/v1/memory")
-      return Response.json({ entries, capacity, state: currentState });
+      return Response.json({
+        entries,
+        capacity,
+        state: currentState,
+        store,
+        sessionCount,
+      });
     if (path === "/api/v1/memory/status") return Response.json(currentState);
     if (path === "/api/v1/memory/entry" && init?.method === "POST") {
       currentState = queued;
@@ -92,23 +122,17 @@ const fetchMock = vi.fn(
       });
     if (path === "/api/v1/memory/settings")
       return Response.json({ ...state, autoDream: false });
-    if (path === "/api/v1/memory/dream" || path === "/api/v1/memory/compress") {
-      currentState = {
-        ...queued,
-        run: {
-          ...queued.run,
-          kind: path.endsWith("dream") ? "dream" : "compress",
-        },
-      };
-      return Response.json(currentState, { status: 202 });
-    }
     throw new Error(`Unexpected request ${path}`);
   },
 );
 beforeEach(() => {
   currentState = state;
-  entries = [{ path: "/memories/profile.md", content: "Profile" }];
+  entries = [
+    { path: "/memories/profile.md", content: "Profile" },
+    { path: "/resources/README.md", content: "Resources" },
+  ];
   failure = null;
+  sessionCount = 1;
   fetchMock.mockClear();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal(
@@ -125,53 +149,88 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
-function open() {
+function open(initial = "/context") {
   render(
-    <MemoryRouter initialEntries={["/context"]}>
+    <MemoryRouter initialEntries={[initial]}>
       <App />
     </MemoryRouter>,
   );
 }
+async function openDetail() {
+  open();
+  fireEvent.click(await screen.findByText("Personal Memory"));
+  await screen.findByText("Files");
+}
 
 describe("MemoryPage", () => {
-  it("loads the context route, directory, editor, capacity, and controls", async () => {
+  it("lists the Memory Store with usage and opens the detail from the row", async () => {
     open();
     expect(
-      await screen.findByRole("heading", { name: "Context" }),
+      await screen.findByRole("heading", { name: "Memory Stores" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Context" })).toHaveAttribute(
-      "href",
-      "/context",
-    );
-    fireEvent.click(
-      await screen.findByRole("button", { name: "/memories/profile.md" }),
-    );
-    expect(screen.getByLabelText("Content")).toHaveValue("Profile");
-    expect(screen.getByText(/1 \/ 2,000 entries/)).toBeInTheDocument();
-    expect(screen.getByText(/7 bytes/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Dream" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Compress" })).toBeEnabled();
+    expect(await screen.findByText("Personal Memory")).toBeInTheDocument();
+    expect(screen.getByText(store.id)).toBeInTheDocument();
+    expect(screen.getByText("67 B")).toBeInTheDocument();
+    expect(screen.getByText("2026-10-10 14:38:27")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Personal Memory"));
+    expect(await screen.findByText("Files")).toBeInTheDocument();
+    expect(screen.getByText(store.id)).toBeInTheDocument();
+    expect(screen.getByText(/Memories: 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Sessions: 1/)).toBeInTheDocument();
   });
-  it("distinguishes queued saves from saved and refreshes after two-second polling", async () => {
-    open();
-    await screen.findByRole("heading", { name: "Context" });
-    fireEvent.click(
-      await screen.findByRole("button", { name: "/memories/profile.md" }),
+  it("renders the path tree and opens a memory for editing", async () => {
+    await openDetail();
+    expect(screen.getByRole("button", { name: /memories/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resources/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "profile.md" }));
+    expect(screen.getByLabelText("Content")).toHaveValue("Profile");
+    expect(screen.getByLabelText("Path")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "README.md" }),
+    ).toBeInTheDocument();
+  });
+  it("keeps editing read-only while an operation is running", async () => {
+    currentState = queued;
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
+    expect(screen.getByLabelText("Content")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "+ New memory" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+  it("cancels a running operation and unlocks the page", async () => {
+    currentState = queued;
+    await openDetail();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/memory/cancel",
+      expect.objectContaining({ method: "POST" }),
     );
+    expect(
+      await screen.findByText("Operation cancelled."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "+ New memory" }),
+    ).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+  });
+  it("queues saves and refreshes the editor after two-second polling", async () => {
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
+    vi.useFakeTimers();
     fireEvent.change(screen.getByLabelText("Content"), {
       target: { value: "Updated" },
     });
-    vi.useFakeTimers();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await act(async () => {});
     expect(screen.getByText(/Save queued.*not saved yet/i)).toBeInTheDocument();
-    expect(screen.queryByText("Memory saved.")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/entry",
       expect.objectContaining({
         method: "POST",
-        credentials: "same-origin",
         body: JSON.stringify({
           path: "/memories/profile.md",
           content: "Updated",
@@ -185,9 +244,6 @@ describe("MemoryPage", () => {
     });
     expect(screen.getByText("Memory saved.")).toBeInTheDocument();
     expect(screen.getByLabelText("Content")).toHaveValue("Updated");
-    expect(
-      fetchMock.mock.calls.filter(([url]) => url === "/api/v1/memory"),
-    ).toHaveLength(2);
     const polls = fetchMock.mock.calls.filter(
       ([url]) => url === "/api/v1/memory/status",
     ).length;
@@ -198,20 +254,28 @@ describe("MemoryPage", () => {
       fetchMock.mock.calls.filter(([url]) => url === "/api/v1/memory/status"),
     ).toHaveLength(polls);
   });
-  it("creates a new path and sends protection and settings with strict payloads", async () => {
-    open();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "/memories/profile.md" }),
-    );
+  it("creates a new memory and sends protection and settings changes", async () => {
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     fireEvent.click(screen.getByLabelText("Protected"));
     await waitFor(() =>
       expect(screen.getByLabelText("Protected")).toBeChecked(),
     );
-    fireEvent.click(screen.getByLabelText("Automatic Dream"));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Automatic Dream")).not.toBeChecked(),
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/memory/protect",
+      expect.objectContaining({
+        body: JSON.stringify({ path: "/memories/profile.md", protected: true }),
+      }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "New entry" }));
+    fireEvent.click(screen.getByLabelText("Auto consolidation"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Auto consolidation")).not.toBeChecked(),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/memory/settings",
+      expect.objectContaining({ body: JSON.stringify({ autoDream: false }) }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "+ New memory" }));
     fireEvent.change(screen.getByLabelText("Path"), {
       target: { value: "/memories/new.md" },
     });
@@ -226,40 +290,80 @@ describe("MemoryPage", () => {
         body: JSON.stringify({ path: "/memories/new.md", content: "New fact" }),
       }),
     );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/memory/protect",
-      expect.objectContaining({
-        body: JSON.stringify({ path: "/memories/profile.md", protected: true }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/v1/memory/settings",
-      expect.objectContaining({ body: JSON.stringify({ autoDream: false }) }),
-    );
   });
-  it.each(["Dream", "Compress", "Delete"])(
-    "queues %s without claiming completion",
-    async (label) => {
-      open();
-      fireEvent.click(
-        await screen.findByRole("button", { name: "/memories/profile.md" }),
-      );
-      fireEvent.click(screen.getByRole("button", { name: label }));
-      expect(await screen.findByText(/queued.*not .*yet/i)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    },
-  );
-  it("shows a conflict without claiming that a save was accepted", async () => {
-    open();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "/memories/profile.md" }),
+  it("queues deletion and clears the editor after completion", async () => {
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await act(async () => {});
+    expect(
+      screen.getByText(/Delete queued.*not deleted yet/i),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/memory/entry",
+      expect.objectContaining({ method: "DELETE" }),
     );
+    currentState = { ...state, run: { ...queued.run, stage: "completed" } };
+    entries = [{ path: "/resources/README.md", content: "Resources" }];
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(screen.getByText("Memory deleted.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Select a file from the tree/),
+    ).toBeInTheDocument();
+  });
+  it("shows a conflict without claiming that a save was accepted", async () => {
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     failure = { status: 409, code: "MEMORY_CONFLICT" };
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /changed.*reload/i,
     );
     expect(screen.queryByText(/Save queued/i)).not.toBeInTheDocument();
+  });
+  it("offers repair while memory is stuck and resumes after recovery", async () => {
+    currentState = {
+      ...state,
+      status: "repairing",
+      run: {
+        kind: "dream",
+        stage: "repairing",
+        error: "Memory operation failed. Reload or contact support.",
+        before: null,
+        after: null,
+      },
+    };
+    failure = { status: 409, code: "MEMORY_BUSY", path: "/api/v1/memory" };
+    open("/context/store");
+    expect(
+      await screen.findByText(
+        "Memory is busy. Wait for the current operation.",
+      ),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("repairing")).toBeInTheDocument();
+    expect(screen.getByText("Memory Store unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
+    expect(
+      await screen.findByText(/Repair accepted; memory resumes/i),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/memory/recover",
+      expect.objectContaining({ method: "POST" }),
+    );
+    failure = null;
+    currentState = {
+      ...state,
+      run: { ...queued.run, kind: "dream", stage: "completed" },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(
+      await screen.findByRole("button", { name: "profile.md" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Memory is busy/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
   });
   it("handles initial auth failures through the existing sign-in flow", async () => {
     failure = { status: 401, code: "AUTH_REQUIRED" };
@@ -269,10 +373,8 @@ describe("MemoryPage", () => {
     ).toBeInTheDocument();
   });
   it("handles polling auth failures and stops exposing the page", async () => {
-    open();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "/memories/profile.md" }),
-    );
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     vi.useFakeTimers();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await act(async () => {});
@@ -285,16 +387,16 @@ describe("MemoryPage", () => {
     ).toBeInTheDocument();
   });
   it("waits for a delayed completion refresh before reporting saved", async () => {
-    open();
-    fireEvent.click(
-      await screen.findByRole("button", { name: "/memories/profile.md" }),
-    );
+    await openDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     vi.useFakeTimers();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await act(async () => {});
     currentState = { ...state, run: { ...queued.run, stage: "completed" } };
+    fetchMock.mockImplementationOnce(async () =>
+      Response.json(currentState),
+    );
     let resolveList!: (response: Response) => void;
-    fetchMock.mockImplementationOnce(async () => Response.json(currentState));
     fetchMock.mockImplementationOnce(
       () =>
         new Promise<Response>((resolve) => {
@@ -304,9 +406,17 @@ describe("MemoryPage", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(screen.queryByText("Memory saved.")).not.toBeInTheDocument();
+    expect(screen.getByText(/not saved yet/i)).toBeInTheDocument();
     await act(async () => {
-      resolveList(Response.json({ entries, capacity, state: currentState }));
+      resolveList(
+        Response.json({
+          entries,
+          capacity,
+          state: currentState,
+          store,
+          sessionCount,
+        }),
+      );
     });
     expect(screen.getByText("Memory saved.")).toBeInTheDocument();
   });

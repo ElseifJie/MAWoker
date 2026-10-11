@@ -14,7 +14,7 @@ const agentId = "00000000-0000-4000-8000-000000000003";
 const modelId = "offline-demo-model";
 const environmentId = "offline-demo-environment";
 const preferencePath = "/memories/preferences/workflow.md";
-const protectedPath = "/memories/events/project/0000.md";
+const protectedPath = "/episodes/digest/project/0000.md";
 const maxTicks = 3000;
 const started = Date.now();
 const progress = (message: string) =>
@@ -296,8 +296,8 @@ async function main() {
       const entry = {
         path:
           i <= 20
-            ? `/memories/events/project/${String(i).padStart(4, "0")}.md`
-            : `/memories/events/independent-${i}/event.md`,
+            ? `/episodes/digest/project/${String(i).padStart(4, "0")}.md`
+            : `/episodes/digest/independent-${i}/event.md`,
         content: `事件 ${i}：2026-01-01 项目验收；预算 ${8000 + i} 元；例外 ${i % 7}；来源 demo-event-${i}。`,
       };
       sources.push(entry);
@@ -305,8 +305,6 @@ async function main() {
       pathsById.set(created.id, entry.path);
       if (i % 400 === 0) progress(`事件已写入 ${i}/1600`);
     }
-    const before = (await service.list(userA)).capacity;
-    assert.equal(before.level, "high");
     const dreamCount = ark.calls.filter(
       (c) => c.operation === "createDream",
     ).length;
@@ -314,6 +312,10 @@ async function main() {
     const autoQueued = await service.status(userA);
     assert.equal(autoQueued.run?.kind, "compress");
     assert.equal(autoQueued.run?.stage, "queued");
+    // The monitor pass maintains the navigation index before queueing the
+    // compression, so capture the capacity the run actually baselines against.
+    const before = (await service.list(userA)).capacity;
+    assert.equal(before.level, "high");
     const callStart = ark.calls.length;
     const compacted = await advanceUntil(service, userA);
     const after = await service.list(userA);
@@ -379,7 +381,7 @@ async function main() {
         (e) =>
           e.path === preferencePath ||
           e.path === newPath ||
-          e.path.startsWith("/memories/events/"),
+          e.path.startsWith("/episodes/digest/"),
       ),
     );
 
