@@ -18,7 +18,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import {
   ApiClientError,
   apiClient,
@@ -37,7 +43,7 @@ import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { SessionList } from "./components/SessionList.js";
 import { SessionSearch } from "./components/SessionSearch.js";
 import { FilesPage } from "./FilesPage.js";
-import { MemoryPage } from "./MemoryPage.js";
+import { MemoryPage, clearMemoryCache } from "./MemoryPage.js";
 import { SessionPage } from "./SessionPage.js";
 import { SkillsPage } from "./SkillsPage.js";
 import {
@@ -285,6 +291,7 @@ function Workspace({
   onAuthRequired,
 }: WorkspaceProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -411,6 +418,42 @@ function Workspace({
     }
   }
 
+  // Release-0 quota refresh (P0-04): refetch the usage snapshot when a task
+  // ends or a session is created or removed, when the user returns to the home
+  // page, and when the window regains focus. Requests are merged by epoch —
+  // only the newest response may write state, so a stale reply can never
+  // resurrect an exhausted-quota blocker.
+  const usageRequestRef = useRef(0);
+  const refreshUsage = useCallback(async () => {
+    const requestEpoch = usageRequestRef.current + 1;
+    usageRequestRef.current = requestEpoch;
+    try {
+      const usage = await apiClient.getUsage();
+      if (usageRequestRef.current === requestEpoch) {
+        setData((current) => (current ? { ...current, usage } : current));
+      }
+    } catch {
+      // Keep the last snapshot; the next trigger retries.
+    }
+  }, []);
+
+  // Skip the home-page trigger on the initial mount: the workspace loader
+  // already fetches usage as part of its first paint.
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true;
+      return;
+    }
+    if (location.pathname === "/") void refreshUsage();
+  }, [location.pathname, refreshUsage]);
+
+  useEffect(() => {
+    const onFocus = () => void refreshUsage();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refreshUsage]);
+
   const deliverFirstMessage = useCallback(
     async (sessionId: string, content: string) => {
       setFirstMessages((current) => ({
@@ -450,6 +493,9 @@ function Workspace({
             }
           : current,
       );
+      // Creating consumes a concurrent slot and the daily quota; the intro
+      // blocker must see the new usage without a full page reload.
+      void refreshUsage();
       setFirstMessages((current) => ({
         ...current,
         [session.id]: {
@@ -477,7 +523,7 @@ function Workspace({
       firstMessageTimers.current.set(session.id, timer);
       navigate(`/sessions/${session.id}`);
     },
-    [navigate],
+    [navigate, refreshUsage],
   );
 
   const handleSessionReady = useCallback(
@@ -505,31 +551,38 @@ function Workspace({
     [],
   );
 
-  const handleSessionChanged = useCallback((session: SessionSummary) => {
-    setData((current) => {
-      if (!current) return current;
-      const sessions = current.sessions.filter(
-        (item) => item.id !== session.id,
-      );
-      const archivedSessions = current.archivedSessions.filter(
-        (item) => item.id !== session.id,
-      );
-      if (session.deletionState === "deleted") {
-        return { ...current, sessions, archivedSessions };
-      }
-      return session.archivedAt
-        ? {
-            ...current,
-            sessions,
-            archivedSessions: [session, ...archivedSessions],
-          }
-        : {
-            ...current,
-            sessions: [session, ...sessions],
-            archivedSessions,
-          };
-    });
-  }, []);
+  // Session changes cover task ends (status transitions mirrored from the
+  // stream) and accepted deletions. A delete must not free consumed quota
+  // locally — this only refreshes the server's authoritative snapshot.
+  const handleSessionChanged = useCallback(
+    (session: SessionSummary) => {
+      void refreshUsage();
+      setData((current) => {
+        if (!current) return current;
+        const sessions = current.sessions.filter(
+          (item) => item.id !== session.id,
+        );
+        const archivedSessions = current.archivedSessions.filter(
+          (item) => item.id !== session.id,
+        );
+        if (session.deletionState === "deleted") {
+          return { ...current, sessions, archivedSessions };
+        }
+        return session.archivedAt
+          ? {
+              ...current,
+              sessions,
+              archivedSessions: [session, ...archivedSessions],
+            }
+          : {
+              ...current,
+              sessions: [session, ...sessions],
+              archivedSessions,
+            };
+      });
+    },
+    [refreshUsage],
+  );
 
   if (loadError) {
     return (
@@ -575,7 +628,10 @@ function Workspace({
           path="/context"
           element={
             data.capabilities.memoryStores.available ? (
-              <MemoryPage onAuthRequired={onAuthRequired} />
+              <MemoryPage
+                onAuthRequired={onAuthRequired}
+                account={user.authSubject}
+              />
             ) : (
               <Navigate to="/" replace />
             )
@@ -585,7 +641,10 @@ function Workspace({
           path="/context/store"
           element={
             data.capabilities.memoryStores.available ? (
-              <MemoryPage onAuthRequired={onAuthRequired} />
+              <MemoryPage
+                onAuthRequired={onAuthRequired}
+                account={user.authSubject}
+              />
             ) : (
               <Navigate to="/" replace />
             )
@@ -817,6 +876,20 @@ function SettingsPage({
 export function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
   const theme = useThemePreference();
+  // Mirrors the signed-in subject so the leave-authentication callback stays
+  // referentially stable without capturing stale auth state.
+  const signedInSubjectRef = useRef<string | null>(null);
+  signedInSubjectRef.current =
+    auth.status === "authenticated" ? auth.user.authSubject : null;
+
+  // Leaving the authenticated state — signing out or an auth-required error —
+  // drops every cached artifact bound to that account, so the next login
+  // starts from a clean slate even if a late response is still in flight.
+  const leaveAuthenticatedState = useCallback(() => {
+    const subject = signedInSubjectRef.current;
+    if (subject) clearMemoryCache(subject);
+    setAuth({ status: "unauthenticated" });
+  }, []);
 
   const loadCurrentUser = useCallback(async () => {
     setAuth({ status: "loading" });
@@ -824,13 +897,10 @@ export function App() {
       const { user } = await apiClient.getMe();
       setAuth({ status: "authenticated", user });
     } catch (error) {
-      setAuth(
-        isAuthError(error)
-          ? { status: "unauthenticated" }
-          : { status: "error" },
-      );
+      if (isAuthError(error)) leaveAuthenticatedState();
+      else setAuth({ status: "error" });
     }
-  }, []);
+  }, [leaveAuthenticatedState]);
 
   useEffect(() => {
     void loadCurrentUser();
@@ -847,8 +917,8 @@ export function App() {
     return (
       <AdminWorkspace
         user={auth.user}
-        onSignedOut={() => setAuth({ status: "unauthenticated" })}
-        onAuthRequired={() => setAuth({ status: "unauthenticated" })}
+        onSignedOut={leaveAuthenticatedState}
+        onAuthRequired={leaveAuthenticatedState}
       />
     );
   }
@@ -856,8 +926,8 @@ export function App() {
     <Workspace
       user={auth.user}
       theme={theme}
-      onSignedOut={() => setAuth({ status: "unauthenticated" })}
-      onAuthRequired={() => setAuth({ status: "unauthenticated" })}
+      onSignedOut={leaveAuthenticatedState}
+      onAuthRequired={leaveAuthenticatedState}
     />
   );
 }

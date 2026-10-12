@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { detectSensitiveAssignments } from "@pwa/contracts";
 
 export interface MemoryText {
   id: string;
@@ -29,6 +30,26 @@ export class MemoryError extends Error {
 }
 export const hashMemory = (content: string) =>
   createHash("sha256").update(content).digest("hex");
+
+/**
+ * Deterministic JSON serialization for fingerprinting upstream payloads.
+ * Object keys are sorted recursively, so semantically identical payloads hash
+ * identically no matter how the serializer ordered them — the upstream events
+ * API re-serializes tool-call input maps on every request, so a raw
+ * JSON.stringify fingerprint changed per fetch and drove consolidation into
+ * an endless dream/conflict cycle.
+ */
+export function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
 export function validateMemory(path: string, content: string) {
   if (
     !/\.(md|txt)$/.test(path) ||
@@ -59,9 +80,8 @@ export function validateMemory(path: string, content: string) {
   if (Buffer.byteLength(content, "utf8") > 102400)
     throw new MemoryError("MEMORY_CAPACITY", "单条记忆不能超过 100 KiB");
   if (
-    /(?:api[_-]?key|secret[_-]?access[_-]?key|password|authorization)\s*[:=]\s*\S+|[?&](?:X-Tos-Signature|X-Amz-Signature)=/i.test(
-      content,
-    )
+    detectSensitiveAssignments(content).length > 0 ||
+    /[?&](?:X-Tos-Signature|X-Amz-Signature)=/i.test(content)
   )
     throw new MemoryError(
       "MEMORY_INVALID",

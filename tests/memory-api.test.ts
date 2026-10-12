@@ -9,7 +9,11 @@ import type {
   MemoryService,
   MemoryState,
 } from "../packages/domain/src/memory.js";
-import { capacity, MemoryError } from "../packages/domain/src/memory-policy.js";
+import {
+  capacity,
+  hashMemory,
+  MemoryError,
+} from "../packages/domain/src/memory-policy.js";
 
 const auth: ApiAuthService = {
   login: vi.fn(),
@@ -146,7 +150,11 @@ describe("personal memory API", () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({
         entries: [
-          { path: "/memories/profile.md", content: `${token} profile` },
+          {
+            path: "/memories/profile.md",
+            content: `${token} profile`,
+            hash: hashMemory(`${token} profile`),
+          },
         ],
         capacity: capacity([{ id: "", path: "", content: `${token} profile` }]),
         state: {

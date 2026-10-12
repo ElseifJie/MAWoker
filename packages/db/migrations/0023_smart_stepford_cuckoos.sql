@@ -1,0 +1,2 @@
+CREATE TYPE "public"."model_attribution_precision" AS ENUM('exact', 'approximate', 'unknown');--> statement-breakpoint
+ALTER TABLE "usage_ledger" ADD COLUMN "model_attribution_precision" "model_attribution_precision" DEFAULT 'unknown' NOT NULL;

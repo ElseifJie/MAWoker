@@ -20,6 +20,7 @@ import type {
   ArkRequestOptions,
   ArkResource,
   ArkSession,
+  ArkSessionConfigSnapshot,
   ArkSessionInput,
   ArkSkill,
   ArkSkillInput,
@@ -92,6 +93,174 @@ const sessionStatusSchema = z
     status === "rescheduling" ? ("rescheduled" as const) : status,
   );
 
+type NormalizedOptional<T> = {
+  value: T | null;
+  valid: boolean;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalField<T>(
+  record: Record<string, unknown>,
+  key: string,
+  predicate: (value: unknown) => value is T,
+): NormalizedOptional<T> {
+  const value = record[key];
+  if (value === undefined) return { value: null, valid: true };
+  return predicate(value)
+    ? { value, valid: true }
+    : { value: null, valid: false };
+}
+
+function requiredField<T>(
+  record: Record<string, unknown>,
+  key: string,
+  predicate: (value: unknown) => value is T,
+): NormalizedOptional<T> {
+  const value = record[key];
+  return predicate(value)
+    ? { value, valid: true }
+    : { value: null, valid: false };
+}
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+const isBoolean = (value: unknown): value is boolean =>
+  typeof value === "boolean";
+
+function skillSnapshots(value: unknown): {
+  value: ArkSessionConfigSnapshot["skills"];
+  valid: boolean;
+} {
+  if (!Array.isArray(value)) return { value: null, valid: false };
+  let valid = true;
+  const skills = value.map((item) => {
+    if (!isRecord(item)) {
+      valid = false;
+      return {
+        type: null,
+        skillId: null,
+        version: null,
+        useLatest: null,
+        displayName: null,
+      };
+    }
+    const type = optionalField(item, "type", isNonEmptyString);
+    const skillId = requiredField(item, "skill_id", isNonEmptyString);
+    const version = optionalField(item, "version", isNonEmptyString);
+    const useLatest = optionalField(item, "use_latest", isBoolean);
+    const displayName = optionalField(item, "display_name", isString);
+    valid =
+      valid &&
+      type.valid &&
+      skillId.valid &&
+      version.valid &&
+      useLatest.valid &&
+      displayName.valid;
+    return {
+      type: type.value,
+      skillId: skillId.value,
+      version: version.value,
+      useLatest: useLatest.value,
+      displayName: displayName.value,
+    };
+  });
+  return { value: skills, valid };
+}
+
+function configuredToolNames(
+  tool: Record<string, unknown>,
+): NormalizedOptional<string[]> {
+  const configs = tool.configs;
+  if (configs === undefined) return { value: null, valid: true };
+  if (!Array.isArray(configs)) return { value: null, valid: false };
+  const names: string[] = [];
+  for (const config of configs) {
+    if (!isRecord(config) || !isNonEmptyString(config.name)) {
+      return { value: null, valid: false };
+    }
+    names.push(config.name);
+  }
+  return { value: names, valid: true };
+}
+
+function toolSnapshots(value: unknown): {
+  value: ArkSessionConfigSnapshot["tools"];
+  valid: boolean;
+} {
+  if (!Array.isArray(value)) return { value: null, valid: false };
+  let valid = true;
+  const tools = value.map((item) => {
+    if (!isRecord(item)) {
+      valid = false;
+      return {
+        type: null,
+        name: null,
+        mcpServerName: null,
+        configuredToolNames: null,
+      };
+    }
+    const type = requiredField(item, "type", isNonEmptyString);
+    const name = optionalField(item, "name", isNonEmptyString);
+    const mcpServerName = optionalField(
+      item,
+      "mcp_server_name",
+      isNonEmptyString,
+    );
+    const configuredNames = configuredToolNames(item);
+    valid =
+      valid &&
+      type.valid &&
+      name.valid &&
+      mcpServerName.valid &&
+      configuredNames.valid;
+    return {
+      type: type.value,
+      name: name.value,
+      mcpServerName: mcpServerName.value,
+      configuredToolNames: configuredNames.value,
+    };
+  });
+  return { value: tools, valid };
+}
+
+function sessionConfigSnapshot(
+  agent: Record<string, unknown>,
+  environmentValue: unknown,
+): ArkSessionConfigSnapshot {
+  const model =
+    isRecord(agent.model) && isNonEmptyString(agent.model.id)
+      ? { value: agent.model.id, valid: true }
+      : { value: null, valid: false };
+  const skills = skillSnapshots(agent.skills);
+  const tools = toolSnapshots(agent.tools);
+  const environment = isRecord(environmentValue) ? environmentValue : {};
+  const config = isRecord(environment.config) ? environment.config : {};
+  const environmentSnapshot = {
+    id: isNonEmptyString(environment.id) ? environment.id : null,
+    type: isNonEmptyString(environment.type) ? environment.type : null,
+    configType: isNonEmptyString(config.type) ? config.type : null,
+    scope: isNonEmptyString(environment.scope) ? environment.scope : null,
+  };
+  const environmentComplete = Object.values(environmentSnapshot).every(
+    (field) => field !== null,
+  );
+
+  return {
+    modelId: model.value,
+    skills: skills.value,
+    tools: tools.value,
+    environment: environmentSnapshot,
+    completeness:
+      model.valid && skills.valid && tools.valid && environmentComplete
+        ? "complete"
+        : "incomplete",
+  };
+}
+
 const normalizedSessionSchema = z
   .object({
     id: z.string().min(1),
@@ -100,7 +269,22 @@ const normalizedSessionSchema = z
     environmentId: z.string().min(1),
     status: sessionStatusSchema,
   })
-  .strict();
+  .strict()
+  .transform((session) => ({
+    ...session,
+    configSnapshot: {
+      modelId: null,
+      skills: null,
+      tools: null,
+      environment: {
+        id: session.environmentId,
+        type: null,
+        configType: null,
+        scope: null,
+      },
+      completeness: "incomplete" as const,
+    },
+  }));
 
 const sessionSchema = z.union([
   normalizedSessionSchema,
@@ -114,15 +298,17 @@ const sessionSchema = z.union([
         })
         .passthrough(),
       environment_id: z.string().min(1),
+      environment: z.unknown().optional(),
       status: sessionStatusSchema,
     })
     .passthrough()
-    .transform(({ id, agent, environment_id, status }) => ({
+    .transform(({ id, agent, environment_id, environment, status }) => ({
       id,
       agentId: agent.id,
       agentVersion: agent.version,
       environmentId: environment_id,
       status,
+      configSnapshot: sessionConfigSnapshot(agent, environment),
     })),
 ]);
 
@@ -785,12 +971,19 @@ export class HttpArkGateway implements ArkGateway {
     input: ArkSessionInput,
     options?: ArkRequestOptions,
   ): Promise<ArkSession> {
+    if (!Number.isInteger(input.agentVersion) || input.agentVersion <= 0) {
+      return Promise.reject(new ArkGatewayError("invalid_response"));
+    }
     return this.jsonRequest({
       method: "POST",
       path: "/api/v3/sessions",
       safe: false,
       body: JSON.stringify({
-        agent: input.agentId,
+        agent: {
+          type: "agent",
+          id: input.agentId,
+          version: input.agentVersion,
+        },
         environment_id: input.environmentId,
         resources: input.resources.map((resource) =>
           "type" in resource

@@ -5,6 +5,7 @@ import {
   hashMemory,
   mergePlan,
   MemoryError,
+  stableStringify,
   validateMemory,
   type MemoryStep,
   type MemoryText,
@@ -302,10 +303,12 @@ export class MemoryService {
     }
   }
   /**
-   * The deletion fence: an ended session whose increments have not been
-   * Dream-consolidated gets a verbatim capture appended to the episodic
-   * digest (as a verified edit run) before its upstream record may be
-   * deleted. Callers retry until the fence reports "clear".
+   * The deletion fence: deleting a Session never creates a long-term copy of
+   * its conversation. The fence registers the source as excluded (so no
+   * future extraction or consolidation can pick it up), waits for any
+   * in-flight memory operation to finish safely, and only then reports
+   * "clear". Content consolidated before the deletion stays — removing it is
+   * a separate, explicit user action.
    */
   async fenceDeletion(
     userId: string,
@@ -318,61 +321,24 @@ export class MemoryService {
       (session) => session.arkSessionId === arkSessionId,
     );
     if (!owned || owned.memoryStoreId !== state.storeId) return "clear";
+    if (state.excludedSourceIds?.includes(arkSessionId)) return "clear";
+    // An in-flight run may still be finishing work it planned before the
+    // deletion request; interleaving the exclusion with it is not safe, and
+    // the deletion defers until the run settles.
     if (
       state.status !== "active" ||
       activeRun(state) ||
       (state.structureVersion ?? 1) < STRUCTURE_VERSION
     )
       return "capturing";
-    const entries = await this.dependencies.ark.listMemories(state.storeId);
-    const marker = `sourceSessionId: ${arkSessionId}`;
-    if (
-      entries.some(
-        (entry) =>
-          entry.path.startsWith("/episodes/digest/") &&
-          entry.content.includes(marker),
-      ) ||
-      state.excludedSourceIds?.includes(arkSessionId)
-    )
-      return "clear";
-    const events = await this.dependencies.ark.listEvents(arkSessionId);
-    const fingerprint = hashMemory(JSON.stringify(events));
-    if (state.summarizedSources?.includes(fingerprint)) return "clear";
-    const text = events
-      .filter(
-        (event) =>
-          event.type === "user.message" || event.type === "agent.message",
-      )
-      .map((event) =>
-        typeof event.data.content === "string"
-          ? event.data.content
-          : JSON.stringify(event.data.content),
-      )
-      .join("\n");
-    if (!text.trim()) return "clear";
-    const captured =
-      Buffer.byteLength(text, "utf8") > 60_000
-        ? `${Buffer.from(text, "utf8").subarray(0, 60_000).toString("utf8")}\n[已截断]`
-        : text;
-    const path = `/episodes/digest/${arkSessionId}.md`;
-    const existing = entries.find((entry) => entry.path === path);
-    const content = existing
-      ? `${existing.content}\n${marker}\n${captured}\n`
-      : `# 会话存档\n${marker}\n${captured}\n`;
-    state.policyEpoch++;
-    state.run = newRun("edit", state.policyEpoch);
-    state.run.steps = [
-      {
-        kind: "put",
-        path,
-        content,
-        before: existing ? hashMemory(existing.content) : null,
-        status: "planned",
-        ...(existing ? { memoryId: existing.id } : {}),
-      },
+    state.excludedSourceIds = [
+      ...new Set([...(state.excludedSourceIds ?? []), arkSessionId]),
     ];
+    // A failed save (lost CAS) throws and the deletion retries: reporting
+    // "clear" with the exclusion unwritten could let a later consolidation
+    // republish this source.
     await this.save(state);
-    return "capturing";
+    return "clear";
   }
   async ensure(userId: string): Promise<string> {
     const { created, state } =
@@ -396,6 +362,31 @@ export class MemoryService {
     )
       return this.provision(state);
     throw new MemoryError("MEMORY_BUSY", "个人记忆正在初始化或整理");
+  }
+  /**
+   * Read-path store resolution: identical to ensure() except that an existing
+   * Store stays readable while a maintenance run is in flight. Consolidation
+   * writes to a candidate Store and only touches the live one during the
+   * apply stage, so a viewer sees the pre-update content instead of a busy
+   * error. Writes keep the stricter ensure() gate.
+   */
+  async ensureReadable(userId: string): Promise<string> {
+    const { created, state } =
+      await this.dependencies.repository.reserve(userId);
+    if (created) return this.provision(state);
+    if (state.storeId) {
+      // An in-flight maintenance run keeps the Store readable; every other
+      // non-active case (crashed provisioning, pending migration) reconciles
+      // through the strict path as before.
+      if (!activeRun(state)) return this.ensure(userId);
+      return state.storeId;
+    }
+    if (
+      !state.run &&
+      (state.status === "provisioning" || state.status === "repairing")
+    )
+      return this.provision(state);
+    throw new MemoryError("MEMORY_BUSY", "个人记忆正在初始化");
   }
   private async provision(state: MemoryState): Promise<string> {
     try {
@@ -510,10 +501,8 @@ export class MemoryService {
     return state.storeId!;
   }
   async list(userId: string) {
-    await this.ensure(userId);
+    await this.ensureReadable(userId);
     const state = await this.status(userId);
-    if (state.status !== "active")
-      throw new MemoryError("MEMORY_BUSY", "记忆维护中");
     const entries = await this.dependencies.ark.listMemories(state.storeId!);
     const sessions = await this.dependencies.repository.sessions(userId);
     return {
@@ -657,7 +646,7 @@ export class MemoryService {
         session.arkSessionId,
       );
       if (upstream.status !== "terminated" && !ended(events)) return null;
-      const fingerprint = hashMemory(JSON.stringify(events));
+      const fingerprint = hashMemory(stableStringify(events));
       if (
         collect &&
         !state.excludedSourceIds?.includes(session.arkSessionId) &&
@@ -806,6 +795,7 @@ export class MemoryService {
         )
           throw new MemoryError("MEMORY_INVALID", "Dream 输出必须是独立候选库");
         run.candidateId = dream.outputMemoryStoreId;
+        run.awaitedAt = null;
         run.stage = "merge";
         await this.save(state);
         return;
@@ -814,15 +804,26 @@ export class MemoryService {
         state.status = "draining";
         await this.save(state);
         if (!(await this.idle(state))) {
+          // Bounded like the Dream poll above: a wait that can never end
+          // (upstream never reporting the turn ended, an unobservable wedge)
+          // must fail the run instead of pinning the Store in consolidation
+          // forever. The monitor re-plans a fresh Dream once sources settle.
+          run.awaitedAt ??= this.now();
+          if (
+            this.now() - run.awaitedAt >
+            (this.dependencies.dreamTimeoutMs ?? 1_800_000)
+          )
+            throw new MemoryError("MEMORY_INVALID", "等待会话静止超时");
           state.status = "active";
           await this.save(state);
           return;
         }
+        run.awaitedAt = null;
         if (run.epoch !== state.policyEpoch)
           throw new MemoryError("MEMORY_CONFLICT", "记忆策略已修改，候选失效");
         for (const source of run.sources) {
           const events = await ark.listEvents(source.id);
-          if (hashMemory(JSON.stringify(events)) !== source.fingerprint)
+          if (hashMemory(stableStringify(events)) !== source.fingerprint)
             throw new MemoryError(
               "MEMORY_CONFLICT",
               "来源会话已有新内容，需重新整理",
@@ -1077,8 +1078,11 @@ export class MemoryService {
         await this.save(state);
         count++;
       } catch {
-        // Another worker may win the CAS; one user's outage must not starve
-        // other users. Any pending mutation remains durably quarantined.
+        // Only races and transient upstream faults may land here: every
+        // permanent condition (timeouts, conflicts, invalid outputs) fails
+        // the run inside advance, so a wedged state can never depend on this
+        // blanket catch to survive. One user's outage must not starve the
+        // other users in the rotation; pending mutations stay quarantined.
         continue;
       }
     }

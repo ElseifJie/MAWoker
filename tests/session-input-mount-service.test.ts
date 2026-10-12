@@ -49,6 +49,32 @@ function setup(uploadOwner = userId) {
       if (uploadIds.includes(input.id)) input.sessionId = intent.id;
       return uploadIds.includes(input.id) ? [input] : [];
     },
+    async claimCreateAttempt(id, ownerUserId, attemptedAt) {
+      if (
+        !record ||
+        record.id !== id ||
+        record.ownerUserId !== ownerUserId ||
+        !record.arkSessionId.startsWith("pending:") ||
+        record.createAttemptedAt !== null
+      ) {
+        return false;
+      }
+      record = { ...record, createAttemptedAt: attemptedAt };
+      return true;
+    },
+    async releaseCreateAttempt(id, ownerUserId, attemptedAt) {
+      if (
+        !record ||
+        record.id !== id ||
+        record.ownerUserId !== ownerUserId ||
+        !record.arkSessionId.startsWith("pending:") ||
+        record.createAttemptedAt?.getTime() !== attemptedAt.getTime()
+      ) {
+        return false;
+      }
+      record = { ...record, createAttemptedAt: null };
+      return true;
+    },
     async completeCreate(id, ownerUserId, upstream) {
       if (!record || record.id !== id || record.ownerUserId !== ownerUserId) {
         throw new Error("missing");
@@ -101,6 +127,18 @@ function setup(uploadOwner = userId) {
       agentVersion: 7,
       environmentId: "environment-1",
       status: "idle" as const,
+      configSnapshot: {
+        modelId: "model-a",
+        skills: [],
+        tools: [],
+        environment: {
+          id: "environment-1",
+          type: "environment",
+          configType: "cloud",
+          scope: "account",
+        },
+        completeness: "complete" as const,
+      },
     })),
     getSession: vi.fn(async () => ({
       id: "ark-session-1",
@@ -108,6 +146,18 @@ function setup(uploadOwner = userId) {
       agentVersion: 7,
       environmentId: "environment-1",
       status: "idle" as const,
+      configSnapshot: {
+        modelId: "model-a",
+        skills: [],
+        tools: [],
+        environment: {
+          id: "environment-1",
+          type: "environment",
+          configType: "cloud",
+          scope: "account",
+        },
+        completeness: "complete" as const,
+      },
     })),
     submitEvent: vi.fn(),
     listEvents: vi.fn(),
@@ -197,6 +247,7 @@ describe("Session input mounting", () => {
       status: "uploaded",
     });
     expect(state.getRecord()?.arkSessionId).toBe(`pending:${sessionId}`);
+    expect(state.getRecord()?.createAttemptedAt).toBeNull();
 
     await state.service.reconcileCreate(sessionId, {
       userId,
@@ -213,7 +264,33 @@ describe("Session input mounting", () => {
       }),
       expect.any(Object),
     );
+    expect(state.ark.createSession).toHaveBeenCalledTimes(2);
     expect(state.input.status).toBe("bound");
+  });
+
+  it("keeps an unknown upload create claimed and never retries its POST", async () => {
+    const state = setup();
+    state.ark.createSession.mockRejectedValueOnce(
+      new ArkGatewayError("unknown_write_outcome"),
+    );
+
+    await expect(
+      state.service.create(
+        { agentId, uploadIds: [uploadId] },
+        { userId, requestId: "request-1" },
+      ),
+    ).rejects.toMatchObject({ category: "unknown_write_outcome" });
+
+    expect(state.getRecord()?.createAttemptedAt).toEqual(now);
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "ARK_SESSION_CREATE_OUTCOME_UNKNOWN",
+    });
+    expect(state.ark.createSession).toHaveBeenCalledOnce();
   });
 
   it("returns inputs only with owned Session detail", async () => {

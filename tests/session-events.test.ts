@@ -32,6 +32,11 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     agentName: "Research Agent",
     agentVersion: "7",
     environmentId: "environment-1",
+    createAttemptedAt: null,
+    modelId: null,
+    configSnapshot: null,
+    configSnapshotState: "unverified",
+    configSnapshotErrorCode: null,
     title: "Task",
     status: "idle",
     lastErrorCode: null,
@@ -72,6 +77,8 @@ function loggedRepository(state: {
 function baseRepository(record = session()) {
   return {
     prepareCreate: vi.fn(),
+    claimCreateAttempt: vi.fn(),
+    releaseCreateAttempt: vi.fn(),
     completeCreate: vi.fn(),
     preserveCreateOutcome: vi.fn(),
     failCreate: vi.fn(),
@@ -300,14 +307,20 @@ describe("Session event recovery", () => {
         sourceType: "user.message",
         type: "message",
         occurredAt: now,
-        payload: { content: "from the log" },
+        payload: {
+          content: "from the log Authorization: Bearer legacy.message.token",
+          internalEnvelope: { traceId: "must-not-leak" },
+        },
       },
       {
         eventId: "event-2",
-        sourceType: "agent.message",
-        type: "message",
+        sourceType: "agent.thinking",
+        type: "thinking",
         occurredAt: new Date(now.getTime() + 1_000),
-        payload: { content: "also stored" },
+        payload: {
+          content: "historical private reasoning",
+          internal: "must-not-leak",
+        },
       },
     ];
     const repository = loggedRepository({ backfilled: true, stored });
@@ -330,16 +343,111 @@ describe("Session event recovery", () => {
       requestId: "request-log",
     });
 
-    await expect(collect(opened.events)).resolves.toEqual([
+    const emitted = await collect(opened.events);
+    expect(emitted).toEqual([
       expect.objectContaining({
         id: "event-1",
         type: "message",
-        payload: { content: "from the log" },
+        payload: { content: "from the log Authorization: [redacted]" },
       }),
-      expect.objectContaining({ id: "event-2", type: "message" }),
+      expect.objectContaining({
+        id: "event-2",
+        type: "thinking",
+        payload: {},
+      }),
     ]);
+    expect(JSON.stringify(emitted)).not.toContain("must-not-leak");
+    expect(JSON.stringify(emitted)).not.toContain("private reasoning");
     expect(repository.projectEvent).not.toHaveBeenCalled();
     expect(repository.appendEvents).not.toHaveBeenCalled();
+  });
+
+  it("re-projects legacy payloads when reading a transcript", async () => {
+    const stored: StoredSessionEvent[] = [
+      {
+        eventId: "event-message",
+        sourceType: "agent.message",
+        type: "message",
+        occurredAt: now,
+        payload: {
+          content:
+            "saved Authorization: Bearer legacy.transcript.token for later",
+          credential: "drop-this-extra-key",
+        },
+      },
+      {
+        eventId: "event-result",
+        sourceType: "agent.tool_result",
+        type: "tool_result",
+        occurredAt: new Date(now.getTime() + 1_000),
+        payload: {
+          callId: "tool-1",
+          status: "failed",
+          preview: "Cookie: session=legacy-cookie /mnt/skills/private/guide.md",
+          errorCode: "not_found",
+          errorMessage: "token=legacy-error-token /mnt/skills/private/guide.md",
+          rawContent: "drop-this-result-extra",
+        },
+      },
+      {
+        eventId: "event-internal",
+        sourceType: "session.thread_status_idle",
+        type: "message",
+        occurredAt: new Date(now.getTime() + 2_000),
+        payload: {
+          content: "internal transcript data",
+          threadId: "private-thread",
+        },
+      },
+    ];
+    const repository = loggedRepository({ backfilled: true, stored });
+    const ark = {
+      streamEvents: vi.fn(),
+      listEvents: vi.fn(async (): Promise<ArkEvent[]> => {
+        throw new Error("a backfilled transcript must not replay Ark history");
+      }),
+    };
+    const service = createService(repository, ark as never);
+
+    const transcript = await service.transcriptEvents(sessionId, {
+      userId,
+      requestId: "request-transcript",
+    });
+
+    expect(transcript).toEqual([
+      {
+        id: "event-message",
+        sourceType: "agent.message",
+        type: "message",
+        createdAt: now.toISOString(),
+        payload: {
+          content: "saved Authorization: [redacted] for later",
+        },
+      },
+      {
+        id: "event-result",
+        sourceType: "agent.tool_result",
+        type: "tool_result",
+        createdAt: new Date(now.getTime() + 1_000).toISOString(),
+        payload: {
+          callId: "tool-1",
+          status: "failed",
+          preview: "Cookie: [redacted] [redacted-path]",
+          errorCode: "not_found",
+          errorMessage: "token: [redacted] [redacted-path]",
+        },
+      },
+      {
+        id: "event-internal",
+        sourceType: "session.thread_status_idle",
+        type: "unknown",
+        createdAt: new Date(now.getTime() + 2_000).toISOString(),
+        payload: {},
+      },
+    ]);
+    expect(JSON.stringify(transcript)).not.toContain("drop-this");
+    expect(JSON.stringify(transcript)).not.toContain("private-thread");
+    expect(ark.listEvents).not.toHaveBeenCalled();
   });
 
   it("copies the upstream history into the log and marks it complete", async () => {

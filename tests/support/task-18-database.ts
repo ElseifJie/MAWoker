@@ -111,6 +111,13 @@ export async function createTask18DatabaseHarness() {
       ],
     );
     await database.client.query(
+      `insert into quota_reservations
+         (id, user_id, ark_session_id, status, expires_at, created_at,
+          resolved_at)
+       values ($1, $2, $3, 'consumed', $4, $4, $4)`,
+      [tenant.sessionId, tenant.userId, arkSessionId, now],
+    );
+    await database.client.query(
       `insert into session_inputs
          (id, owner_user_id, session_id, ark_file_id, original_name,
           mime_type, size_bytes, mount_path, status, expires_at)

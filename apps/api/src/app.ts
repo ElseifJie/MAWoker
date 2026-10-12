@@ -39,6 +39,7 @@ import {
   type TenantAuthorizationService,
   type TenantResource,
   type TenantResourceKind,
+  hashMemory,
   roleHasPermission,
 } from "@pwa/domain";
 import {
@@ -563,6 +564,13 @@ interface BuildAppOptions {
     timeoutMs: number;
   };
   webRoot?: string;
+  /**
+   * Periodic login-session recheck for established SSE streams. Production
+   * defaults follow the release-0 contract: every 15 seconds, 2 seconds per
+   * check. Tests shorten both; nothing else may rely on these knobs.
+   */
+  sseAuthRecheckIntervalMs?: number;
+  sseAuthRecheckBudgetMs?: number;
 }
 
 const credentialsBodySchema = {
@@ -1156,20 +1164,70 @@ function decodeUsageCursor(cursor: string | undefined) {
  * Those carry a 4xx `statusCode` and an `FST_ERR_*` code, but no `validation`
  * array, so the generic error handler used to report them as 500s. The client's
  * own message is never echoed; the response carries ours instead.
+ *
+ * Multipart errors are the one family that does not follow the `FST_ERR_*`
+ * naming (`FST_REQ_FILE_TOO_LARGE`, `FST_FILES_LIMIT`, …): without this map an
+ * oversized upload surfaced as a 500.
  */
+const MULTIPART_CLIENT_ERRORS = new Set([
+  "FST_REQ_FILE_TOO_LARGE",
+  "FST_FILES_LIMIT",
+  "FST_PARTS_LIMIT",
+  "FST_FIELDS_LIMIT",
+  "FST_PROTO_VIOLATION",
+  "FST_INVALID_MULTIPART_CONTENT_TYPE",
+  "FST_INVALID_JSON_FIELD_ERROR",
+]);
+
+/**
+ * Stream-parser failures for a body the client cut off mid-flight. They carry
+ * neither an `FST_*` code nor a statusCode, and used to surface as 500s.
+ */
+const TRUNCATED_BODY_ERROR_CODES = new Set(["ERR_STREAM_PREMATURE_CLOSE"]);
+
 function fastifyClientError(
   error: unknown,
 ): { status: number; code: ErrorCode; message: string } | undefined {
   if (typeof error !== "object" || error === null) return undefined;
   const candidate = error as { code?: unknown; statusCode?: unknown };
+  if (typeof candidate.code !== "string") return undefined;
+  if (TRUNCATED_BODY_ERROR_CODES.has(candidate.code)) {
+    return {
+      status: 400,
+      code: "VALIDATION_FAILED",
+      message: "Request body ended before it was complete",
+    };
+  }
   if (
-    typeof candidate.code !== "string" ||
-    !candidate.code.startsWith("FST_ERR_") ||
+    !candidate.code.startsWith("FST_ERR_") &&
+    !MULTIPART_CLIENT_ERRORS.has(candidate.code)
+  ) {
+    return undefined;
+  }
+  if (
     typeof candidate.statusCode !== "number" ||
     candidate.statusCode < 400 ||
     candidate.statusCode >= 500
   ) {
     return undefined;
+  }
+  if (candidate.code === "FST_REQ_FILE_TOO_LARGE") {
+    return {
+      status: 413,
+      code: "VALIDATION_FAILED",
+      message: "Uploaded file exceeds the 20 MB size limit",
+    };
+  }
+  if (
+    candidate.code === "FST_FILES_LIMIT" ||
+    candidate.code === "FST_PARTS_LIMIT" ||
+    candidate.code === "FST_FIELDS_LIMIT"
+  ) {
+    return {
+      status: 413,
+      code: "VALIDATION_FAILED",
+      message: "Upload has too many parts",
+    };
   }
   switch (candidate.statusCode) {
     case 413:
@@ -1690,6 +1748,27 @@ function sendSessionError(
 ) {
   captureArkRequestId(error, request);
   if (
+    hasErrorName(error, "SessionCreateVerificationError") &&
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error
+  ) {
+    if (error.code === "ARK_SESSION_CREATE_OUTCOME_UNKNOWN") {
+      sendArkAvailabilityError("unknown_write_outcome", request, reply);
+      return reply;
+    }
+    if (
+      error.code === "ARK_SESSION_AGENT_ID_MISMATCH" ||
+      error.code === "ARK_SESSION_AGENT_VERSION_MISMATCH" ||
+      error.code === "ARK_SESSION_ENVIRONMENT_ID_MISMATCH" ||
+      error.code === "ARK_SESSION_SNAPSHOT_ENVIRONMENT_ID_MISMATCH" ||
+      error.code === "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE"
+    ) {
+      sendArkCategoryError("invalid_response", request, reply);
+      return reply;
+    }
+  }
+  if (
     error instanceof ResourceNotFoundError ||
     hasErrorName(error, "ResourceNotFoundError")
   ) {
@@ -2001,6 +2080,29 @@ export function buildApp(options: BuildAppOptions = {}) {
   const maxRequestWindows = Math.max(1, rateLimit.maxEntries ?? 10_000);
   const requestWindows = new Map<string, { count: number; resetAt: number }>();
   const activeEventStreams = new Map<string, number>();
+  /**
+   * Established SSE streams per authenticated user, so an admin-level
+   * revocation in THIS process closes them immediately instead of waiting
+   * for the periodic recheck (which remains the cross-replica backstop).
+   */
+  const activeAuthStreams = new Map<string, Set<AbortController>>();
+  const registerAuthStream = (userId: string, controller: AbortController) => {
+    const streams = activeAuthStreams.get(userId) ?? new Set<AbortController>();
+    streams.add(controller);
+    activeAuthStreams.set(userId, streams);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      streams.delete(controller);
+      if (streams.size === 0) activeAuthStreams.delete(userId);
+    };
+  };
+  const closeAuthStreamsForUser = (userId: string) => {
+    const streams = activeAuthStreams.get(userId);
+    if (!streams) return;
+    for (const controller of [...streams]) controller.abort();
+  };
   let nextRequestWindowSweep = 0;
 
   const acquireEventStream = (userId: string, sessionId: string) => {
@@ -2408,6 +2510,10 @@ export function buildApp(options: BuildAppOptions = {}) {
           entries: result.entries.map(({ path, content }) => ({
             path,
             content,
+            // Server-computed edit base: the browser must send this back as
+            // expectedHash when saving, so a stale editor cannot silently
+            // overwrite a concurrent update.
+            hash: hashMemory(content),
           })),
           capacity: result.capacity,
           state: publicMemoryState(result.state),
@@ -2952,11 +3058,105 @@ export function buildApp(options: BuildAppOptions = {}) {
               );
           }
           const controller = new AbortController();
-          const close = () => {
+          const releaseAuthStream = registerAuthStream(
+            request.auth!.userId,
+            controller,
+          );
+          // Release-0 revocation recheck (P0-03): an established stream must
+          // stop pushing within the bounded window after its login session is
+          // revoked. The timer runs independently of the event loop below, so
+          // history replay, an idle upstream, and write backpressure all stay
+          // covered. Any failure — revoked session, disabled user, database
+          // outage, or a check that exceeds its budget — closes the stream:
+          // fail closed, never keep streaming on an unverifiable session.
+          const recheckAuth = options.auth;
+          const recheckIntervalMs = options.sseAuthRecheckIntervalMs ?? 15_000;
+          const recheckBudgetMs = options.sseAuthRecheckBudgetMs ?? 2_000;
+          const recheckToken = request.cookies[AUTH_COOKIE_NAME];
+          let recheckTimer: NodeJS.Timeout | undefined;
+          let recheckBudgetTimer: NodeJS.Timeout | undefined;
+          let recheckInFlight = false;
+          let terminated = false;
+          const stopRecheck = () => {
+            if (recheckTimer) clearInterval(recheckTimer);
+            recheckTimer = undefined;
+            if (recheckBudgetTimer) clearTimeout(recheckBudgetTimer);
+            recheckBudgetTimer = undefined;
+          };
+          const terminate = () => {
+            if (terminated) return false;
+            terminated = true;
+            stopRecheck();
+            releaseAuthStream();
             controller.abort();
             releaseEventStream();
+            return true;
           };
+          const close = () => void terminate();
           reply.raw.once("close", close);
+          const terminateForAuth = () => {
+            // Abort the upstream and release capacity before the courtesy
+            // control write. Only the cleanup winner may write or close.
+            if (!terminate()) return;
+            if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+              let controlSettled = false;
+              const finishControl = () => {
+                if (controlSettled) return;
+                controlSettled = true;
+                clearTimeout(graceTimer);
+                if (!reply.raw.destroyed && !reply.raw.writableEnded) {
+                  reply.raw.destroy();
+                }
+              };
+              const graceTimer = setTimeout(finishControl, 250);
+              graceTimer.unref?.();
+              try {
+                reply.raw.write(
+                  "event: auth_invalid\ndata: {}\n\n",
+                  finishControl,
+                );
+              } catch {
+                finishControl();
+              }
+              return;
+            }
+            if (!reply.raw.destroyed) reply.raw.destroy();
+          };
+          if (recheckAuth) {
+            recheckTimer = setInterval(() => {
+              if (terminated || recheckInFlight) return;
+              recheckInFlight = true;
+              const budget = setTimeout(() => {
+                if (recheckBudgetTimer === budget) {
+                  recheckBudgetTimer = undefined;
+                }
+                terminateForAuth();
+              }, recheckBudgetMs);
+              recheckBudgetTimer = budget;
+              budget.unref?.();
+              recheckAuth
+                .authenticate(recheckToken)
+                .then(
+                  () => {
+                    clearTimeout(budget);
+                    if (recheckBudgetTimer === budget) {
+                      recheckBudgetTimer = undefined;
+                    }
+                  },
+                  () => {
+                    clearTimeout(budget);
+                    if (recheckBudgetTimer === budget) {
+                      recheckBudgetTimer = undefined;
+                    }
+                    terminateForAuth();
+                  },
+                )
+                .finally(() => {
+                  if (!terminated) recheckInFlight = false;
+                });
+            }, recheckIntervalMs);
+            recheckTimer.unref?.();
+          }
           try {
             let opened: {
               session: SessionRecord;
@@ -2969,10 +3169,11 @@ export function buildApp(options: BuildAppOptions = {}) {
                 controller.signal,
               );
             } catch (error) {
-              controller.abort();
               reply.raw.removeListener("close", close);
+              if (!terminate()) return reply;
               return sendSessionError(error, request, reply);
             }
+            if (terminated) return reply;
             // Snapshot from the record openEvents already loaded. Replayed
             // session.status_* events correct any lag in this state.
             const ready = {
@@ -3013,14 +3214,14 @@ export function buildApp(options: BuildAppOptions = {}) {
                 }
               }
             } finally {
-              controller.abort();
               reply.raw.removeListener("close", close);
+              terminate();
               if (!reply.raw.destroyed && !reply.raw.writableEnded) {
                 reply.raw.end();
               }
             }
           } finally {
-            releaseEventStream();
+            terminate();
           }
           return reply;
         },
@@ -3572,6 +3773,7 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.body.password,
               context(request),
             );
+            closeAuthStreamsForUser(request.params.id);
             return reply.code(204).send();
           } catch (error) {
             return sendAdminError(error, request, reply);
@@ -3592,6 +3794,9 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.body.status,
               context(request),
             );
+            if (request.body.status === "disabled") {
+              closeAuthStreamsForUser(request.params.id);
+            }
             return reply.send({
               status: result.to,
               revokedSessions: result.revokedSessions,
@@ -3615,6 +3820,7 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.body.role,
               context(request),
             );
+            closeAuthStreamsForUser(request.params.id);
             return reply.send({
               role: result.to,
               revokedSessions: result.revokedSessions,
@@ -3634,6 +3840,7 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.params.id,
               context(request),
             );
+            closeAuthStreamsForUser(request.params.id);
             return reply.send({ revokedSessions: result.revokedSessions });
           } catch (error) {
             return sendAdminError(error, request, reply);

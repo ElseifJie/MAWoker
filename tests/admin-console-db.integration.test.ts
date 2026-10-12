@@ -49,6 +49,12 @@ describe("admin console database integration", () => {
                'ark-agent-usage', '1', 'environment-1', 'idle')`,
       [sessionId, userId, agentId],
     );
+    await database.client.query(
+      `insert into quota_reservations
+         (id, user_id, ark_session_id, status, expires_at, resolved_at)
+       values ($1, $2, 'ark-session-usage', 'consumed', now(), now())`,
+      [sessionId, userId],
+    );
     for (const [eventId, metric, quantity] of [
       ["event-input", "input_tokens", 300],
       ["event-output", "output_tokens", 500],
@@ -143,6 +149,12 @@ describe("admin console database integration", () => {
        values ($1, $2, 'ark-session-policy', 'platform', $3, 'ark-agent-policy',
                '1', 'environment-1', 'running')`,
       [sessionId, userId, policyAgentId],
+    );
+    await database.client.query(
+      `insert into quota_reservations
+         (id, user_id, ark_session_id, status, expires_at, resolved_at)
+       values ($1, $2, 'ark-session-policy', 'consumed', now(), now())`,
+      [sessionId, userId],
     );
     await database.client.query(
       `insert into usage_ledger
@@ -287,6 +299,12 @@ describe("admin console database integration", () => {
                'ark-agent-detail', 'Agent', '1', 'environment-1', 'idle',
                'Quarterly report')`,
       [sessionId, userId, detailAgentId],
+    );
+    await database.client.query(
+      `insert into quota_reservations
+         (id, user_id, ark_session_id, status, expires_at, resolved_at)
+       values ($1, $2, 'ark-session-detail', 'consumed', now(), now())`,
+      [sessionId, userId],
     );
     await database.client.query(
       `insert into usage_ledger

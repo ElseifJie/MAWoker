@@ -630,6 +630,9 @@ export function SessionList({
           <p>
             This removes <strong>{deleteTarget?.title}</strong>, its event
             history, and generated artifacts. This action cannot be undone.
+            Memories that were already formed from this Session are kept and can
+            be managed separately on the Context page; this deletion does not
+            create a new copy of the conversation.
           </p>
           <Field label="Type DELETE to confirm">
             <Input

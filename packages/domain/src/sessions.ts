@@ -3,10 +3,11 @@ import type {
   ArkGateway,
   ArkRequestOptions,
   ArkSession,
+  ArkSessionConfigSnapshot,
 } from "@pwa/ark-client";
 import {
   normalizeArkEvent,
-  uiEventType,
+  projectUiEvent,
   type SessionStatus,
   type UiEvent,
 } from "@pwa/contracts";
@@ -31,6 +32,11 @@ export interface SessionRecord {
   agentName: string;
   agentVersion: string;
   environmentId: string;
+  createAttemptedAt: Date | null;
+  modelId: string | null;
+  configSnapshot: SessionConfigSnapshot | null;
+  configSnapshotState: "unverified" | "verified" | "incomplete" | "mismatch";
+  configSnapshotErrorCode: string | null;
   memoryStoreId?: string | null;
   title: string;
   status: SessionStatus;
@@ -43,6 +49,33 @@ export interface SessionRecord {
   createdAt: Date;
   updatedAt: Date;
 }
+
+export interface SessionConfigSnapshot extends ArkSessionConfigSnapshot {
+  agentId: string;
+  agentVersion: string;
+  environmentId: string;
+}
+
+interface VerifiedCreateObservation {
+  arkSessionId: string;
+  status: SessionStatus;
+  modelId: string;
+  configSnapshot: SessionConfigSnapshot;
+  configSnapshotState: "verified";
+  configSnapshotErrorCode: null;
+}
+
+interface UnverifiedCreateObservation {
+  arkSessionId: string;
+  status: SessionStatus;
+  modelId: string | null;
+  configSnapshot: SessionConfigSnapshot;
+  configSnapshotState: "incomplete" | "mismatch";
+  configSnapshotErrorCode: SessionCreateVerificationErrorCode;
+}
+
+type CreateObservation =
+  VerifiedCreateObservation | UnverifiedCreateObservation;
 
 /**
  * A projected UI event as stored locally. Ark remains the source of truth; this
@@ -75,25 +108,25 @@ export interface SessionRepository {
     record: SessionRecord,
     uploadIds?: string[],
   ): PromiseLike<SessionInputRecord[] | void>;
+  claimCreateAttempt(
+    id: string,
+    userId: string,
+    attemptedAt: Date,
+  ): PromiseLike<boolean>;
+  releaseCreateAttempt(
+    id: string,
+    userId: string,
+    attemptedAt: Date,
+  ): PromiseLike<boolean>;
   completeCreate(
     id: string,
     userId: string,
-    upstream: {
-      arkSessionId: string;
-      arkAgentId: string;
-      agentVersion: string;
-      status: SessionStatus;
-    },
+    upstream: VerifiedCreateObservation,
   ): PromiseLike<SessionRecord>;
   preserveCreateOutcome(
     id: string,
     userId: string,
-    upstream?: {
-      arkSessionId: string;
-      arkAgentId: string;
-      agentVersion: string;
-      status: SessionStatus;
-    },
+    upstream?: CreateObservation,
   ): PromiseLike<void>;
   failCreate(id: string, userId: string): PromiseLike<void>;
   listOwned(userId: string, archived: boolean): PromiseLike<SessionRecord[]>;
@@ -192,6 +225,25 @@ export class SessionDeletionConflictError extends Error {
     this.name = "SessionDeletionConflictError";
     this.code =
       deletionState === "pending" ? "DELETION_PENDING" : "DELETION_FAILED";
+  }
+}
+
+export type SessionCreateVerificationErrorCode =
+  | "ARK_SESSION_AGENT_ID_MISMATCH"
+  | "ARK_SESSION_AGENT_VERSION_MISMATCH"
+  | "ARK_SESSION_ENVIRONMENT_ID_MISMATCH"
+  | "ARK_SESSION_SNAPSHOT_ENVIRONMENT_ID_MISMATCH"
+  | "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE"
+  | "ARK_SESSION_CREATE_OUTCOME_UNKNOWN";
+
+export class SessionCreateVerificationError extends Error {
+  constructor(public readonly code: SessionCreateVerificationErrorCode) {
+    super(
+      code === "ARK_SESSION_CREATE_OUTCOME_UNKNOWN"
+        ? "Ark Session create outcome is unknown; automatic POST retry is disabled"
+        : "Ark Session response does not verify the requested configuration",
+    );
+    this.name = "SessionCreateVerificationError";
   }
 }
 
@@ -333,6 +385,11 @@ export class SessionService {
       agentName: agent.name,
       agentVersion: agent.arkVersion,
       environmentId: this.dependencies.environmentId,
+      createAttemptedAt: null,
+      modelId: null,
+      configSnapshot: null,
+      configSnapshotState: "unverified",
+      configSnapshotErrorCode: null,
       memoryStoreId,
       title: input.title?.trim() ?? "",
       status: "idle",
@@ -350,6 +407,19 @@ export class SessionService {
       (await this.dependencies.repository.prepareCreate(intent, uploadIds)) ??
       [];
 
+    const claimed = await this.dependencies.repository.claimCreateAttempt(
+      id,
+      context.userId,
+      timestamp,
+    );
+    if (!claimed) {
+      const error = new SessionCreateVerificationError(
+        "ARK_SESSION_CREATE_OUTCOME_UNKNOWN",
+      );
+      await this.audit(context, "session.create", id, "failed", error);
+      throw error;
+    }
+
     let upstream: ArkSession;
     try {
       upstream = await this.dependencies.ark.createSession(
@@ -357,7 +427,17 @@ export class SessionService {
         this.createOptions(id),
       );
     } catch (error) {
-      if (inputs.length > 0 || isArkCategory(error, "unknown_write_outcome")) {
+      if (isArkCategory(error, "unknown_write_outcome")) {
+        await this.dependencies.repository.preserveCreateOutcome(
+          id,
+          context.userId,
+        );
+      } else if (inputs.length > 0) {
+        await this.dependencies.repository.releaseCreateAttempt(
+          id,
+          context.userId,
+          timestamp,
+        );
         await this.dependencies.repository.preserveCreateOutcome(
           id,
           context.userId,
@@ -369,24 +449,25 @@ export class SessionService {
       throw error;
     }
 
-    const upstreamSnapshot = this.upstreamSnapshot(upstream);
+    const observation = this.observeCreate(intent, upstream);
     try {
-      const created = await this.dependencies.repository.completeCreate(
+      const created = await this.finalizeCreate(
         id,
         context.userId,
-        upstreamSnapshot,
+        observation,
       );
       await this.audit(context, "session.create", id, "succeeded");
       return inputs.length > 0 ? { ...created, inputs } : created;
     } catch (error) {
-      await this.dependencies.repository.preserveCreateOutcome(
+      await this.audit(
+        context,
+        "session.create",
         id,
-        context.userId,
-        upstreamSnapshot,
+        "failed",
+        error instanceof SessionCreateVerificationError
+          ? error
+          : { code: "DB_PERSISTENCE_FAILED" },
       );
-      await this.audit(context, "session.create", id, "failed", {
-        code: "DB_PERSISTENCE_FAILED",
-      });
       throw error;
     }
   }
@@ -756,24 +837,59 @@ export class SessionService {
       ? await this.dependencies.repository.listInputs(context.userId, id)
       : [];
 
-    if (
-      intent.arkSessionId.startsWith("pending:") &&
-      intent.memoryStoreId != null
-    ) {
+    const pending = intent.arkSessionId.startsWith("pending:");
+    if (pending && intent.createAttemptedAt !== null) {
+      throw new SessionCreateVerificationError(
+        "ARK_SESSION_CREATE_OUTCOME_UNKNOWN",
+      );
+    }
+    if (pending && intent.memoryStoreId != null) {
       await this.dependencies.memory?.gate(context.userId);
     }
-    const upstream = intent.arkSessionId.startsWith("pending:")
-      ? await this.dependencies.ark.createSession(
+
+    let upstream: ArkSession;
+    if (pending) {
+      const attemptedAt = (this.dependencies.now ?? (() => new Date()))();
+      const claimed = await this.dependencies.repository.claimCreateAttempt(
+        id,
+        context.userId,
+        attemptedAt,
+      );
+      if (!claimed) {
+        throw new SessionCreateVerificationError(
+          "ARK_SESSION_CREATE_OUTCOME_UNKNOWN",
+        );
+      }
+      try {
+        upstream = await this.dependencies.ark.createSession(
           this.arkCreateInput(intent, inputs),
           this.createOptions(id),
-        )
-      : await this.dependencies.ark.getSession(intent.arkSessionId, {
-          correlationId: context.requestId,
-        });
-    return this.dependencies.repository.completeCreate(
+        );
+      } catch (error) {
+        if (isArkCategory(error, "unknown_write_outcome")) {
+          await this.dependencies.repository.preserveCreateOutcome(
+            id,
+            context.userId,
+          );
+        } else {
+          await this.dependencies.repository.releaseCreateAttempt(
+            id,
+            context.userId,
+            attemptedAt,
+          );
+        }
+        throw error;
+      }
+    } else {
+      upstream = await this.dependencies.ark.getSession(intent.arkSessionId, {
+        correlationId: context.requestId,
+      });
+    }
+
+    return this.finalizeCreate(
       id,
       context.userId,
-      this.upstreamSnapshot(upstream),
+      this.observeCreate(intent, upstream),
     );
   }
 
@@ -826,13 +942,13 @@ export class SessionService {
   }
 
   private storedToUiEvent(item: StoredSessionEvent): UiEvent {
-    return {
+    return projectUiEvent({
       id: item.eventId,
       sourceType: item.sourceType,
-      type: uiEventType(item.sourceType),
+      type: "unknown",
       createdAt: item.occurredAt.toISOString(),
       payload: item.payload,
-    };
+    });
   }
 
   /**
@@ -953,13 +1069,87 @@ export class SessionService {
     return { correlationId: operationId, idempotencyKey: operationId };
   }
 
-  private upstreamSnapshot(upstream: ArkSession) {
-    return {
-      arkSessionId: upstream.id,
-      arkAgentId: upstream.agentId,
+  private observeCreate(
+    intent: SessionRecord,
+    upstream: ArkSession,
+  ): CreateObservation {
+    const configSnapshot: SessionConfigSnapshot = {
+      agentId: upstream.agentId,
       agentVersion: String(upstream.agentVersion),
-      status: upstream.status,
+      environmentId: upstream.environmentId,
+      ...upstream.configSnapshot,
     };
+    const mismatchCode =
+      upstream.agentId !== intent.arkAgentId
+        ? "ARK_SESSION_AGENT_ID_MISMATCH"
+        : String(upstream.agentVersion) !== intent.agentVersion
+          ? "ARK_SESSION_AGENT_VERSION_MISMATCH"
+          : upstream.environmentId !== intent.environmentId
+            ? "ARK_SESSION_ENVIRONMENT_ID_MISMATCH"
+            : upstream.configSnapshot.environment.id !== null &&
+                upstream.configSnapshot.environment.id !== intent.environmentId
+              ? "ARK_SESSION_SNAPSHOT_ENVIRONMENT_ID_MISMATCH"
+              : null;
+    const shared = {
+      arkSessionId: upstream.id,
+      status: upstream.status,
+      modelId: upstream.configSnapshot.modelId,
+      configSnapshot,
+    };
+    if (mismatchCode) {
+      return {
+        ...shared,
+        configSnapshotState: "mismatch",
+        configSnapshotErrorCode: mismatchCode,
+      };
+    }
+    if (
+      upstream.configSnapshot.completeness !== "complete" ||
+      upstream.configSnapshot.modelId === null
+    ) {
+      return {
+        ...shared,
+        configSnapshotState: "incomplete",
+        configSnapshotErrorCode: "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+      };
+    }
+    return {
+      ...shared,
+      modelId: upstream.configSnapshot.modelId,
+      configSnapshotState: "verified",
+      configSnapshotErrorCode: null,
+    };
+  }
+
+  private async finalizeCreate(
+    id: string,
+    userId: string,
+    observation: CreateObservation,
+  ): Promise<SessionRecord> {
+    if (observation.configSnapshotState !== "verified") {
+      await this.dependencies.repository.preserveCreateOutcome(
+        id,
+        userId,
+        observation,
+      );
+      throw new SessionCreateVerificationError(
+        observation.configSnapshotErrorCode,
+      );
+    }
+    try {
+      return await this.dependencies.repository.completeCreate(
+        id,
+        userId,
+        observation,
+      );
+    } catch (error) {
+      await this.dependencies.repository.preserveCreateOutcome(
+        id,
+        userId,
+        observation,
+      );
+      throw error;
+    }
   }
 
   private async projectEvent(

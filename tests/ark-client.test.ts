@@ -26,6 +26,101 @@ const arkAgentResponse = {
   updated_at: "2026-09-07T00:00:00Z",
 };
 
+const arkSessionResponse = {
+  id: "session-1",
+  type: "session",
+  status: "idle",
+  environment_id: "environment-1",
+  agent: {
+    id: "agent-1",
+    version: 1,
+    name: "Research",
+    model: { id: "model-a", service_tier: "default" },
+    system: "do not expose this prompt",
+    skills: [
+      {
+        type: "custom",
+        skill_id: "skill-1",
+        version: "3",
+        use_latest: false,
+        display_name: "Evidence",
+      },
+    ],
+    tools: [
+      {
+        type: "mcp_toolset",
+        name: "research",
+        mcp_server_name: "private-mcp",
+        configs: [
+          { name: "search", enabled: true },
+          { name: "fetch", enabled: false },
+        ],
+        description: "do not expose this tool description",
+        input_schema: { type: "object", properties: { secret: {} } },
+      },
+    ],
+    mcp_servers: [
+      {
+        type: "url",
+        name: "private-mcp",
+        url: "https://secret.example.test/mcp",
+      },
+    ],
+  },
+  environment: {
+    id: "environment-1",
+    type: "environment",
+    scope: "account",
+    config: {
+      type: "cloud",
+      env: { PRIVATE_TOKEN: "secret-env-value" },
+      networking: { mode: "allowlist" },
+      packages: { pip: ["private-package"] },
+      setup_script: "curl https://secret.example.test/setup",
+      tos: { bucket: "private-bucket", prefix: "private-prefix" },
+    },
+  },
+  created_at: "2026-09-07T00:00:00Z",
+  updated_at: "2026-09-07T00:00:00Z",
+  resources: [],
+  vault_ids: null,
+};
+
+const normalizedSession = {
+  id: "session-1",
+  agentId: "agent-1",
+  agentVersion: 1,
+  environmentId: "environment-1",
+  status: "idle" as const,
+  configSnapshot: {
+    modelId: "model-a",
+    skills: [
+      {
+        type: "custom",
+        skillId: "skill-1",
+        version: "3",
+        useLatest: false,
+        displayName: "Evidence",
+      },
+    ],
+    tools: [
+      {
+        type: "mcp_toolset",
+        name: "research",
+        mcpServerName: "private-mcp",
+        configuredToolNames: ["search", "fetch"],
+      },
+    ],
+    environment: {
+      id: "environment-1",
+      type: "environment",
+      configType: "cloud",
+      scope: "account",
+    },
+    completeness: "complete" as const,
+  },
+};
+
 const unsafeJsonWrites: Array<
   [string, (gateway: HttpArkGateway) => Promise<unknown>]
 > = [
@@ -132,6 +227,24 @@ describe("InMemoryArkGateway", () => {
 
     expect(replay).toEqual(first);
     expect(independent.id).toBe("session-2");
+  });
+
+  it("does not substitute the current Agent version during Session creation", async () => {
+    const gateway = new InMemoryArkGateway();
+    const created = await gateway.createAgent(agentInput);
+    await gateway.updateAgent(created.id, {
+      ...agentInput,
+      currentVersion: created.version,
+    });
+
+    await expect(
+      gateway.createSession({
+        agentId: created.id,
+        agentVersion: created.version,
+        environmentId: "environment-1",
+        resources: [],
+      }),
+    ).rejects.toMatchObject({ category: "version_conflict" });
   });
 
   it("tracks session transitions, history, and deterministic live events", async () => {
@@ -406,6 +519,33 @@ it("registers skills, validates bindings, and exposes the ids an Agent carries",
   expect(updated.version).toBe(2);
   expect(gateway.agentSkillIds(agent.id)).toEqual(["skill-2"]);
 
+  const session = await gateway.createSession({
+    agentId: updated.id,
+    agentVersion: updated.version,
+    environmentId: "environment-1",
+    resources: [],
+  });
+  expect(session.configSnapshot).toEqual({
+    modelId: agentInput.modelId,
+    skills: [
+      {
+        type: "custom",
+        skillId: "skill-2",
+        version: "1",
+        useLatest: true,
+        displayName: "",
+      },
+    ],
+    tools: [],
+    environment: {
+      id: "environment-1",
+      type: null,
+      configType: null,
+      scope: null,
+    },
+    completeness: "incomplete",
+  });
+
   // Unknown skill ids are rejected like Ark would.
   await expect(
     gateway.createAgent({ ...agentInput, skills: [{ skillId: "skill-404" }] }),
@@ -633,7 +773,7 @@ describe("HttpArkGateway", () => {
     const fetch = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
         expect(JSON.parse(String(init?.body))).toEqual({
-          agent: "agent-1",
+          agent: { type: "agent", id: "agent-1", version: 1 },
           environment_id: "environment-1",
           resources: [
             {
@@ -643,18 +783,7 @@ describe("HttpArkGateway", () => {
             },
           ],
         });
-        return Response.json({
-          id: "session-1",
-          type: "session",
-          status: "idle",
-          environment_id: "environment-1",
-          agent: { id: "agent-1", version: 1, name: "Research" },
-          created_at: "2026-09-07T00:00:00Z",
-          updated_at: "2026-09-07T00:00:00Z",
-          resources: [],
-          vault_ids: null,
-          environment: {},
-        });
+        return Response.json(arkSessionResponse);
       },
     );
     const gateway = new HttpArkGateway({
@@ -663,21 +792,217 @@ describe("HttpArkGateway", () => {
       fetch,
     });
 
-    await expect(
-      gateway.createSession({
-        agentId: "agent-1",
-        agentVersion: 1,
-        environmentId: "environment-1",
-        resources: [{ fileId: "file-1", mountPath: "/input/file.txt" }],
-      }),
-    ).resolves.toEqual({
-      id: "session-1",
+    const session = await gateway.createSession({
       agentId: "agent-1",
       agentVersion: 1,
       environmentId: "environment-1",
-      status: "idle",
+      resources: [{ fileId: "file-1", mountPath: "/input/file.txt" }],
+    });
+    expect(session).toEqual(normalizedSession);
+    expect(JSON.stringify(session)).not.toContain("do not expose");
+    expect(JSON.stringify(session)).not.toContain("secret.example.test");
+    expect(JSON.stringify(session)).not.toContain("secret-env-value");
+    expect(JSON.stringify(session)).not.toContain("private-bucket");
+  });
+
+  it("uses the Session response parser for get snapshots", async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json(arkSessionResponse));
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(gateway.getSession("session-1")).resolves.toEqual(
+      normalizedSession,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://ark.example.com/api/v3/sessions/session-1",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("keeps the Session identity when optional snapshot sections are missing", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "session-1",
+        status: "idle",
+        environment_id: "environment-1",
+        agent: { id: "agent-1", version: 1 },
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(gateway.getSession("session-1")).resolves.toEqual({
+      ...normalizedSession,
+      configSnapshot: {
+        modelId: null,
+        skills: null,
+        tools: null,
+        environment: {
+          id: null,
+          type: null,
+          configType: null,
+          scope: null,
+        },
+        completeness: "incomplete",
+      },
     });
   });
+
+  it("keeps the Session identity when optional snapshot arrays are malformed", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        ...arkSessionResponse,
+        agent: {
+          ...arkSessionResponse.agent,
+          model: { id: "" },
+          skills: { skill_id: "not-an-array" },
+          tools: "not-an-array",
+        },
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(gateway.getSession("session-1")).resolves.toEqual({
+      ...normalizedSession,
+      configSnapshot: {
+        ...normalizedSession.configSnapshot,
+        modelId: null,
+        skills: null,
+        tools: null,
+        completeness: "incomplete",
+      },
+    });
+  });
+
+  it("treats empty Skill and tool arrays as a complete snapshot", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        ...arkSessionResponse,
+        agent: {
+          ...arkSessionResponse.agent,
+          skills: [],
+          tools: [],
+        },
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(gateway.getSession("session-1")).resolves.toMatchObject({
+      configSnapshot: {
+        skills: [],
+        tools: [],
+        completeness: "complete",
+      },
+    });
+  });
+
+  it("marks snapshot elements without key identity fields incomplete", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        ...arkSessionResponse,
+        agent: {
+          ...arkSessionResponse.agent,
+          skills: [{}],
+          tools: [{}],
+        },
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(gateway.getSession("session-1")).resolves.toMatchObject({
+      configSnapshot: {
+        skills: [
+          {
+            type: null,
+            skillId: null,
+            version: null,
+            useLatest: null,
+            displayName: null,
+          },
+        ],
+        tools: [
+          {
+            type: null,
+            name: null,
+            mcpServerName: null,
+            configuredToolNames: null,
+          },
+        ],
+        completeness: "incomplete",
+      },
+    });
+  });
+
+  it.each([
+    ["id", { ...arkSessionResponse, id: "" }],
+    [
+      "agent id",
+      {
+        ...arkSessionResponse,
+        agent: { ...arkSessionResponse.agent, id: null },
+      },
+    ],
+    [
+      "agent version",
+      {
+        ...arkSessionResponse,
+        agent: { ...arkSessionResponse.agent, version: "1" },
+      },
+    ],
+    ["environment id", { ...arkSessionResponse, environment_id: null }],
+    ["status", { ...arkSessionResponse, status: "unknown" }],
+  ])("rejects a malformed Session core %s", async (_field, response) => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch: vi.fn().mockResolvedValue(Response.json(response)),
+      maxAttempts: 1,
+    });
+
+    await expect(gateway.getSession("session-1")).rejects.toMatchObject({
+      category: "invalid_response",
+    });
+  });
+
+  it.each([0, 1.5])(
+    "rejects invalid Agent version %s before creating a Session",
+    async (agentVersion) => {
+      const fetch = vi.fn();
+      const gateway = new HttpArkGateway({
+        baseUrl: "https://ark.example.com",
+        apiKey: "ark-secret-value",
+        fetch,
+      });
+
+      await expect(
+        gateway.createSession({
+          agentId: "agent-1",
+          agentVersion,
+          environmentId: "environment-1",
+          resources: [],
+        }),
+      ).rejects.toBeInstanceOf(ArkGatewayError);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("wraps user messages in the Ark events contract", async () => {
     const fetch = vi.fn(

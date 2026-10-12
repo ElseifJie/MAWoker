@@ -56,7 +56,43 @@ interface DriveObjectCleanupService {
   deleteStored(id: string, ownerUserId: string): PromiseLike<void>;
 }
 
+/**
+ * Live state of the drive row, re-read immediately before destructive work. The
+ * payload snapshot can be stale: a commit may have promoted the row after this
+ * job was claimed, and only the row's own lease says whether a staged write is
+ * still in flight. `orphanedAt` separates the two committed-row cases: an
+ * orphaned row is the GC's reclamation target, a non-orphaned row is live.
+ */
+export interface DriveCleanupGuard {
+  ownerUserId: string;
+  deletionState: "pending" | "none" | "deletion_failed" | "deleted";
+  writeLeaseUntil: Date | null;
+  orphanedAt: Date | null;
+}
+
+interface DriveObjectCleanupGuards {
+  findDriveCleanupGuard(
+    driveFileId: string,
+  ): PromiseLike<DriveCleanupGuard | undefined>;
+  /** Re-reads the live job claim; a mismatch means this execution lost it. */
+  findCleanupJobClaim(
+    jobId: string,
+    ownerUserId: string,
+  ): PromiseLike<
+    { generation: number; lockedBy: string | null; type: string } | undefined
+  >;
+}
+
 class InvalidDriveObjectCleanupJobError extends Error {}
+class DriveObjectCleanupClaimLostError extends Error {
+  constructor() {
+    super("Drive cleanup job claim lost");
+  }
+}
+
+function assertDriveCleanupClaim(result: boolean): void {
+  if (!result) throw new DriveObjectCleanupClaimLostError();
+}
 
 /**
  * The payload names the drive row, never an object key. The service resolves the
@@ -116,6 +152,7 @@ export class DriveObjectCleanupProcessor {
   constructor(
     private readonly dependencies: {
       jobs: DriveObjectCleanupJobs;
+      guards: DriveObjectCleanupGuards;
       service: DriveObjectCleanupService;
       workerId: string;
       batchSize?: number;
@@ -143,30 +180,90 @@ export class DriveObjectCleanupProcessor {
       }
       const payload = parsePayload(job.payload);
       cleanupGeneration = payload.cleanupGeneration;
+      const now = this.dependencies.now?.() ?? new Date();
+      // Re-read the live row BEFORE destroying bytes. The pre-claim snapshot in
+      // the payload cannot prove the object is still safe to delete: a commit
+      // may have promoted the row after this job was claimed.
+      const guard = await this.dependencies.guards.findDriveCleanupGuard(
+        payload.driveFileId,
+      );
+      if (!guard || guard.ownerUserId !== job.ownerUserId) {
+        throw new InvalidDriveObjectCleanupJobError();
+      }
+      // A staged write is still in flight: reschedule past its lease instead of
+      // deleting a partial object the writer is about to finish. The driver may
+      // hand the timestamp back as a string, so normalize before comparing.
+      const leaseUntil = guard.writeLeaseUntil
+        ? new Date(guard.writeLeaseUntil)
+        : null;
+      if (leaseUntil && leaseUntil.getTime() > now.getTime()) {
+        assertDriveCleanupClaim(
+          await this.dependencies.jobs.deferDriveCleanup(
+            job.id,
+            this.dependencies.workerId,
+            payload.cleanupGeneration,
+          ),
+        );
+        return;
+      }
+      // Lease expiry only proves the writer stopped reporting progress; it
+      // cannot prove whether the remote write committed. Keep the bytes and
+      // finish this exact cleanup generation as an unverified outcome.
+      if (guard.deletionState === "pending") {
+        assertDriveCleanupClaim(
+          await this.dependencies.jobs.retryDriveCleanup(
+            job.id,
+            this.dependencies.workerId,
+            payload.cleanupGeneration,
+            "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
+            true,
+          ),
+        );
+        return;
+      }
+      // The row was committed without being orphaned after this intent was
+      // created: the object is live, so retire the stale intent as a no-op.
+      // An orphaned committed row, by contrast, is exactly what the GC
+      // enqueued this intent to reclaim.
+      if (guard.deletionState === "none" && guard.orphanedAt === null) {
+        assertDriveCleanupClaim(
+          await this.dependencies.jobs.succeedDriveCleanup(
+            job.id,
+            this.dependencies.workerId,
+            payload.cleanupGeneration,
+          ),
+        );
+        return;
+      }
+      // Ownership re-check immediately before the destructive call: if the
+      // job was re-armed (generation moved) or re-locked to another worker
+      // after this claim, this execution must not touch bytes. Stop without
+      // writing status — the current claim owner owns the outcome.
+      const claim = await this.dependencies.guards.findCleanupJobClaim(
+        job.id,
+        job.ownerUserId,
+      );
+      if (
+        !claim ||
+        claim.type !== "cleanup_drive_object" ||
+        claim.generation !== payload.cleanupGeneration ||
+        claim.lockedBy !== this.dependencies.workerId
+      ) {
+        return;
+      }
       await this.dependencies.service.deleteStored(
         payload.driveFileId,
         job.ownerUserId,
       );
-      // A staged write is still in flight: reschedule past its lease instead of
-      // deleting a partial object the writer is about to finish.
-      if (
-        payload.uploadInProgressUntil &&
-        new Date(job.lockedAt).getTime() <
-          payload.uploadInProgressUntil.getTime()
-      ) {
-        await this.dependencies.jobs.deferDriveCleanup(
+      assertDriveCleanupClaim(
+        await this.dependencies.jobs.succeedDriveCleanup(
           job.id,
           this.dependencies.workerId,
           payload.cleanupGeneration,
-        );
-        return;
-      }
-      await this.dependencies.jobs.succeedDriveCleanup(
-        job.id,
-        this.dependencies.workerId,
-        payload.cleanupGeneration,
+        ),
       );
     } catch (error) {
+      if (error instanceof DriveObjectCleanupClaimLostError) throw error;
       const code = retryError(error);
       if (cleanupGeneration === undefined) {
         await this.dependencies.jobs.retry(
@@ -176,12 +273,14 @@ export class DriveObjectCleanupProcessor {
           job.attempts >= job.maxAttempts,
         );
       } else {
-        await this.dependencies.jobs.retryDriveCleanup(
-          job.id,
-          this.dependencies.workerId,
-          cleanupGeneration,
-          code,
-          job.attempts >= job.maxAttempts,
+        assertDriveCleanupClaim(
+          await this.dependencies.jobs.retryDriveCleanup(
+            job.id,
+            this.dependencies.workerId,
+            cleanupGeneration,
+            code,
+            job.attempts >= job.maxAttempts,
+          ),
         );
       }
     }

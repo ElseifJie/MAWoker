@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiClientError, apiClient } from "../api.js";
 import { sessionEventNames, useSessionTimeline } from "./useSessionTimeline.js";
 
 class MockEventSource {
@@ -53,6 +54,16 @@ class MockEventSource {
 
 const sessionId = "00000000-0000-4000-8000-00000000000a";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function render(options?: { enabled?: boolean; onInvalidEvent?: () => void }) {
   const onStreamReady = vi.fn();
   const hook = renderHook(() =>
@@ -75,6 +86,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -364,5 +376,176 @@ describe("useSessionTimeline", () => {
     unmount();
 
     expect(source.closed).toBe(true);
+  });
+
+  it("closes the stream on an auth-invalid control event without reconnecting", () => {
+    const onAuthInvalid = vi.fn();
+    const onStreamReady = vi.fn();
+    const hook = renderHook(() =>
+      useSessionTimeline({
+        sessionId,
+        enabled: true,
+        onStreamReady,
+        onAuthInvalid,
+      }),
+    );
+    const source = MockEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emitOpen();
+      source.emit("auth_invalid", {});
+    });
+
+    // EventSource would reconnect into a 401 loop; the hook must close it and
+    // hand control back to the app for re-verification.
+    expect(source.closed).toBe(true);
+    expect(onAuthInvalid).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.connection).toBe("ended");
+  });
+
+  it("ignores onerror after an auth-invalid control event", () => {
+    const getMe = vi.spyOn(apiClient, "getMe");
+    const onAuthInvalid = vi.fn();
+    const onStreamReady = vi.fn();
+    const hook = renderHook(() =>
+      useSessionTimeline({
+        sessionId,
+        enabled: true,
+        onStreamReady,
+        onAuthInvalid,
+      }),
+    );
+    const source = MockEventSource.instances.at(-1)!;
+
+    act(() => {
+      source.emit("auth_invalid", {});
+      source.emitError();
+    });
+
+    expect(source.closed).toBe(true);
+    expect(onAuthInvalid).toHaveBeenCalledTimes(1);
+    expect(getMe).not.toHaveBeenCalled();
+    expect(hook.result.current.connection).toBe("ended");
+  });
+
+  it("lets auth-invalid win an in-flight 401 probe exactly once", async () => {
+    const probe = deferred<never>();
+    vi.spyOn(apiClient, "getMe").mockReturnValue(probe.promise);
+    const onAuthInvalid = vi.fn();
+    const onStreamReady = vi.fn();
+    const hook = renderHook(() =>
+      useSessionTimeline({
+        sessionId,
+        enabled: true,
+        onStreamReady,
+        onAuthInvalid,
+      }),
+    );
+    const source = MockEventSource.instances.at(-1)!;
+
+    act(() => source.emitError());
+    act(() => source.emit("auth_invalid", {}));
+    await act(async () => {
+      probe.reject(new ApiClientError(401, "AUTH_REQUIRED", "expired"));
+      await probe.promise.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(source.closed).toBe(true);
+    expect(onAuthInvalid).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.connection).toBe("ended");
+  });
+
+  it("suppresses a stale 401 probe after unmount", async () => {
+    const probe = deferred<never>();
+    vi.spyOn(apiClient, "getMe").mockReturnValue(probe.promise);
+    const onAuthInvalid = vi.fn();
+    const onStreamReady = vi.fn();
+    const hook = renderHook(() =>
+      useSessionTimeline({
+        sessionId,
+        enabled: true,
+        onStreamReady,
+        onAuthInvalid,
+      }),
+    );
+    const source = MockEventSource.instances.at(-1)!;
+
+    act(() => source.emitError());
+    hook.unmount();
+    await act(async () => {
+      probe.reject(new ApiClientError(401, "AUTH_REQUIRED", "expired"));
+      await probe.promise.catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(source.closed).toBe(true);
+    expect(onAuthInvalid).not.toHaveBeenCalled();
+  });
+
+  it("closes the stream when a plain error fails an identity probe with 401", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/api/v1/me")) {
+        return Response.json(
+          { error: { code: "AUTH_REQUIRED", message: "x" } },
+          { status: 401 },
+        );
+      }
+      throw new Error(`Unexpected request ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onAuthInvalid = vi.fn();
+    const onStreamReady = vi.fn();
+    const hook = renderHook(() =>
+      useSessionTimeline({
+        sessionId,
+        enabled: true,
+        onStreamReady,
+        onAuthInvalid,
+      }),
+    );
+    const source = MockEventSource.instances.at(-1)!;
+
+    await act(async () => {
+      source.emitError();
+    });
+
+    expect(source.closed).toBe(true);
+    expect(onAuthInvalid).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.connection).toBe("ended");
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps reconnecting when a plain error passes the identity probe", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/api/v1/me")) {
+        return Response.json({
+          user: { userId: "u", authSubject: "s", role: "user" },
+        });
+      }
+      throw new Error(`Unexpected request ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onAuthInvalid = vi.fn();
+    const onStreamReady = vi.fn();
+    const hook = renderHook(() =>
+      useSessionTimeline({
+        sessionId,
+        enabled: true,
+        onStreamReady,
+        onAuthInvalid,
+      }),
+    );
+    const source = MockEventSource.instances.at(-1)!;
+
+    await act(async () => {
+      source.emitError();
+    });
+
+    // A transient failure keeps the browser's bounded retry in charge.
+    expect(source.closed).toBe(false);
+    expect(onAuthInvalid).not.toHaveBeenCalled();
+    expect(hook.result.current.connection).toBe("reconnecting");
+    vi.unstubAllGlobals();
   });
 });

@@ -76,11 +76,17 @@ function session(ownerUserId: string, agentId: string): SessionRecord {
     agentName: "Agent",
     agentVersion: "1",
     environmentId: "environment-1",
+    createAttemptedAt: null,
+    modelId: null,
+    configSnapshot: null,
+    configSnapshotState: "unverified",
+    configSnapshotErrorCode: null,
     title: "",
     status: "idle",
     lastErrorCode: null,
     errorRecoverable: null,
     archivedAt: null,
+    pinnedAt: null,
     deletionState: "none",
     lastEventAt: null,
     createdAt: now,
@@ -318,9 +324,23 @@ describe("Session input database integration", () => {
 
     await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
       arkSessionId: "ark-session-1",
-      arkAgentId: "ark-agent-1",
-      agentVersion: "1",
       status: "idle",
+      modelId: "model-a",
+      configSnapshot: {
+        agentId: "ark-agent-1",
+        agentVersion: "1",
+        environmentId: "environment-1",
+        modelId: "model-a",
+        skills: [],
+        tools: [],
+        environment: {
+          id: "environment-1",
+          type: "environment",
+          configType: "cloud",
+          scope: "account",
+        },
+        completeness: "complete",
+      },
     });
     await expect(
       repositories.sessionLifecycle.listInputs(userId, intent.id),

@@ -106,12 +106,43 @@ export interface ArkDream {
   usage: Record<string, unknown> | null;
 }
 
+export interface ArkSessionSkillSnapshot {
+  type: string | null;
+  skillId: string | null;
+  version: string | null;
+  useLatest: boolean | null;
+  displayName: string | null;
+}
+
+export interface ArkSessionToolSnapshot {
+  type: string | null;
+  name: string | null;
+  mcpServerName: string | null;
+  configuredToolNames: string[] | null;
+}
+
+export interface ArkSessionEnvironmentSnapshot {
+  id: string | null;
+  type: string | null;
+  configType: string | null;
+  scope: string | null;
+}
+
+export interface ArkSessionConfigSnapshot {
+  modelId: string | null;
+  skills: ArkSessionSkillSnapshot[] | null;
+  tools: ArkSessionToolSnapshot[] | null;
+  environment: ArkSessionEnvironmentSnapshot;
+  completeness: "complete" | "incomplete";
+}
+
 export interface ArkSession {
   id: string;
   agentId: string;
   agentVersion: number;
   environmentId: string;
   status: SessionStatus;
+  configSnapshot: ArkSessionConfigSnapshot;
 }
 
 export interface ArkSessionInput {

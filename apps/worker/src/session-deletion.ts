@@ -3,13 +3,35 @@ import type { ArkGateway, SessionStatus } from "@pwa/ark-client";
 type CompletedSteps = {
   interruptRequested?: true;
   nonRunningObserved?: true;
+  settlementConfirmed?: true;
   arkDeleted?: true;
   artifactsOrphaned?: true;
 };
 
+/**
+ * Settlement gate delays: a transient `pending` verdict re-checks quickly,
+ * while `unknown` parks the job for maintenance-scale intervals. Neither
+ * consumes the attempt budget — the Session stays verifiable until a pass
+ * proves `confirmed`.
+ */
+const SETTLEMENT_PENDING_DEFER_MS = 30_000;
+const SETTLEMENT_UNKNOWN_DEFER_MS = 3_600_000;
+
+/**
+ * How long a delete job may sit on the memory fence without progress before
+ * it falls back to consuming its attempt budget (so a permanently stuck
+ * consolidation still surfaces as a failed deletion instead of waiting
+ * forever), and how long each fence wait defers the job.
+ */
+const FENCE_WAIT_BUDGET_MS = 3_600_000;
+const FENCE_DEFER_MS = 30_000;
+
 interface SessionDeletionPayload extends Record<string, unknown> {
   sessionId: string;
   completed: CompletedSteps;
+  /** Epoch ms when the current fence-wait streak began; absent until the
+   * fence first reports "capturing". */
+  fenceWaitStartedAt?: number;
 }
 
 export interface SessionDeletionJob {
@@ -52,6 +74,14 @@ interface SessionDeletionJobs {
     error: string,
     final: boolean,
   ): PromiseLike<void>;
+  /** Returns a fence-blocked job to the queue without consuming an attempt:
+   * consolidation progresses in this same worker, so waiting is progress.
+   * Reports false when the lease was lost; the caller then retries. */
+  deferSessionDeletion(
+    id: string,
+    workerId: string,
+    runAfter: Date,
+  ): PromiseLike<boolean>;
 }
 
 interface SessionDeletionRepository {
@@ -110,6 +140,7 @@ function parsePayload(job: SessionDeletionJob): SessionDeletionPayload {
   const allowed = new Set([
     "interruptRequested",
     "nonRunningObserved",
+    "settlementConfirmed",
     "arkDeleted",
     "artifactsOrphaned",
   ]);
@@ -119,6 +150,9 @@ function parsePayload(job: SessionDeletionJob): SessionDeletionPayload {
       ([key, value]) => !allowed.has(key) || value !== true,
     ) ||
     (completedSteps.arkDeleted === true &&
+      (completedSteps.settlementConfirmed !== true ||
+        completedSteps.nonRunningObserved !== true)) ||
+    (completedSteps.settlementConfirmed === true &&
       completedSteps.nonRunningObserved !== true) ||
     (completedSteps.artifactsOrphaned === true &&
       completedSteps.arkDeleted !== true)
@@ -128,6 +162,10 @@ function parsePayload(job: SessionDeletionJob): SessionDeletionPayload {
   return {
     sessionId,
     completed: { ...(completedSteps as CompletedSteps) },
+    ...(typeof job.payload.fenceWaitStartedAt === "number" &&
+    Number.isFinite(job.payload.fenceWaitStartedAt)
+      ? { fenceWaitStartedAt: job.payload.fenceWaitStartedAt }
+      : {}),
   };
 }
 
@@ -160,6 +198,17 @@ export class SessionDeletionProcessor {
       jobs: SessionDeletionJobs;
       repository: SessionDeletionRepository;
       ark: Pick<ArkGateway, "getSession" | "submitEvent" | "deleteSession">;
+      /**
+       * Pre-deletion settlement gate: the irreversible upstream delete may
+       * only run after a verification pass proves usage completeness.
+       */
+      settlement: {
+        verify(
+          userId: string,
+          sessionId: string,
+          context: { requestId: string },
+        ): PromiseLike<"pending" | "confirmed" | "unknown">;
+      };
       /**
        * The memory fence: ended sessions must have their increments captured
        * into the episodic digest before the upstream record is deleted.
@@ -249,16 +298,60 @@ export class SessionDeletionProcessor {
         }
       }
 
+      if (
+        !payload.completed.settlementConfirmed &&
+        !payload.completed.arkDeleted
+      ) {
+        // T03-C: only a confirmed settlement unlocks the irreversible steps.
+        // "A check ran" is not evidence — the verdict decides, and neither a
+        // transient `pending` nor an unprovable `unknown` consumes attempts.
+        const verdict = await this.dependencies.settlement.verify(
+          ownerUserId,
+          payload.sessionId,
+          { requestId: `worker:${job.id}:${job.attempts}:settle` },
+        );
+        if (verdict !== "confirmed") {
+          const now = (this.dependencies.now ?? (() => new Date()))();
+          const deferMs =
+            verdict === "pending"
+              ? SETTLEMENT_PENDING_DEFER_MS
+              : SETTLEMENT_UNKNOWN_DEFER_MS;
+          const deferred = await this.dependencies.jobs.deferSessionDeletion(
+            job.id,
+            this.dependencies.workerId,
+            new Date(now.getTime() + deferMs),
+          );
+          if (!deferred) throw new SessionStillRunningError();
+          return;
+        }
+        payload.completed.settlementConfirmed = true;
+        await this.checkpoint(job, payload);
+      }
+
       if (!payload.completed.arkDeleted) {
-        // The memory fence re-runs on every attempt until "clear": the
-        // capture edit run it plans is applied by the memory loop in this
-        // same worker, so waiting here is bounded by consolidation progress.
+        // The memory fence re-runs until "clear": the capture edit run it
+        // plans is applied by the memory loop in this same worker, so waiting
+        // here is bounded by consolidation progress. Waiting defers the job
+        // without consuming attempts; only a full budget of no progress (or a
+        // lost lease) falls back to the attempt-consuming retry path.
         const fence = await this.dependencies.memory?.fenceDeletion(
           ownerUserId,
           session.arkSessionId,
         );
         if (fence === "capturing") {
-          throw new SessionStillRunningError();
+          const now = (this.dependencies.now ?? (() => new Date()))();
+          const started = payload.fenceWaitStartedAt ?? now.getTime();
+          if (now.getTime() - started > FENCE_WAIT_BUDGET_MS)
+            throw new SessionStillRunningError();
+          payload.fenceWaitStartedAt = started;
+          await this.checkpoint(job, payload);
+          const deferred = await this.dependencies.jobs.deferSessionDeletion(
+            job.id,
+            this.dependencies.workerId,
+            new Date(now.getTime() + FENCE_DEFER_MS),
+          );
+          if (!deferred) throw new SessionStillRunningError();
+          return;
         }
         try {
           await this.dependencies.ark.deleteSession(session.arkSessionId, {

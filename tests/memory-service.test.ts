@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryArkGateway } from "../packages/ark-client/src/index.js";
-import { hashMemory } from "../packages/domain/src/memory-policy.js";
 import {
   MemoryService,
   type MemoryState,
@@ -429,6 +428,82 @@ describe("personal memory coordinator", () => {
       "not-dream",
     );
   });
+  it("does not re-dream a summarized session whose tool inputs merely reorder", async () => {
+    const { service, ark, sessions } = setup();
+    const store = await service.ensure("a");
+    const agent = await ark.createAgent({
+      name: "A",
+      description: "",
+      modelId: "model-a",
+      systemPrompt: "",
+    });
+    const session = await ark.createSession({
+      agentId: agent.id,
+      agentVersion: 1,
+      environmentId: "env",
+      resources: [
+        { type: "memory_store", memoryStoreId: store, access: "read_write" },
+      ],
+    });
+    ark.emitEvent(session.id, {
+      type: "agent.tool_use",
+      data: {
+        input: { description: "Check current date", command: "date '+%Y'" },
+      },
+    });
+    ark.emitEvent(session.id, {
+      type: "agent.message",
+      data: { content: "done" },
+    });
+    ark.emitEvent(session.id, {
+      type: "session.status_idle",
+      data: { stop_reason: { type: "end_turn" } },
+    });
+    sessions.push({
+      id: "local",
+      arkSessionId: session.id,
+      memoryStoreId: store,
+      pending: false,
+      userId: "a",
+    });
+    await service.dream("a");
+    let guard = 12;
+    while (
+      ((await service.status("a")).run?.stage ?? "") !== "polling" &&
+      guard-- > 0
+    )
+      await service.advance("a");
+    const polling = await service.status("a");
+    const candidate = await ark.createMemoryStore({ name: "candidate" });
+    ark.setDreamResult(polling.run!.dreamId!, candidate.id);
+    const finished = await finish(service, "a");
+    expect(finished.run?.stage).toBe("completed");
+    expect(finished.summarizedSources).toHaveLength(1);
+
+    // The upstream events API re-serializes tool-call input maps on every
+    // request, so raw JSON.stringify fingerprints changed per fetch and used
+    // to re-plan an identical Dream on every monitor pass.
+    const original = ark.listEvents.bind(ark);
+    ark.listEvents = async (sessionId, options) => {
+      const events = await original(sessionId, options);
+      return events.map((event) => {
+        const input = (event.data as { input?: object }).input;
+        return input
+          ? {
+              ...event,
+              data: {
+                ...event.data,
+                input: Object.fromEntries(Object.entries(input).reverse()),
+              },
+            }
+          : event;
+      });
+    };
+
+    await service.runOnce();
+    const after = await service.status("a");
+    expect(after.run?.stage).toBe("completed");
+  });
   it("polls Dream, preserves intervening writes and keeps the fixed binding", async () => {
     const { service, ark, sessions } = setup();
     const store = await service.ensure("a");
@@ -569,9 +644,12 @@ describe("personal memory coordinator", () => {
     quarantined.run!.error = "crashed mid-send";
     quarantined.status = "repairing";
     states.set("a", quarantined);
-    await expect(service.list("a")).rejects.toMatchObject({
-      code: "MEMORY_BUSY",
-    });
+    // The quarantined run keeps writes locked, but the Store stays readable.
+    await expect(
+      service.write("a", { path: "/memories/profile.md", content: "again" }),
+    ).rejects.toMatchObject({ code: "MEMORY_BUSY" });
+    const reading = await service.list("a");
+    expect(reading.state.status).toBe("repairing");
     await expect(service.recover("a")).rejects.toMatchObject({
       code: "MEMORY_REPAIR_REQUIRED",
     });
@@ -634,6 +712,47 @@ describe("personal memory coordinator", () => {
     );
     await service.dream("a");
     expect((await service.status("a")).run?.stage).toBe("queued");
+  });
+  it("serves reads while a maintenance run is in flight", async () => {
+    const harness = setup();
+    await reachPolling(harness);
+    const { service, ark } = harness;
+    const state = await service.status("a");
+    const candidate = await ark.createMemoryStore({ name: "candidate" });
+    ark.setDreamResult(state.run!.dreamId!, candidate.id);
+    await service.advance("a"); // Dream observed; the run is waiting at merge.
+    expect((await service.status("a")).run?.stage).toBe("merge");
+    // Viewing during consolidation returns the pre-update Store content
+    // instead of a busy error; only writes stay gated on the run.
+    const reading = await service.list("a");
+    expect(reading.state.run?.stage).toBe("merge");
+    expect(reading.entries.length).toBeGreaterThan(0);
+    expect(reading.sessionCount).toBe(1);
+  });
+  it("fails a dream whose merge wait for quiescent sources exceeds the timeout", async () => {
+    const harness = setup();
+    await reachPolling(harness);
+    const { service, ark, sessions } = harness;
+    const state = await service.status("a");
+    const candidate = await ark.createMemoryStore({ name: "candidate" });
+    ark.setDreamResult(state.run!.dreamId!, candidate.id);
+    await service.advance("a"); // Dream complete; the run is now waiting at merge.
+    expect((await service.status("a")).run?.stage).toBe("merge");
+    sessions[0]!.pending = true; // A source that never goes quiet.
+    await service.advance("a"); // Anchors the merge wait.
+    harness.setNow(1_000_000 + 1_800_001);
+    await service.advance("a");
+    // Same route as the poll timeout: cleanup releases the intermediate
+    // Stores first, then the run fails and the Store returns to active.
+    expect((await service.status("a")).run?.stage).toBe("cleanup");
+    await service.advance("a");
+    const after = await service.status("a");
+    expect(after.run?.stage).toBe("failed");
+    expect(after.status).toBe("active");
+    expect(after.run?.candidateId).toBeNull();
+    expect(ark.calls.some((c) => c.operation === "deleteMemoryStore")).toBe(
+      true,
+    );
   });
   it("migrates legacy session handoffs into the episodes skeleton", async () => {
     const { service, ark, states } = setup();
@@ -801,7 +920,7 @@ describe("personal memory coordinator", () => {
     await service.runOnce();
     expect((await service.status("a")).run?.kind).toBe("dream");
   });
-  it("fences session deletion until the increments are captured", async () => {
+  it("excludes an unconsolidated source on deletion without capturing it", async () => {
     const { service, ark, sessions, states } = setup();
     const store = await service.ensure("a");
     const agent = await ark.createAgent({
@@ -833,17 +952,31 @@ describe("personal memory coordinator", () => {
       pending: false,
       userId: "a",
     });
-    // Unconsolidated: the fence plans a verbatim capture and holds deletion.
-    expect(await service.fenceDeletion("a", session.id)).toBe("capturing");
-    expect((await service.status("a")).run?.kind).toBe("edit");
-    await finish(service, "a");
-    const digest = (await ark.listMemories(store)).find(
-      (e) => e.path === `/episodes/digest/${session.id}.md`,
-    );
-    expect(digest?.content).toContain("预算 8000，评审周五。");
+
+    // Deleting an unconsolidated session must NOT create a long-term copy:
+    // the fence registers a source exclusion and clears immediately.
     expect(await service.fenceDeletion("a", session.id)).toBe("clear");
-    // An already-summarized source clears immediately without a digest entry.
-    const other = await ark.createSession({
+    const entries = await ark.listMemories(store);
+    expect(
+      entries.filter((e) => e.path.startsWith("/episodes/digest/")),
+    ).toEqual([]);
+    expect(states.get("a")!.excludedSourceIds).toContain(session.id);
+    // The exclusion is idempotent: a retried deletion clears again.
+    expect(await service.fenceDeletion("a", session.id)).toBe("clear");
+    // No capture run was planned.
+    expect((await service.status("a")).run).toBeNull();
+  });
+
+  it("waits for an in-flight run, then excludes the source and keeps its output", async () => {
+    const { service, ark, sessions, states } = setup();
+    const store = await service.ensure("a");
+    const agent = await ark.createAgent({
+      name: "A",
+      description: "",
+      modelId: "model-a",
+      systemPrompt: "",
+    });
+    const session = await ark.createSession({
       agentId: agent.id,
       agentVersion: 1,
       environmentId: "env",
@@ -851,24 +984,38 @@ describe("personal memory coordinator", () => {
         { type: "memory_store", memoryStoreId: store, access: "read_write" },
       ],
     });
-    ark.emitEvent(other.id, {
+    ark.emitEvent(session.id, {
       type: "user.message",
-      data: { content: "again" },
+      data: { content: "记住预算 8000。" },
     });
-    ark.emitEvent(other.id, {
+    ark.emitEvent(session.id, {
       type: "session.status_idle",
       data: { stop_reason: { type: "end_turn" } },
     });
     sessions.push({
-      id: "local-2",
-      arkSessionId: other.id,
+      id: "local",
+      arkSessionId: session.id,
       memoryStoreId: store,
       pending: false,
       userId: "a",
     });
-    states.get("a")!.summarizedSources = [
-      hashMemory(JSON.stringify(await ark.listEvents(other.id))),
-    ];
-    expect(await service.fenceDeletion("a", other.id)).toBe("clear");
+
+    // A consolidation run that already started finishes safely: the fence
+    // holds the deletion until the run is done, without planning a capture.
+    states.get("a")!.lastMonitorAt = 0;
+    await service.runOnce();
+    expect((await service.status("a")).run?.kind).toBe("edit");
+    expect(await service.fenceDeletion("a", session.id)).toBe("capturing");
+    await finish(service, "a");
+    const digest = (await ark.listMemories(store)).find(
+      (e) => e.path === `/episodes/digest/${session.id}.md`,
+    );
+    // Content formed before the deletion request is kept...
+    expect(digest?.content).toContain("记住预算 8000。");
+
+    // ...and the source is then excluded so nothing new can be formed.
+    expect(await service.fenceDeletion("a", session.id)).toBe("clear");
+    expect(states.get("a")!.excludedSourceIds).toContain(session.id);
+    expect(await service.fenceDeletion("a", session.id)).toBe("clear");
   });
 });

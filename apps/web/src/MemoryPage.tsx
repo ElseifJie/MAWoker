@@ -25,6 +25,32 @@ function ongoing(state: MemoryState | null) {
   return !!state?.run && !["completed", "failed"].includes(state.run.stage);
 }
 
+/**
+ * Stale-while-revalidate cache. Navigating between the Store list and the
+ * detail view remounts this component, and every list refresh pays an
+ * upstream Ark round trip — seconds per click. Rendering the last known list
+ * immediately keeps navigation instant; the background refresh still corrects
+ * it once the network responds.
+ *
+ * Entries are bound to the account that loaded them. A different account (or a
+ * signed-out state) never renders another account's store, and a response that
+ * arrives after an account switch only ever writes under its own account key.
+ */
+let memoryCache: { account: string; list: MemoryList } | null = null;
+
+/**
+ * Drops the cache entry for one account. App calls this on sign-out and on
+ * auth-required so a stored list never outlives its session.
+ */
+export function clearMemoryCache(account: string): void {
+  if (memoryCache?.account === account) memoryCache = null;
+}
+
+/** Test hook: the cache intentionally outlives a single mount. */
+export function resetMemoryCacheForTest(): void {
+  memoryCache = null;
+}
+
 function memoryError(error: unknown): string {
   if (error instanceof ApiClientError) {
     switch (error.code) {
@@ -146,17 +172,29 @@ function PathTree({
   return <div className="memory-tree__nodes">{render(nodes)}</div>;
 }
 
-export function MemoryPage({ onAuthRequired }: { onAuthRequired: () => void }) {
+export function MemoryPage({
+  onAuthRequired,
+  account,
+}: {
+  onAuthRequired: () => void;
+  account: string;
+}) {
   const location = useLocation();
   const detailView = location.pathname === "/context/store";
   return detailView ? (
-    <MemoryStoreDetail onAuthRequired={onAuthRequired} />
+    <MemoryStoreDetail onAuthRequired={onAuthRequired} account={account} />
   ) : (
-    <MemoryStoreList onAuthRequired={onAuthRequired} />
+    <MemoryStoreList onAuthRequired={onAuthRequired} account={account} />
   );
 }
 
-function MemoryStoreList({ onAuthRequired }: { onAuthRequired: () => void }) {
+function MemoryStoreList({
+  onAuthRequired,
+  account,
+}: {
+  onAuthRequired: () => void;
+  account: string;
+}) {
   const navigate = useNavigate();
   const [list, setList] = useState<MemoryList | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -175,10 +213,16 @@ function MemoryStoreList({ onAuthRequired }: { onAuthRequired: () => void }) {
   useEffect(() => {
     let active = true;
     setError(null);
+    // Only this account's cached list may render, and this account's response
+    // may only write under this account's key.
+    if (memoryCache?.account === account) setList(memoryCache.list);
     apiClient
       .listMemory()
       .then((result) => {
-        if (active) setList(result);
+        if (active) {
+          memoryCache = { account, list: result };
+          setList(result);
+        }
       })
       .catch((loadError) => {
         if (!active) return;
@@ -189,7 +233,7 @@ function MemoryStoreList({ onAuthRequired }: { onAuthRequired: () => void }) {
     return () => {
       active = false;
     };
-  }, [reload]);
+  }, [account, reload]);
 
   return (
     <div className="page page--wide">
@@ -256,11 +300,21 @@ function MemoryStoreList({ onAuthRequired }: { onAuthRequired: () => void }) {
   );
 }
 
-function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
+function MemoryStoreDetail({
+  onAuthRequired,
+  account,
+}: {
+  onAuthRequired: () => void;
+  account: string;
+}) {
   const navigate = useNavigate();
   const [list, setList] = useState<MemoryList | null>(null);
   const [state, setState] = useState<MemoryState | null>(null);
   const [editor, setEditor] = useState<MemoryEntry | null>(null);
+  // The edit base captured when the entry was selected. It never follows the
+  // draft or a background refresh: saving sends it as expectedHash, so a stale
+  // editor conflicts instead of overwriting a concurrent update.
+  const [baseHash, setBaseHash] = useState<string | null>(null);
   const [existing, setExisting] = useState(false);
   const [pending, setPending] = useState(false);
   const [repairPending, setRepairPending] = useState(false);
@@ -268,10 +322,23 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  // A save on an entry read without a server version: the page re-reads, and
+  // the notice survives the refresh (unlike `error`, which the reload clears).
+  const [versionNotice, setVersionNotice] = useState<string | null>(null);
+  const [awaitingVersionFor, setAwaitingVersionFor] = useState<string | null>(
+    null,
+  );
   const authRef = useRef(onAuthRequired);
   authRef.current = onAuthRequired;
   const accepted = useRef<"Save" | "Delete" | null>(null);
+  // Mirrors `editor` for the poll closure, which resolves the saved entry by
+  // path once the queued write completes.
+  const editorRef = useRef<MemoryEntry | null>(null);
   const alive = useRef(true);
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
 
   const handleError = useCallback((loadError: unknown) => {
     if (!alive.current) return;
@@ -290,17 +357,43 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
   useEffect(() => {
     let active = true;
     setError(null);
+    // Only this account's cached list may render, and this account's response
+    // may only write under this account's key.
+    if (memoryCache?.account === account) {
+      setList(memoryCache.list);
+      setState(memoryCache.list.state);
+    }
     apiClient
       .listMemory()
       .then((result) => {
         if (!active) return;
+        memoryCache = { account, list: result };
         setList(result);
         setState(result.state);
+        // A re-read requested by the unversioned-save guard: only re-base the
+        // draft when the server content is byte-identical to what the editor
+        // holds — otherwise a fresh hash must never meet a stale draft.
+        const awaitingPath = awaitingVersionFor;
+        if (awaitingPath) {
+          setAwaitingVersionFor(null);
+          const fresh = result.entries.find(
+            (entry) => entry.path === awaitingPath,
+          );
+          if (
+            fresh?.hash &&
+            editorRef.current?.path === awaitingPath &&
+            editorRef.current?.content === fresh.content
+          ) {
+            setBaseHash(fresh.hash);
+            setVersionNotice(null);
+          }
+        }
       })
       .catch(async (loadError) => {
         if (!active) return;
         handleError(loadError);
-        // Listing is unavailable while the worker drains/applies; status still works.
+        // Only a store that was never provisioned stays unreadable; runs no
+        // longer block listing. Status still works and keeps the UI informed.
         if (
           loadError instanceof ApiClientError &&
           loadError.code === "MEMORY_BUSY"
@@ -316,7 +409,7 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
     return () => {
       active = false;
     };
-  }, [handleError, reload]);
+  }, [account, awaitingVersionFor, handleError, reload]);
 
   const running = ongoing(state);
   useEffect(() => {
@@ -330,6 +423,7 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
         if (!ongoing(next)) {
           const result = await apiClient.listMemory();
           if (!active) return;
+          memoryCache = { account, list: result };
           setList(result);
           setState(result.state);
           setError(null);
@@ -342,12 +436,13 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
               action === "Save" ? "Memory saved." : "Memory deleted.",
             );
             if (action === "Save") {
-              setEditor(
-                (currentEntry) =>
-                  result.entries.find(
-                    (entry) => entry.path === currentEntry?.path,
-                  ) ?? currentEntry,
+              const savedPath = editorRef.current?.path;
+              const savedEntry = result.entries.find(
+                (entry) => entry.path === savedPath,
               );
+              setEditor(savedEntry ?? editorRef.current);
+              // The write landed: the fresh content is the next edit base.
+              setBaseHash(savedEntry?.hash ?? null);
               setExisting(true);
             }
             if (action === "Delete") {
@@ -377,7 +472,7 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
       active = false;
       clearTimeout(timer);
     };
-  }, [running, handleError]);
+  }, [account, running, handleError]);
 
   async function mutate(
     operation: () => Promise<MemoryState>,
@@ -457,6 +552,14 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
       </Button>
 
       {error ? <Alert tone="danger">{error}</Alert> : null}
+      {versionNotice ? <Alert tone="warning">{versionNotice}</Alert> : null}
+      {running ? (
+        <Alert tone="info">
+          Memory consolidation is running. This is a point-in-time read of the
+          live store and may show changes being applied; the page refreshes and
+          editing unlocks when it finishes.
+        </Alert>
+      ) : null}
       {feedback ? (
         <Alert tone={running ? "info" : "success"}>{feedback}</Alert>
       ) : null}
@@ -562,6 +665,8 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
                 const entry = entries.find((item) => item.path === node.path);
                 if (!entry) return;
                 setEditor(entry);
+                setBaseHash(entry.hash ?? null);
+                setVersionNotice(null);
                 setExisting(true);
                 setFeedback(null);
               }}
@@ -572,6 +677,8 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
                 disabled={blocked}
                 onClick={() => {
                   setEditor({ path: "", content: "" });
+                  setBaseHash(null);
+                  setVersionNotice(null);
                   setExisting(false);
                   setFeedback(null);
                 }}
@@ -586,7 +693,28 @@ function MemoryStoreDetail({ onAuthRequired }: { onAuthRequired: () => void }) {
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void mutate(() => apiClient.writeMemory(editor), "Save");
+                  // `hash` is read metadata, never a writable field.
+                  const entry = { path: editor.path, content: editor.content };
+                  if (existing && baseHash === null) {
+                    // Never fall back to an unversioned write: re-read once.
+                    // The notice survives the refresh; the draft is re-based
+                    // only if the server content is byte-identical.
+                    setAwaitingVersionFor(entry.path);
+                    setVersionNotice(
+                      "This entry was read without a version. The page refreshed; if saving is still blocked, refresh the page or update the client.",
+                    );
+                    setReload((value) => value + 1);
+                    return;
+                  }
+                  void mutate(
+                    () =>
+                      apiClient.writeMemory(
+                        existing && baseHash !== null
+                          ? { ...entry, expectedHash: baseHash }
+                          : entry,
+                      ),
+                    "Save",
+                  );
                 }}
               >
                 <Field

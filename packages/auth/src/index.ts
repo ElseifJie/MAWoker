@@ -16,6 +16,13 @@ export interface AuthUser {
   email: string;
   role: UserRole;
   status: UserStatus;
+  /**
+   * Credential version. Every admin-level revocation (password change,
+   * disable, role change, revoke-all) bumps it in the same transaction;
+   * sessions carry the epoch they were issued under and stop authenticating
+   * the moment it moves.
+   */
+  authEpoch: number;
 }
 
 export interface AuthSessionRecord {
@@ -25,6 +32,8 @@ export interface AuthSessionRecord {
   expiresAt: Date;
   revokedAt: Date | null;
   createdAt: Date;
+  /** The user's authEpoch at issue time; a mismatch invalidates the session. */
+  issuedEpoch: number;
 }
 
 export interface AuthContext {
@@ -40,6 +49,17 @@ export interface AuthUserWithPassword extends AuthUser {
 export interface AuthStore {
   findUserByEmail(email: string): Promise<AuthUserWithPassword | undefined>;
   createSession(session: AuthSessionRecord): Promise<void>;
+  /**
+   * Atomic issuance: after the caller verified the password, the store
+   * re-reads the user (locked), re-checks status and the exact password
+   * hash, and inserts the session stamped with the user's CURRENT epoch —
+   * all in one transaction. Any change in between returns undefined.
+   */
+  issueVerifiedSession(input: {
+    userId: string;
+    expectedPasswordHash: string;
+    session: Omit<AuthSessionRecord, "issuedEpoch">;
+  }): Promise<{ session: AuthSessionRecord; user: AuthUser } | undefined>;
   findSessionByTokenHash(
     tokenHash: string,
     now: Date,
@@ -65,7 +85,10 @@ export function normalizeEmail(email: string): string {
 
 export interface ApplicationSessionServiceOptions {
   store: AuthStore;
+  /** Idle window (default 7 days). */
   sessionTtlMs?: number;
+  /** Absolute lifetime cap (default 30 days); renewal cannot extend past it. */
+  absoluteTtlMs?: number;
   now?: () => Date;
   randomBytes?: (size: number) => Buffer;
   randomToken?: () => string;
@@ -79,6 +102,7 @@ function hashToken(token: string): string {
 export class ApplicationSessionService {
   private readonly store: AuthStore;
   private readonly sessionTtlMs: number;
+  private readonly absoluteTtlMs: number;
   private readonly now: () => Date;
   private readonly createToken: () => string;
   private readonly randomId: () => string;
@@ -87,6 +111,8 @@ export class ApplicationSessionService {
   constructor(options: ApplicationSessionServiceOptions) {
     this.store = options.store;
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60_000;
+    this.absoluteTtlMs =
+      options.absoluteTtlMs ?? 30 * 24 * 60 * 60_000;
     this.now = options.now ?? (() => new Date());
     this.createToken =
       options.randomToken ??
@@ -119,26 +145,45 @@ export class ApplicationSessionService {
     const now = this.now();
     const token = this.createToken();
     const expiresAt = new Date(now.getTime() + this.sessionTtlMs);
-    await this.store.createSession({
-      id: this.randomId(),
+    // The password check above raced nothing yet, but the account can change
+    // between verification and issuance: the store re-verifies the status,
+    // the exact password version, and stamps the current epoch atomically.
+    const issued = await this.store.issueVerifiedSession({
       userId: user.id,
-      tokenHash: hashToken(token),
-      expiresAt,
-      revokedAt: null,
-      createdAt: now,
+      expectedPasswordHash: user.passwordHash,
+      session: {
+        id: this.randomId(),
+        userId: user.id,
+        tokenHash: hashToken(token),
+        expiresAt,
+        revokedAt: null,
+        createdAt: now,
+      },
     });
-    return { token, expiresAt };
+    if (!issued) {
+      throw new AuthRequiredError();
+    }
+    return { token, expiresAt: issued.session.expiresAt };
   }
 
   async authenticate(token?: string): Promise<AuthContext> {
     if (!token) {
       throw new AuthRequiredError();
     }
+    const now = this.now();
     const found = await this.store.findSessionByTokenHash(
       hashToken(token),
-      this.now(),
+      now,
     );
-    if (!found || found.user.status !== "active") {
+    if (
+      !found ||
+      found.user.status !== "active" ||
+      // An epoch mismatch means a revocation happened after this session was
+      // issued; the token is dead even though its row is not marked yet.
+      found.session.issuedEpoch !== found.user.authEpoch ||
+      // Absolute lifetime cap: idle renewal can never extend past it.
+      found.session.createdAt.getTime() + this.absoluteTtlMs <= now.getTime()
+    ) {
       throw new AuthRequiredError();
     }
     return {
@@ -156,7 +201,30 @@ export class ApplicationSessionService {
 
   async renew(token: string): Promise<{ expiresAt: Date }> {
     const now = this.now();
-    const expiresAt = new Date(now.getTime() + this.sessionTtlMs);
+    const found = await this.store.findSessionByTokenHash(
+      hashToken(token),
+      now,
+    );
+    if (
+      !found ||
+      found.user.status !== "active" ||
+      found.session.issuedEpoch !== found.user.authEpoch
+    ) {
+      throw new AuthRequiredError();
+    }
+    // Idle renewal, capped by the absolute deadline from creation.
+    const absoluteDeadline = new Date(
+      found.session.createdAt.getTime() + this.absoluteTtlMs,
+    );
+    const expiresAt = new Date(
+      Math.min(
+        now.getTime() + this.sessionTtlMs,
+        absoluteDeadline.getTime(),
+      ),
+    );
+    if (expiresAt.getTime() <= now.getTime()) {
+      throw new AuthRequiredError();
+    }
     const extended = await this.store.extendSession(
       hashToken(token),
       expiresAt,

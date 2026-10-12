@@ -46,11 +46,17 @@ async function seedSession(
     agentName: "Agent",
     agentVersion: "1",
     environmentId: "environment-1",
+    createAttemptedAt: null,
+    modelId: null,
+    configSnapshot: null,
+    configSnapshotState: "unverified",
+    configSnapshotErrorCode: null,
     title: "Task",
     status: "idle",
     lastErrorCode: null,
     errorRecoverable: null,
     archivedAt: null,
+    pinnedAt: null,
     deletionState: "none",
     lastEventAt: null,
     createdAt: timestamp,
@@ -59,9 +65,23 @@ async function seedSession(
   await repositories.sessionLifecycle.prepareCreate(intent);
   await repositories.sessionLifecycle.completeCreate(sessionId, userId, {
     arkSessionId: "ark-session-1",
-    arkAgentId: "ark-agent-1",
-    agentVersion: "1",
     status: "idle",
+    modelId: "model-a",
+    configSnapshot: {
+      agentId: "ark-agent-1",
+      agentVersion: "1",
+      environmentId: "environment-1",
+      modelId: "model-a",
+      skills: [],
+      tools: [],
+      environment: {
+        id: "environment-1",
+        type: "environment",
+        configType: "cloud",
+        scope: "account",
+      },
+      completeness: "complete",
+    },
   });
   return { sessionId, userId };
 }
@@ -74,6 +94,18 @@ function deletionArk() {
       agentVersion: 1,
       environmentId: "environment-1",
       status: "idle" as const,
+      configSnapshot: {
+        modelId: "model-a",
+        skills: [],
+        tools: [],
+        environment: {
+          id: "environment-1",
+          type: "environment",
+          configType: "cloud",
+          scope: "account",
+        },
+        completeness: "complete" as const,
+      },
     })),
     submitEvent: vi.fn(async () => ({
       id: "event-1",
@@ -82,11 +114,14 @@ function deletionArk() {
       data: {},
     })),
     deleteSession: vi.fn(async () => undefined),
+    // The settlement gate reads the full history: an empty event list is a
+    // confirmed empty task, which is the normal shape for these fixtures.
+    listEvents: vi.fn(async () => []),
   };
 }
 
 describe("Session deletion and drive cleanup fencing", () => {
-  it("reclaims a staged object when deletion wins the race, and still removes the Session", async () => {
+  it("preserves a staged object with an unknown write outcome while removing the Session", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
     const { sessionId, userId } = await seedSession(
@@ -120,7 +155,11 @@ describe("Session deletion and drive cleanup fencing", () => {
       repository: repositories.driveFiles,
       storage,
       createId: id,
-      now: () => new Date("2099-09-06T00:00:00.000Z"),
+      // A realistic clock: the staged write lease (now + 5 minutes) is long
+      // expired by the time the cleanup intent runs, exactly like production
+      // where the intent's run_after is the lease end. The 2099 clock on the
+      // other services only fixes deterministic row timestamps.
+      now: () => new Date("2026-09-06T00:00:00.000Z"),
     });
     const artifacts = new ArtifactService({
       repository: repositories.artifacts,
@@ -149,11 +188,18 @@ describe("Session deletion and drive cleanup fencing", () => {
       jobs: repositories.jobs,
       repository: repositories.sessionDeletion,
       ark: deletionArk(),
+      settlement: {
+        verify: async () => "confirmed" as const,
+      },
       workerId: "session-delete-worker",
       now: () => new Date("2099-09-06T00:00:00.000Z"),
     });
     const cleanup = new DriveObjectCleanupProcessor({
       jobs: repositories.jobs,
+      guards: {
+        findDriveCleanupGuard: repositories.driveFiles.findCleanupGuard,
+        findCleanupJobClaim: repositories.driveFiles.findCleanupJobClaim,
+      },
       service: drive,
       workerId: "drive-cleanup-worker",
     });
@@ -194,8 +240,32 @@ describe("Session deletion and drive cleanup fencing", () => {
       [sessionId],
     );
     expect(sessionCount.rows[0]!.count).toBe("0");
-    expect(objects.size).toBe(0);
-    expect(deletes).toEqual([{ key: stagedKey, existed: true }]);
+    expect(objects).toEqual(new Set([stagedKey]));
+    expect(deletes).toEqual([]);
+    const cleanupState = await database.client.query<{
+      status: string;
+      last_error: string | null;
+      deletion_state: string;
+      last_error_code: string | null;
+    }>(
+      `select job.status::text as status,
+              job.last_error,
+              drive.deletion_state::text as deletion_state,
+              drive.last_error_code
+         from background_jobs job
+         join drive_files drive on drive.id = job.id
+        where job.type = 'cleanup_drive_object'
+          and drive.tos_object_key = $1`,
+      [stagedKey],
+    );
+    expect(cleanupState.rows).toEqual([
+      {
+        status: "failed",
+        last_error: "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
+        deletion_state: "deletion_failed",
+        last_error_code: "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
+      },
+    ]);
     await database.close();
   });
 
@@ -261,6 +331,110 @@ describe("Session deletion and drive cleanup fencing", () => {
     ).resolves.toBe(false);
     const drive = await repositories.driveFiles.findOwned(userId, staged);
     expect(drive!.deletionState).toBe("pending");
+    await database.close();
+  });
+
+  it("preserves unverified error codes behind cleanup generation fences", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId } = await seedSession(database.client, repositories);
+    const artifactJobId = id();
+    const driveJobId = id();
+    const lockedAt = new Date("2026-09-06T00:00:00.000Z");
+
+    await database.client.query(
+      `insert into background_jobs
+        (id, owner_user_id, type, status, priority, payload, attempts,
+         run_after, locked_at, locked_by)
+       values
+        ($1, $3, 'cleanup_artifact_object', 'running', 90, $4::jsonb, 1,
+         $6, $6, 'cleanup-worker'),
+        ($2, $3, 'cleanup_drive_object', 'running', 90, $5::jsonb, 1,
+         $6, $6, 'cleanup-worker')`,
+      [
+        artifactJobId,
+        driveJobId,
+        userId,
+        JSON.stringify({
+          objectKey: `tenants/${userId}/sessions/legacy/artifacts/file/version`,
+          cleanupGeneration: 7,
+        }),
+        JSON.stringify({
+          driveFileId: driveJobId,
+          cleanupGeneration: 11,
+        }),
+        lockedAt,
+      ],
+    );
+
+    await expect(
+      repositories.jobs.retryArtifactCleanup(
+        artifactJobId,
+        "cleanup-worker",
+        6,
+        "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+        true,
+        lockedAt,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.jobs.retryDriveCleanup(
+        driveJobId,
+        "cleanup-worker",
+        10,
+        "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
+        true,
+        lockedAt,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.jobs.retryArtifactCleanup(
+        artifactJobId,
+        "cleanup-worker",
+        7,
+        "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+        true,
+        lockedAt,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      repositories.jobs.retryDriveCleanup(
+        driveJobId,
+        "cleanup-worker",
+        11,
+        "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
+        true,
+        lockedAt,
+      ),
+    ).resolves.toBe(true);
+
+    const states = await database.client.query<{
+      id: string;
+      status: string;
+      last_error: string;
+    }>(
+      `select id, status::text as status, last_error
+         from background_jobs
+        where id in ($1, $2)`,
+      [artifactJobId, driveJobId],
+    );
+    expect(
+      Object.fromEntries(
+        states.rows.map((row) => [
+          row.id,
+          { status: row.status, lastError: row.last_error },
+        ]),
+      ),
+    ).toEqual({
+      [artifactJobId]: {
+        status: "failed",
+        lastError: "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+      },
+      [driveJobId]: {
+        status: "failed",
+        lastError: "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
+      },
+    });
     await database.close();
   });
 });

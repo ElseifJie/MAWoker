@@ -130,7 +130,34 @@ const skillSelection = sql`
   last_error_code as "lastErrorCode",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
-interface SessionRecord extends Row {
+interface SessionConfigSnapshot {
+  agentId: string;
+  agentVersion: string;
+  environmentId: string;
+  modelId: string | null;
+  skills: Array<{
+    type: string | null;
+    skillId: string | null;
+    version: string | null;
+    useLatest: boolean | null;
+    displayName: string | null;
+  }> | null;
+  tools: Array<{
+    type: string | null;
+    name: string | null;
+    mcpServerName: string | null;
+    configuredToolNames: string[] | null;
+  }> | null;
+  environment: {
+    id: string | null;
+    type: string | null;
+    configType: string | null;
+    scope: string | null;
+  };
+  completeness: "complete" | "incomplete";
+}
+
+interface SessionRecordData {
   id: string;
   ownerUserId: string;
   arkSessionId: string;
@@ -141,6 +168,11 @@ interface SessionRecord extends Row {
   agentName: string;
   agentVersion: string;
   environmentId: string;
+  createAttemptedAt: Date | null;
+  modelId: string | null;
+  configSnapshot: SessionConfigSnapshot | null;
+  configSnapshotState: "unverified" | "verified" | "incomplete" | "mismatch";
+  configSnapshotErrorCode: string | null;
   memoryStoreId?: string | null;
   title: string;
   status:
@@ -160,6 +192,8 @@ interface SessionRecord extends Row {
   createdAt: Date;
   updatedAt: Date;
 }
+
+interface SessionRecord extends SessionRecordData, Row {}
 
 interface SessionInputRecord extends Row {
   id: string;
@@ -217,6 +251,10 @@ const sessionSelection = sql`
   personal_agent_id as "personalAgentId",
   ark_agent_id as "arkAgentId", agent_name as "agentName",
   agent_version as "agentVersion", environment_id as "environmentId",
+  create_attempted_at as "createAttemptedAt", model_id as "modelId",
+  config_snapshot as "configSnapshot",
+  config_snapshot_state as "configSnapshotState",
+  config_snapshot_error_code as "configSnapshotErrorCode",
   memory_store_id as "memoryStoreId",
   title, status, last_error_code as "lastErrorCode",
   error_recoverable as "errorRecoverable", archived_at as "archivedAt",
@@ -388,12 +426,14 @@ const ARTIFACT_CLEANUP_ERROR_CODES = new Set([
   "ARTIFACT_CLEANUP_FAILED",
   "ARTIFACT_CLEANUP_INVALID_JOB",
   "ARTIFACT_CLEANUP_LEASE_EXPIRED",
+  "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
   "STORAGE_UNAVAILABLE",
 ]);
 const DRIVE_CLEANUP_ERROR_CODES = new Set([
   "DRIVE_CLEANUP_FAILED",
   "DRIVE_CLEANUP_INVALID_JOB",
   "DRIVE_CLEANUP_LEASE_EXPIRED",
+  "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
   "STORAGE_UNAVAILABLE",
 ]);
 const SESSION_DELETION_ERROR_CODES = new Set([
@@ -490,6 +530,91 @@ async function requiredFirst<T extends Row>(
   return result;
 }
 
+type ConsumableReservationStatus =
+  "active" | "unknown_outcome" | "consumed" | "released";
+
+interface ConsumableReservation extends Row {
+  id: string;
+  userId: string;
+  arkSessionId: string;
+  status: ConsumableReservationStatus;
+  resolvedAt: Date | null;
+}
+
+function assertVerifiedArkSessionId(arkSessionId: string) {
+  const trimmed = arkSessionId.trim();
+  if (
+    trimmed.length === 0 ||
+    arkSessionId !== trimmed ||
+    trimmed.startsWith("pending:")
+  ) {
+    throw new Error(
+      "A verified Ark Session ID must be non-empty, unpadded, and outside the pending namespace",
+    );
+  }
+}
+
+async function consumeReservationIdentity(
+  database: DatabaseClient,
+  input: {
+    reservationId: string;
+    arkSessionId: string;
+    userId?: string;
+  },
+): Promise<ConsumableReservation | undefined> {
+  assertVerifiedArkSessionId(input.arkSessionId);
+  const reservation = await first<ConsumableReservation>(
+    database,
+    sql`select id, user_id as "userId", ark_session_id as "arkSessionId",
+               status, resolved_at as "resolvedAt"
+          from quota_reservations
+         where id = ${input.reservationId}
+           ${input.userId ? sql`and user_id = ${input.userId}` : sql``}
+         for update`,
+  );
+  if (!reservation || reservation.status === "released") {
+    return undefined;
+  }
+  if (reservation.status === "consumed") {
+    if (reservation.arkSessionId !== input.arkSessionId) {
+      throw new Error("Consumed reservation Ark Session ID is immutable");
+    }
+    return reservation;
+  }
+  return requiredFirst<ConsumableReservation>(
+    database,
+    sql`update quota_reservations
+          set ark_session_id = ${input.arkSessionId},
+              status = 'consumed',
+              resolved_at = now()
+        where id = ${input.reservationId}
+          and status in ('active', 'unknown_outcome')
+        returning id, user_id as "userId",
+                  ark_session_id as "arkSessionId", status,
+                  resolved_at as "resolvedAt"`,
+  );
+}
+
+async function assertSessionIdentityCanBeObserved(
+  database: DatabaseClient,
+  input: { sessionId: string; userId: string; arkSessionId: string },
+) {
+  const session = await requiredFirst<{ arkSessionId: string }>(
+    database,
+    sql`select ark_session_id as "arkSessionId"
+          from sessions
+         where id = ${input.sessionId}
+           and owner_user_id = ${input.userId}
+         for update`,
+  );
+  if (
+    session.arkSessionId !== `pending:${input.sessionId}` &&
+    session.arkSessionId !== input.arkSessionId
+  ) {
+    throw new Error("Session Ark Session ID is immutable");
+  }
+}
+
 function tenantRepository(database: DatabaseClient, tableName: SQL) {
   return {
     findOwned(ownerUserId: string, id: string) {
@@ -546,6 +671,39 @@ function utcMonthWindow(now: Date): { start: Date; end: Date } {
   };
 }
 
+function utcDayWindow(now: Date): { start: Date; end: Date } {
+  const start = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate(),
+      0,
+      0,
+      0,
+      0,
+    ),
+  );
+  return {
+    start,
+    end: new Date(start.getTime() + 24 * 60 * 60_000),
+  };
+}
+
+async function preserveExpiredCreateOutcomes(
+  database: DatabaseClient,
+  userId: string,
+  now: Date,
+): Promise<void> {
+  await database.execute(
+    sql`update quota_reservations
+           set status = 'unknown_outcome',
+               resolved_at = null
+         where user_id = ${userId}
+           and status = 'active'
+           and expires_at <= ${now}`,
+  );
+}
+
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (character) => `\\${character}`);
 }
@@ -590,6 +748,14 @@ async function revokeAuthSessions(
   database: DatabaseClient,
   userId: string,
 ): Promise<number> {
+  // Bump the credential epoch in the same transaction: every session the
+  // user holds stops authenticating immediately, including any that a racing
+  // login inserts after this point (its issued epoch predates the bump).
+  await database.execute(
+    sql`update users
+           set auth_epoch = auth_epoch + 1, updated_at = now()
+         where id = ${userId}`,
+  );
   const revoked = await first<{ count: number }>(
     database,
     sql`with revoked as (
@@ -1565,6 +1731,7 @@ export function createRepositories(database: unknown) {
           await transaction.execute(
             sql`update users
                    set password_hash = ${input.passwordHash},
+                       auth_epoch = auth_epoch + 1,
                        updated_at = now()
                  where id = ${input.userId}`,
           );
@@ -2564,8 +2731,12 @@ export function createRepositories(database: unknown) {
           );
           if (!session) return "missing" as const;
           await transaction.execute(
-            sql`delete from quota_reservations
-                 where id = ${id} and user_id = ${userId}`,
+            sql`update quota_reservations
+                   set status = 'unknown_outcome',
+                       resolved_at = null
+                 where id = ${id}
+                   and user_id = ${userId}
+                   and status = 'active'`,
           );
           await transaction.execute(
             sql`delete from sessions
@@ -2577,8 +2748,8 @@ export function createRepositories(database: unknown) {
     },
     sessions: tenantRepository(db, sql.raw("sessions")),
     sessionLifecycle: {
-      prepareCreate(input: SessionRecord, uploadIds: string[] = []) {
-        return db.transaction(async (transaction) => {
+      async prepareCreate(input: SessionRecordData, uploadIds: string[] = []) {
+        const result = await db.transaction(async (transaction) => {
           const user = await first(
             transaction,
             sql`select id from users
@@ -2620,6 +2791,12 @@ export function createRepositories(database: unknown) {
 
           const quota = await effectiveQuota(transaction, input.ownerUserId);
           const month = utcMonthWindow(input.createdAt);
+          const day = utcDayWindow(input.createdAt);
+          await preserveExpiredCreateOutcomes(
+            transaction,
+            input.ownerUserId,
+            input.createdAt,
+          );
           const counters = await first<{
             dailyCreateIntents: number;
             monthlyTokens: number;
@@ -2627,25 +2804,11 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`select
                   (select count(*)::integer
-                     from (
-                       select id
-                         from sessions
-                        where owner_user_id = ${input.ownerUserId}
-                          and created_at >= date_trunc(
-                            'day',
-                            ${input.createdAt}::timestamptz
-                          )
-                       union
-                       select id
-                         from quota_reservations
-                        where user_id = ${input.ownerUserId}
-                          and status = 'active'
-                          and expires_at > ${input.createdAt}
-                          and created_at >= date_trunc(
-                            'day',
-                            ${input.createdAt}::timestamptz
-                          )
-                     ) as create_intents)
+                     from quota_reservations
+                    where user_id = ${input.ownerUserId}
+                      and status in ('active', 'unknown_outcome', 'consumed')
+                      and created_at >= ${day.start}
+                      and created_at < ${day.end})
                     as "dailyCreateIntents",
                   (select coalesce(sum(quantity), 0)::bigint
                      from usage_ledger
@@ -2657,17 +2820,17 @@ export function createRepositories(database: unknown) {
           );
           if (!counters) throw new Error("Unable to read quota counters");
           if (counters.dailyCreateIntents >= quota.dailySessionLimit) {
-            throw new QuotaExceededError("daily_sessions");
+            return { quotaExceeded: "daily_sessions" as const };
           }
           if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
-            throw new QuotaExceededError("monthly_tokens");
+            return { quotaExceeded: "monthly_tokens" as const };
           }
 
           await transaction.execute(
             sql`insert into quota_reservations
-                  (id, user_id, expires_at, created_at)
+                  (id, user_id, ark_session_id, expires_at, created_at)
                 values
-                  (${input.id}, ${input.ownerUserId},
+                  (${input.id}, ${input.ownerUserId}, ${input.arkSessionId},
                    ${new Date(input.createdAt.getTime() + 5 * 60_000)},
                    ${input.createdAt})`,
           );
@@ -2714,24 +2877,64 @@ export function createRepositories(database: unknown) {
                     and id in (${uploadIdList})`,
             );
           }
-          return selectedInputs.length > 0
-            ? selectedInputs.map((selected) => ({
-                ...selected,
-                sessionId: input.id,
-              }))
-            : undefined;
+          return {
+            selectedInputs:
+              selectedInputs.length > 0
+                ? selectedInputs.map((selected) => ({
+                    ...selected,
+                    sessionId: input.id,
+                  }))
+                : undefined,
+          };
         });
+        if ("quotaExceeded" in result) {
+          throw new QuotaExceededError(result.quotaExceeded);
+        }
+        return result.selectedInputs;
       },
-      completeCreate(
+      async claimCreateAttempt(id: string, userId: string, attemptedAt: Date) {
+        const claimed = await rows<{ id: string }>(
+          db,
+          sql`update sessions
+                 set create_attempted_at = ${attemptedAt},
+                     updated_at = now()
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and ark_session_id like 'pending:%'
+                 and create_attempted_at is null
+               returning id`,
+        );
+        return claimed.length === 1;
+      },
+      async releaseCreateAttempt(
+        id: string,
+        userId: string,
+        attemptedAt: Date,
+      ) {
+        const released = await rows<{ id: string }>(
+          db,
+          sql`update sessions
+                 set create_attempted_at = null,
+                     updated_at = now()
+               where id = ${id}
+                 and owner_user_id = ${userId}
+                 and ark_session_id like 'pending:%'
+                 and create_attempted_at = ${attemptedAt}
+               returning id`,
+        );
+        return released.length === 1;
+      },
+      async completeCreate(
         id: string,
         userId: string,
         upstream: {
           arkSessionId: string;
-          arkAgentId: string;
-          agentVersion: string;
           status: SessionRecord["status"];
+          modelId?: string | null;
+          configSnapshot?: SessionConfigSnapshot;
         },
       ) {
+        assertVerifiedArkSessionId(upstream.arkSessionId);
         return db.transaction(async (transaction) => {
           const job = await requiredFirst<{ status: string }>(
             transaction,
@@ -2744,13 +2947,34 @@ export function createRepositories(database: unknown) {
           if (job.status === "failed") {
             throw new Error("Session create reconciliation is terminal");
           }
+          const reservation = await consumeReservationIdentity(transaction, {
+            reservationId: id,
+            arkSessionId: upstream.arkSessionId,
+            userId,
+          });
+          if (!reservation) {
+            throw new Error("Session create reservation cannot be consumed");
+          }
+          await assertSessionIdentityCanBeObserved(transaction, {
+            sessionId: id,
+            userId,
+            arkSessionId: upstream.arkSessionId,
+          });
           const session = await requiredFirst<SessionRecord>(
             transaction,
             sql`update sessions
                   set ark_session_id = ${upstream.arkSessionId},
-                      ark_agent_id = ${upstream.arkAgentId},
-                      agent_version = ${upstream.agentVersion},
                       status = ${upstream.status},
+                      model_id = ${upstream.modelId ?? null},
+                      config_snapshot = ${
+                        upstream.configSnapshot
+                          ? sql`${JSON.stringify(upstream.configSnapshot)}::jsonb`
+                          : null
+                      },
+                      config_snapshot_state = ${
+                        upstream.configSnapshot ? "verified" : "unverified"
+                      },
+                      config_snapshot_error_code = null,
                       updated_at = now()
                 where id = ${id} and owner_user_id = ${userId}
                 returning ${sessionSelection}`,
@@ -2776,12 +3000,6 @@ export function createRepositories(database: unknown) {
                   )`,
           );
           await transaction.execute(
-            sql`update quota_reservations
-                  set status = 'consumed', resolved_at = now()
-                where id = ${id} and user_id = ${userId}
-                  and status = 'active'`,
-          );
-          await transaction.execute(
             sql`update background_jobs
                   set status = 'succeeded', locked_at = null,
                       locked_by = null, last_error = null, updated_at = now()
@@ -2796,50 +3014,78 @@ export function createRepositories(database: unknown) {
         userId: string,
         upstream?: {
           arkSessionId: string;
-          arkAgentId: string;
-          agentVersion: string;
           status: SessionRecord["status"];
+          modelId?: string | null;
+          configSnapshot?: SessionConfigSnapshot;
+          configSnapshotState?: "verified" | "incomplete" | "mismatch";
+          configSnapshotErrorCode?: string | null;
         },
       ) {
+        if (upstream) {
+          assertVerifiedArkSessionId(upstream.arkSessionId);
+        }
         await db.transaction(async (transaction) => {
           if (upstream) {
+            const reservation = await consumeReservationIdentity(transaction, {
+              reservationId: id,
+              arkSessionId: upstream.arkSessionId,
+              userId,
+            });
+            if (!reservation) {
+              throw new Error("Session create reservation cannot be consumed");
+            }
+            await assertSessionIdentityCanBeObserved(transaction, {
+              sessionId: id,
+              userId,
+              arkSessionId: upstream.arkSessionId,
+            });
+            if (upstream.configSnapshot && upstream.configSnapshotState) {
+              await transaction.execute(
+                sql`update sessions
+                      set ark_session_id = ${upstream.arkSessionId},
+                          status = ${upstream.status},
+                          model_id = ${upstream.modelId ?? null},
+                          config_snapshot =
+                            ${JSON.stringify(upstream.configSnapshot)}::jsonb,
+                          config_snapshot_state =
+                            ${upstream.configSnapshotState},
+                          config_snapshot_error_code =
+                            ${upstream.configSnapshotErrorCode},
+                          updated_at = now()
+                    where id = ${id} and owner_user_id = ${userId}`,
+              );
+            } else {
+              await transaction.execute(
+                sql`update sessions
+                      set ark_session_id = ${upstream.arkSessionId},
+                          status = ${upstream.status},
+                          updated_at = now()
+                    where id = ${id} and owner_user_id = ${userId}`,
+              );
+            }
+          } else {
             await transaction.execute(
-              sql`update sessions
-                    set ark_session_id = ${upstream.arkSessionId},
-                        ark_agent_id = ${upstream.arkAgentId},
-                        agent_version = ${upstream.agentVersion},
-                        status = ${upstream.status},
-                        updated_at = now()
-                  where id = ${id} and owner_user_id = ${userId}`,
+              sql`update quota_reservations
+                    set status = 'unknown_outcome',
+                        resolved_at = null
+                  where id = ${id}
+                    and user_id = ${userId}
+                    and status = 'active'`,
             );
           }
-          await transaction.execute(
-            sql`update quota_reservations
-                  set status = 'consumed', resolved_at = now()
-                where id = ${id} and user_id = ${userId}
-                  and status = 'active'`,
-          );
-          await transaction.execute(
-            sql`update background_jobs
-                  set status = 'pending', run_after = now() + interval '30 seconds',
-                      locked_at = null, locked_by = null, updated_at = now()
-                where id = ${id} and owner_user_id = ${userId}
-                  and type = 'reconcile_session'
-                  and status <> 'succeeded'`,
-          );
         });
       },
       async failCreate(id: string, userId: string) {
         await db.transaction(async (transaction) => {
           await transaction.execute(
-            sql`delete from sessions
-                 where id = ${id} and owner_user_id = ${userId}`,
-          );
-          await transaction.execute(
             sql`update quota_reservations
                   set status = 'released', resolved_at = now()
                 where id = ${id} and user_id = ${userId}
-                  and status = 'active'`,
+                  and status in ('active', 'unknown_outcome')`,
+          );
+          await transaction.execute(
+            sql`delete from sessions
+                 where id = ${id} and owner_user_id = ${userId}`,
           );
           await transaction.execute(
             sql`update background_jobs
@@ -2966,6 +3212,41 @@ export function createRepositories(database: unknown) {
                where session.id = cursor.session_id
                  and session.id = ${id}
                  and session.owner_user_id = ${userId}`,
+        );
+      },
+      findSettlementTarget(userId: string, id: string) {
+        return first<{
+          arkSessionId: string;
+          messageInFlightCount: number;
+          messageStartPending: boolean;
+          messageUnknownOutcome: boolean;
+        }>(
+          db,
+          sql`select ark_session_id as "arkSessionId",
+                     message_in_flight_count as "messageInFlightCount",
+                     message_start_pending as "messageStartPending",
+                     message_unknown_outcome as "messageUnknownOutcome"
+                from sessions
+               where id = ${id} and owner_user_id = ${userId}
+               limit 1`,
+        );
+      },
+      async recordSettlement(
+        userId: string,
+        id: string,
+        input: {
+          state: "pending" | "confirmed" | "unknown";
+          evidence: Record<string, unknown>;
+          checkedAt: Date;
+        },
+      ) {
+        await db.execute(
+          sql`update sessions
+                 set settlement_state = ${input.state}::settlement_state,
+                     settlement_checked_at = ${input.checkedAt},
+                     settlement_evidence = ${JSON.stringify(input.evidence)}::jsonb,
+                     updated_at = now()
+               where id = ${id} and owner_user_id = ${userId}`,
         );
       },
       findOwned(userId: string, id: string) {
@@ -3330,24 +3611,41 @@ export function createRepositories(database: unknown) {
               : []),
           ];
           let tokenUsageInserted = false;
+          // T03-B: model attribution comes from the Session's create-time
+          // verified snapshot only. The Agent tables are deliberately not
+          // joined — a later Agent model change must not drift an existing
+          // Session's attribution. `exact` requires the verified state, a
+          // stored model, and agreement with the safe snapshot's model.
           for (const metric of metrics) {
             const inserted = await rows(
               transaction,
               sql`insert into usage_ledger
                     (id, user_id, ark_session_id, ark_event_id, metric_type,
                      quantity, recorded_at, agent_kind, platform_agent_id,
-                     personal_agent_id, model_id)
+                     personal_agent_id, model_id,
+                     model_attribution_precision)
                   select ${randomUUID()}, ${userId}, session.ark_session_id,
                          ${projection.eventId}, ${metric.metricType},
                          ${metric.quantity}, ${projection.observedAt},
                          session.agent_kind, session.platform_agent_id,
                          session.personal_agent_id,
-                         coalesce(pa.model_id, pr.model_id)
+                         case
+                           when session.config_snapshot_state = 'verified'
+                                and session.model_id is not null
+                                and session.config_snapshot ->> 'modelId'
+                                      = session.model_id
+                             then session.model_id
+                           else null
+                         end,
+                         case
+                           when session.config_snapshot_state = 'verified'
+                                and session.model_id is not null
+                                and session.config_snapshot ->> 'modelId'
+                                      = session.model_id
+                             then 'exact'::model_attribution_precision
+                           else 'unknown'::model_attribution_precision
+                         end
                     from sessions session
-                    left join platform_agents pa
-                      on pa.id = session.platform_agent_id
-                    left join personal_agents pr
-                      on pr.id = session.personal_agent_id
                    where session.id = ${id}
                      and session.owner_user_id = ${userId}
                   on conflict
@@ -3673,7 +3971,10 @@ export function createRepositories(database: unknown) {
       /**
        * Records that this Session produced this drive file. Conflict target is
        * the (owner, session, ark file) key, so a repeated sync refreshes the
-       * snapshot instead of duplicating the association.
+       * snapshot instead of duplicating the association. A tombstoned row stays
+       * hidden: the update only applies while the existing deletion_state is
+       * `none`, and a fresh insert is refused once the owning Session has begun
+       * deleting, so a late sync can never resurrect deleted state.
        */
       upsertAssociation(input: ArtifactRecord) {
         return requiredFirst<ArtifactRecord & Row>(
@@ -3682,20 +3983,26 @@ export function createRepositories(database: unknown) {
                 (id, owner_user_id, session_id, ark_file_id, drive_file_id,
                  name, mime_type, size_bytes, generated_at, deletion_state,
                  last_error_code, created_at, updated_at)
-              values
-                (${input.id}, ${input.ownerUserId}, ${input.sessionId},
-                 ${input.arkFileId}, ${input.driveFileId}, ${input.name},
-                 ${input.mimeType}, ${input.sizeBytes}, ${input.generatedAt},
-                 'none', null, ${input.createdAt}, ${input.updatedAt})
+              select ${input.id}, ${input.ownerUserId}, ${input.sessionId},
+                     ${input.arkFileId}, ${input.driveFileId}, ${input.name},
+                     ${input.mimeType}, ${input.sizeBytes}, ${input.generatedAt},
+                     'none', null, ${input.createdAt}, ${input.updatedAt}
+               where exists (
+                 select 1
+                   from sessions
+                  where sessions.id = ${input.sessionId}
+                    and sessions.owner_user_id = ${input.ownerUserId}
+                    and sessions.deletion_state = 'none'
+               )
               on conflict (owner_user_id, session_id, ark_file_id) do update
                 set drive_file_id = excluded.drive_file_id,
                     name = excluded.name,
                     mime_type = excluded.mime_type,
                     size_bytes = excluded.size_bytes,
                     generated_at = excluded.generated_at,
-                    deletion_state = 'none',
                     last_error_code = null,
                     updated_at = excluded.updated_at
+              where artifacts.deletion_state = 'none'
               returning ${artifactSelection}`,
         );
       },
@@ -3729,6 +4036,33 @@ export function createRepositories(database: unknown) {
        */
       requestDelete(id: string, userId: string, at: Date) {
         return db.transaction(async (transaction) => {
+          const target = await first<{ driveFileId: string }>(
+            transaction,
+            sql`select drive_file_id as "driveFileId"
+                  from artifacts
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and deletion_state <> 'deleted'
+                 limit 1`,
+          );
+          if (!target) return undefined;
+          await transaction.execute(
+            sql`select id
+                  from drive_files
+                 where id = ${target.driveFileId}
+                   and owner_user_id = ${userId}
+                 for update`,
+          );
+          const previous = await first<{ deletionState: string }>(
+            transaction,
+            sql`select deletion_state::text as "deletionState"
+                  from artifacts
+                 where id = ${id}
+                   and owner_user_id = ${userId}
+                   and deletion_state <> 'deleted'
+                 limit 1`,
+          );
+          if (!previous) return undefined;
           const association = await first<ArtifactRecord & Row>(
             transaction,
             sql`update artifacts
@@ -3741,14 +4075,23 @@ export function createRepositories(database: unknown) {
                 returning ${artifactSelection}`,
           );
           if (!association) return undefined;
-          await transaction.execute(
-            sql`update drive_files
-                  set orphaned_at = coalesce(orphaned_at, ${at}),
-                      updated_at = ${at}
-                where id = ${association.driveFileId}
-                  and owner_user_id = ${userId}
-                  and deletion_state <> 'deleted'`,
-          );
+          if (previous.deletionState === "none") {
+            await transaction.execute(
+              sql`update drive_files
+                    set orphaned_at = ${at},
+                        updated_at = ${at}
+                  where id = ${association.driveFileId}
+                    and owner_user_id = ${userId}
+                    and deletion_state <> 'deleted'
+                    and not exists (
+                      select 1
+                        from artifacts live
+                       where live.drive_file_id = drive_files.id
+                         and live.owner_user_id = drive_files.owner_user_id
+                         and live.deletion_state = 'none'
+                    )`,
+            );
+          }
           return association;
         });
       },
@@ -3809,6 +4152,73 @@ export function createRepositories(database: unknown) {
     },
 
     driveFiles: {
+      /**
+       * Pre-delete guard for cleanup workers: the processor re-reads the live
+       * row before destroying bytes, so a claim taken before a commit or a
+       * lease extension cannot delete an object that has become live again.
+       * `orphanedAt` separates the two `none` cases: an orphaned row is the
+       * GC's own reclamation target, while a non-orphaned committed row is a
+       * live object a racing cleanup intent must never reap.
+       */
+      findCleanupGuard(driveFileId: string) {
+        return first<{
+          ownerUserId: string;
+          deletionState: "pending" | "none" | "deletion_failed" | "deleted";
+          writeLeaseUntil: Date | null;
+          orphanedAt: Date | null;
+        }>(
+          db,
+          sql`select owner_user_id as "ownerUserId",
+                     deletion_state::text as "deletionState",
+                     write_lease_until as "writeLeaseUntil",
+                     orphaned_at as "orphanedAt"
+                from drive_files
+               where id = ${driveFileId}
+               limit 1`,
+        );
+      },
+      findObjectCleanupGuard(objectKey: string) {
+        return first<{
+          ownerUserId: string;
+          deletionState: "pending" | "none" | "deletion_failed" | "deleted";
+          writeLeaseUntil: Date | null;
+          orphanedAt: Date | null;
+        }>(
+          db,
+          sql`select owner_user_id as "ownerUserId",
+                     deletion_state::text as "deletionState",
+                     write_lease_until as "writeLeaseUntil",
+                     orphaned_at as "orphanedAt"
+                from drive_files
+               where tos_object_key = ${objectKey}
+               limit 1`,
+        );
+      },
+      /**
+       * Re-reads the CURRENT claim state of a cleanup job just before its
+       * destructive step. A generation or lock-owner mismatch means this
+       * execution lost the job (re-armed or taken over) and must not touch
+       * bytes, even though its own claim snapshot still looks valid.
+       */
+      findCleanupJobClaim(jobId: string, ownerUserId: string) {
+        return first<{
+          generation: number;
+          lockedBy: string | null;
+          lockedAt: Date | null;
+          type: string;
+        }>(
+          db,
+          sql`select coalesce((payload ->> 'cleanupGeneration')::integer, 0)
+                    as "generation",
+                  locked_by as "lockedBy",
+                  locked_at as "lockedAt",
+                  type::text as "type"
+                from background_jobs
+               where id = ${jobId}
+                 and owner_user_id = ${ownerUserId}
+               limit 1`,
+        );
+      },
       /**
        * Reserves a drive row in `pending` with a write lease and a delayed
        * cleanup intent. A crash before commit leaves the intent behind, so the
@@ -4014,8 +4424,16 @@ export function createRepositories(database: unknown) {
                  where drive.deletion_state = 'none'
                    and drive.orphaned_at is not null
                    and drive.orphaned_at <= ${cutoff}
+                   and drive.folder_id is null
                    and (drive.write_lease_until is null
                         or drive.write_lease_until <= ${input.now})
+                   and not exists (
+                     select 1
+                       from artifacts live
+                      where live.drive_file_id = drive.id
+                        and live.owner_user_id = drive.owner_user_id
+                        and live.deletion_state = 'none'
+                   )
                    and not exists (
                      select 1
                        from background_jobs job
@@ -4074,6 +4492,14 @@ export function createRepositories(database: unknown) {
                  where id = ${id}
                    and owner_user_id = ${userId}
                    and deletion_state <> 'deleted'
+                   and folder_id is null
+                   and not exists (
+                     select 1
+                       from artifacts live
+                      where live.drive_file_id = drive_files.id
+                        and live.owner_user_id = drive_files.owner_user_id
+                        and live.deletion_state = 'none'
+                   )
                  returning id`,
           );
           if (removed.length !== 1) return false;
@@ -4159,13 +4585,13 @@ export function createRepositories(database: unknown) {
       getEffective(userId: string) {
         return effectiveQuota(db, userId);
       },
-      reserveSession(input: {
+      async reserveSession(input: {
         userId: string;
         reservationId: string;
         expiresAt: Date;
         now?: Date;
       }) {
-        return db.transaction(async (transaction) => {
+        const result = await db.transaction(async (transaction) => {
           const now = input.now ?? new Date();
           const user = await first(
             transaction,
@@ -4179,6 +4605,8 @@ export function createRepositories(database: unknown) {
 
           const quota = await effectiveQuota(transaction, input.userId);
           const month = utcMonthWindow(now);
+          const day = utcDayWindow(now);
+          await preserveExpiredCreateOutcomes(transaction, input.userId, now);
           const counters = await first<{
             activeReservations: number;
             concurrentSessions: number;
@@ -4198,9 +4626,11 @@ export function createRepositories(database: unknown) {
                       and status in ('running', 'rescheduled')
                       and deletion_state <> 'deleted') as "concurrentSessions",
                   (select count(*)::integer
-                     from sessions
-                    where owner_user_id = ${input.userId}
-                      and created_at >= date_trunc('day', ${now}::timestamptz))
+                     from quota_reservations
+                    where user_id = ${input.userId}
+                      and status in ('active', 'unknown_outcome', 'consumed')
+                      and created_at >= ${day.start}
+                      and created_at < ${day.end})
                     as "dailySessions",
                   (select coalesce(sum(quantity), 0)::bigint
                      from usage_ledger
@@ -4218,37 +4648,48 @@ export function createRepositories(database: unknown) {
             counters.concurrentSessions + counters.activeReservations >=
             quota.concurrentSessionLimit
           ) {
-            throw new QuotaExceededError("concurrent_sessions");
+            return { quotaExceeded: "concurrent_sessions" as const };
           }
-          if (
-            counters.dailySessions + counters.activeReservations >=
-            quota.dailySessionLimit
-          ) {
-            throw new QuotaExceededError("daily_sessions");
+          if (counters.dailySessions >= quota.dailySessionLimit) {
+            return { quotaExceeded: "daily_sessions" as const };
           }
           if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
-            throw new QuotaExceededError("monthly_tokens");
+            return { quotaExceeded: "monthly_tokens" as const };
           }
 
           await transaction.execute(
-            sql`insert into quota_reservations (id, user_id, expires_at)
-                values (${input.reservationId}, ${input.userId}, ${input.expiresAt})`,
+            sql`insert into quota_reservations
+                  (id, user_id, ark_session_id, expires_at, created_at)
+                values
+                  (${input.reservationId}, ${input.userId},
+                   ${`pending:${input.reservationId}`}, ${input.expiresAt},
+                   ${now})`,
           );
           return { id: input.reservationId, quota };
         });
+        if ("quotaExceeded" in result) {
+          throw new QuotaExceededError(result.quotaExceeded);
+        }
+        return result;
       },
-      async resolveReservation(
-        reservationId: string,
-        status: "consumed" | "released",
-      ) {
-        const reservation = await first(
+      async consumeReservation(input: {
+        reservationId: string;
+        arkSessionId: string;
+      }) {
+        return db.transaction((transaction) =>
+          consumeReservationIdentity(transaction, input),
+        );
+      },
+      releaseReservation(reservationId: string) {
+        return first(
           db,
           sql`update quota_reservations
-                set status = ${status}, resolved_at = now()
-              where id = ${reservationId} and status = 'active'
-              returning id, user_id as "userId", status`,
+                set status = 'released', resolved_at = now()
+              where id = ${reservationId}
+                and status in ('active', 'unknown_outcome')
+              returning id, user_id as "userId", status,
+                        resolved_at as "resolvedAt"`,
         );
-        return reservation;
       },
     },
 
@@ -4347,14 +4788,7 @@ export function createRepositories(database: unknown) {
         before: { tokens: number; userId: string } | null;
       }) {
         const window = utcMonthWindow(input.now);
-        const dayStart = new Date(
-          Date.UTC(
-            input.now.getUTCFullYear(),
-            input.now.getUTCMonth(),
-            input.now.getUTCDate(),
-          ),
-        );
-        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+        const day = utcDayWindow(input.now);
         const snap = sql`
           with monthly as (
             select user_id,
@@ -4388,10 +4822,13 @@ export function createRepositories(database: unknown) {
                        and s.status in ('running', 'rescheduled')
                        and s.deletion_state <> 'deleted')
                      as "concurrentSessions",
-                   (select count(*)::integer from sessions s
-                     where s.owner_user_id = u.id
-                       and s.created_at >= ${dayStart}
-                       and s.created_at < ${dayEnd})
+                   (select count(*)::integer from quota_reservations reservation
+                     where reservation.user_id = u.id
+                       and reservation.status in (
+                         'active', 'unknown_outcome', 'consumed'
+                       )
+                       and reservation.created_at >= ${day.start}
+                       and reservation.created_at < ${day.end})
                      as "dailySessions",
                    coalesce(m.input_tokens, 0)::bigint as "inputTokens",
                    coalesce(m.output_tokens, 0)::bigint as "outputTokens",
@@ -4413,9 +4850,12 @@ export function createRepositories(database: unknown) {
               select
                 (select coalesce(sum("inputTokens"), 0)::bigint from snap) as "inputTokens",
                 (select coalesce(sum("outputTokens"), 0)::bigint from snap) as "outputTokens",
-                (select count(*)::integer from sessions s
-                  where s.created_at >= ${window.start}
-                    and s.created_at < ${window.end}) as "sessions",
+                (select count(*)::integer from quota_reservations reservation
+                  where reservation.status in (
+                    'active', 'unknown_outcome', 'consumed'
+                  )
+                    and reservation.created_at >= ${window.start}
+                    and reservation.created_at < ${window.end}) as "sessions",
                 (select count(*)::integer from snap
                   where "inputTokens" > 0 or "outputTokens" > 0) as "activeUsers",
                 (select count(*)::integer from snap
@@ -4567,10 +5007,7 @@ export function createRepositories(database: unknown) {
       },
       async summary(userId: string, now: Date) {
         const month = utcMonthWindow(now);
-        const dayStart = new Date(
-          Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-        );
-        const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60_000);
+        const day = utcDayWindow(now);
         const [quota, counters] = await Promise.all([
           effectiveQuota(db, userId),
           first<{
@@ -4599,10 +5036,11 @@ export function createRepositories(database: unknown) {
                       and deletion_state <> 'deleted')
                     as "concurrentSessions",
                   (select count(*)::integer
-                     from sessions
-                    where owner_user_id = ${userId}
-                      and created_at >= ${dayStart}
-                      and created_at < ${dayEnd})
+                     from quota_reservations
+                    where user_id = ${userId}
+                      and status in ('active', 'unknown_outcome', 'consumed')
+                      and created_at >= ${day.start}
+                      and created_at < ${day.end})
                     as "dailySessions",
                   coalesce(sum(quantity) filter (
                     where metric_type = 'input_tokens'
@@ -4646,24 +5084,32 @@ export function createRepositories(database: unknown) {
           },
         };
       },
-      async record(input: {
+      async recordByReservation(input: {
         id: string;
-        userId: string;
-        arkSessionId: string;
+        reservationId: string;
         arkEventId: string;
         metricType: UsageMetricType;
         quantity: number;
         recordedAt?: Date;
       }) {
+        // Post-deletion re-accounting has no verifiable Session snapshot to
+        // attribute against, so it writes unknown precision and accepts no
+        // model from the caller. Exact attribution for settlement evidence,
+        // if ever added, belongs to the settlement task's own controlled
+        // entry point.
         const inserted = await rows(
           db,
           sql`insert into usage_ledger
                 (id, user_id, ark_session_id, ark_event_id, metric_type,
-                 quantity, recorded_at)
-              values
-                (${input.id}, ${input.userId}, ${input.arkSessionId},
-                 ${input.arkEventId}, ${input.metricType}, ${input.quantity},
-                 ${input.recordedAt ?? new Date()})
+                 quantity, recorded_at, model_attribution_precision)
+              select ${input.id}, reservation.user_id,
+                     reservation.ark_session_id, ${input.arkEventId},
+                     ${input.metricType}, ${input.quantity},
+                     ${input.recordedAt ?? new Date()},
+                     'unknown'::model_attribution_precision
+                from quota_reservations reservation
+               where reservation.id = ${input.reservationId}
+                 and reservation.status <> 'released'
               on conflict
                 (user_id, ark_session_id, ark_event_id, metric_type)
               do nothing
@@ -4880,8 +5326,20 @@ export function createRepositories(database: unknown) {
                   returning session.id, session.owner_user_id
                 )
                 update quota_reservations reservation
-                   set status = 'consumed',
-                       resolved_at = coalesce(reservation.resolved_at, ${now})
+                   set status = case
+                         when reservation.status = 'released'
+                           then reservation.status
+                         when reservation.ark_session_id like 'pending:%'
+                           then 'unknown_outcome'::quota_reservation_status
+                         else 'consumed'::quota_reservation_status
+                       end,
+                       resolved_at = case
+                         when reservation.status = 'released'
+                           then reservation.resolved_at
+                         when reservation.ark_session_id like 'pending:%'
+                           then null
+                         else coalesce(reservation.resolved_at, ${now})
+                       end
                   from failed_sessions session
                  where reservation.id = session.id
                    and reservation.user_id = session.owner_user_id`,
@@ -5001,6 +5459,31 @@ export function createRepositories(database: unknown) {
                       0
                     ) = ${cleanupGeneration}
               returning id`,
+        );
+        return updated.length === 1;
+      },
+      /**
+       * Puts a fence-blocked delete_session job back to pending without
+       * consuming an attempt: consolidation is progressing in this same
+       * worker, so waiting is progress, not failure. A lost lease reports
+       * false and the caller falls back to the retry path.
+       */
+      async deferSessionDeletion(id: string, workerId: string, runAfter: Date) {
+        const updated = await rows(
+          db,
+          sql`update background_jobs
+                 set status = 'pending',
+                     attempts = greatest(attempts - 1, 0),
+                     run_after = ${runAfter},
+                     locked_at = null,
+                     locked_by = null,
+                     last_error = null,
+                     updated_at = now()
+               where id = ${id}
+                 and type = 'delete_session'
+                 and status = 'running'
+                 and locked_by = ${workerId}
+               returning id`,
         );
         return updated.length === 1;
       },
@@ -5309,8 +5792,17 @@ export function createRepositories(database: unknown) {
           );
           await transaction.execute(
             sql`update quota_reservations
-                  set status = 'consumed',
-                      resolved_at = coalesce(resolved_at, ${now})
+                  set status = case
+                        when status = 'released' then status
+                        when ark_session_id like 'pending:%'
+                          then 'unknown_outcome'::quota_reservation_status
+                        else 'consumed'::quota_reservation_status
+                      end,
+                      resolved_at = case
+                        when status = 'released' then resolved_at
+                        when ark_session_id like 'pending:%' then null
+                        else coalesce(resolved_at, ${now})
+                      end
                 where id = ${updated.id}
                   and user_id = ${updated.ownerUserId}`,
           );

@@ -35,26 +35,207 @@ const CREDENTIAL_PATTERNS: [RegExp, string][] = [
   [/\btos-[a-z]+-[a-z0-9-]+\/[A-Za-z0-9_~.-]+/gi, "[redacted-object-key]"],
   [/\b(?:sk|ark|ak)-[A-Za-z0-9_-]{16,}\b/gi, "[redacted-key]"],
   [/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, "[redacted-key]"],
-  [
-    /\b(authorization|cookie|set-cookie|x-api-key|api[_-]?key|password|secret|token)\b\s*[:=]\s*(?:bearer|basic)?\s*\S+/gi,
-    "$1: [redacted]",
-  ],
 ];
 
-const DENIED_ARG_KEYS = new Set([
+const IDENTIFIER = /[A-Za-z0-9_-]+/g;
+const IDENTIFIER_CHARACTER = /[A-Za-z0-9_-]/;
+const SENSITIVE_ASSIGNMENT_KEYS = new Set([
   "authorization",
   "cookie",
-  "credential",
-  "credentials",
+  "set-cookie",
+  "x-api-key",
+  "apikey",
+  "api_key",
+  "api-key",
+  "accesskey",
+  "access_key",
+  "access-key",
+  "secretkey",
+  "secret_key",
+  "secret-key",
+  "secretaccesskey",
+  "secret_access_key",
+  "secret-access-key",
   "password",
   "secret",
   "token",
-  "apikey",
-  "api_key",
-  "access_key",
-  "session",
+  "credential",
+  "credentials",
   "auth",
+  "session",
+  "ark_api_key",
+  "ark-api-key",
 ]);
+
+export interface SensitiveAssignment {
+  key: string;
+  start: number;
+  end: number;
+  replacement: string;
+}
+
+function escapedQuoteBefore(
+  text: string,
+  keyStart: number,
+): { start: number; slashCount: number } | undefined {
+  if (text[keyStart - 1] !== '"') return undefined;
+  let start = keyStart - 1;
+  while (start > 0 && text[start - 1] === "\\") start -= 1;
+  return { start, slashCount: keyStart - 1 - start };
+}
+
+function quoteAt(
+  text: string,
+  start: number,
+): { end: number; slashCount: number } | undefined {
+  let quote = start;
+  while (text[quote] === "\\") quote += 1;
+  if (text[quote] !== '"') return undefined;
+  return { end: quote + 1, slashCount: quote - start };
+}
+
+function closingQuoteStart(
+  text: string,
+  start: number,
+  slashCount: number,
+): number | undefined {
+  for (
+    let quote = text.indexOf('"', start);
+    quote >= 0;
+    quote = text.indexOf('"', quote + 1)
+  ) {
+    let slash = quote;
+    while (slash > start && text[slash - 1] === "\\") slash -= 1;
+    if (quote - slash === slashCount) return slash;
+  }
+  return undefined;
+}
+
+/**
+ * Finds exact sensitive-key assignments in plain text, JSON, and JSON escaped
+ * inside a string. Identifier runs include letters, digits, `_`, and `-`.
+ */
+export function detectSensitiveAssignments(
+  text: string,
+): SensitiveAssignment[] {
+  const assignments: SensitiveAssignment[] = [];
+  IDENTIFIER.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = IDENTIFIER.exec(text)) !== null) {
+    const key = match[0].toLowerCase();
+    if (!SENSITIVE_ASSIGNMENT_KEYS.has(key)) continue;
+
+    const keyStart = match.index;
+    const keyEnd = IDENTIFIER.lastIndex;
+    const openingQuote = escapedQuoteBefore(text, keyStart);
+    let cursor = keyEnd;
+    if (openingQuote) {
+      const closingKeyQuote = quoteAt(text, cursor);
+      if (
+        !closingKeyQuote ||
+        closingKeyQuote.slashCount !== openingQuote.slashCount ||
+        (openingQuote.start > 0 &&
+          IDENTIFIER_CHARACTER.test(text[openingQuote.start - 1]!))
+      ) {
+        continue;
+      }
+      cursor = closingKeyQuote.end;
+    }
+
+    while (/\s/.test(text[cursor] ?? "")) cursor += 1;
+    if (text[cursor] !== ":" && text[cursor] !== "=") continue;
+    cursor += 1;
+    while (/\s/.test(text[cursor] ?? "")) cursor += 1;
+    const valueStart = cursor;
+
+    const scheme = /^(?:bearer|basic)(?=\s)/i.exec(text.slice(cursor));
+    if (scheme) {
+      cursor += scheme[0].length;
+      while (/\s/.test(text[cursor] ?? "")) cursor += 1;
+    }
+
+    const openingValueQuote = quoteAt(text, cursor);
+    if (openingValueQuote) {
+      const closingValueQuote = closingQuoteStart(
+        text,
+        openingValueQuote.end,
+        openingValueQuote.slashCount,
+      );
+      if (closingValueQuote !== undefined) {
+        const valueEnd = closingValueQuote + openingValueQuote.slashCount + 1;
+        assignments.push({
+          key,
+          start: openingQuote
+            ? scheme
+              ? valueStart
+              : openingValueQuote.end
+            : keyEnd,
+          end: openingQuote && !scheme ? closingValueQuote : valueEnd,
+          replacement: openingQuote ? "[redacted]" : ": [redacted]",
+        });
+        IDENTIFIER.lastIndex = valueEnd;
+        continue;
+      }
+    }
+
+    let valueEnd = cursor;
+    while (valueEnd < text.length && !/[\s,;}\]]/.test(text[valueEnd]!)) {
+      valueEnd += 1;
+    }
+    if (valueEnd === cursor) continue;
+    assignments.push({
+      key,
+      start: openingQuote ? valueStart : keyEnd,
+      end: valueEnd,
+      replacement: openingQuote ? "[redacted]" : ": [redacted]",
+    });
+    IDENTIFIER.lastIndex = valueEnd;
+  }
+  return assignments;
+}
+
+function redactSensitiveAssignments(text: string): string {
+  const assignments = detectSensitiveAssignments(text);
+  if (assignments.length === 0) return text;
+  let redacted = "";
+  let cursor = 0;
+  for (const assignment of assignments) {
+    redacted += text.slice(cursor, assignment.start) + assignment.replacement;
+    cursor = assignment.end;
+  }
+  return redacted + text.slice(cursor);
+}
+
+/**
+ * Every denied key is stored through the same normalization the lookup uses, so
+ * `access_key` in a payload cannot slip past by normalizing to a spelling the
+ * set does not contain.
+ */
+function normalizeArgKey(key: string): string {
+  return key.toLowerCase().replace(/[-_\s]/g, "");
+}
+
+const DENIED_ARG_KEYS = new Set(
+  [
+    "authorization",
+    "cookie",
+    "credential",
+    "credentials",
+    "password",
+    "secret",
+    "secret_key",
+    "secretkey",
+    "secret_access_key",
+    "secretaccesskey",
+    "token",
+    "apikey",
+    "api_key",
+    "accesskey",
+    "access_key",
+    "session",
+    "auth",
+  ].map(normalizeArgKey),
+);
 
 function truncate(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
@@ -84,7 +265,7 @@ export function redactCredentials(text: string): string {
   for (const [pattern, replacement] of CREDENTIAL_PATTERNS) {
     out = out.replace(pattern, replacement);
   }
-  return out;
+  return redactSensitiveAssignments(out);
 }
 
 /** Erases credentials and rewrites sandbox paths to what the owner may see. */
@@ -95,6 +276,22 @@ export function redactText(text: string): string {
 /** Redacts then truncates free-form tool output for display. */
 export function redactPreview(content: string): string {
   return truncate(redactText(content), TOOL_PREVIEW_LIMIT);
+}
+
+/** Re-projects an already-public tool argument summary. */
+export function redactToolArgsSummary(summary: string): string | undefined {
+  const redacted = truncate(redactText(summary), TOOL_ARGS_LIMIT * 2);
+  return redacted.length > 0 ? redacted : undefined;
+}
+
+/** Applies the same bound used when extracting an Ark tool error code. */
+export function boundToolErrorCode(code: string): string {
+  return truncate(code, TOOL_ARGS_LIMIT);
+}
+
+/** Re-projects an already-public tool error message. */
+export function redactToolErrorMessage(message: string): string {
+  return truncate(redactText(message), TOOL_ARGS_LIMIT * 2);
 }
 
 function str(value: unknown): string | undefined {
@@ -149,7 +346,7 @@ function isScalar(value: unknown): value is string | number | boolean {
 function genericSummary(input: Record<string, unknown>): string | undefined {
   const kept: string[] = [];
   for (const [key, value] of Object.entries(input)) {
-    if (DENIED_ARG_KEYS.has(key.toLowerCase().replace(/[-_\s]/g, ""))) continue;
+    if (DENIED_ARG_KEYS.has(normalizeArgKey(key))) continue;
     if (!isScalar(value)) continue;
     kept.push(`${key}=${truncate(String(value), TOOL_ARGS_LIMIT)}`);
     if (kept.join(", ").length >= TOOL_ARGS_LIMIT * 2) break;
@@ -169,8 +366,7 @@ export function summarizeToolArgs(
   const summarizer = name === undefined ? undefined : ARG_SUMMARIES[name];
   const summary = summarizer ? summarizer(record) : genericSummary(record);
   if (summary === undefined) return undefined;
-  const redacted = truncate(redactText(summary), TOOL_ARGS_LIMIT * 2);
-  return redacted.length > 0 ? redacted : undefined;
+  return redactToolArgsSummary(summary);
 }
 
 /** The Agent's own task list, surfaced in the progress rail. */
@@ -245,10 +441,10 @@ function parseErrorEnvelope(
   const code = str(record.code);
   const message = str(record.message);
   return {
-    ...(code === undefined ? {} : { code: truncate(code, TOOL_ARGS_LIMIT) }),
+    ...(code === undefined ? {} : { code: boundToolErrorCode(code) }),
     ...(message === undefined
       ? {}
-      : { message: truncate(redactText(message), TOOL_ARGS_LIMIT * 2) }),
+      : { message: redactToolErrorMessage(message) }),
   };
 }
 

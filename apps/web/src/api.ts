@@ -111,6 +111,12 @@ export interface MemoryCapacity {
 export interface MemoryEntry {
   path: string;
   content: string;
+  /**
+   * Server-computed edit base. Save flows send it back as `expectedHash` so a
+   * stale editor conflicts instead of silently overwriting a concurrent
+   * update; entries read from an older API may lack it.
+   */
+  hash?: string;
 }
 
 export interface MemoryState {

@@ -1,6 +1,21 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { QuotaInterruptProcessor } from "../apps/worker/src/quota-interrupt.js";
 import { UsageReconciliationProcessor } from "../apps/worker/src/usage-reconciliation.js";
+
+const configSnapshot = {
+  modelId: "model-a",
+  skills: [],
+  tools: [],
+  environment: {
+    id: "env-1",
+    type: "environment",
+    configType: "cloud",
+    scope: "account",
+  },
+  completeness: "complete" as const,
+};
 
 describe("usage reconciliation worker", () => {
   it("projects complete Ark history without a browser SSE connection", async () => {
@@ -206,6 +221,7 @@ describe("quota interrupt worker", () => {
           agentVersion: 1,
           environmentId: "env-1",
           status,
+          configSnapshot,
         })),
         submitEvent: vi.fn(async () => ({
           id: "interrupt-event",
@@ -254,6 +270,7 @@ describe("quota interrupt worker", () => {
           agentVersion: 1,
           environmentId: "env-1",
           status: "idle" as const,
+          configSnapshot,
         }),
       submitEvent: vi.fn(),
     };
@@ -274,5 +291,28 @@ describe("quota interrupt worker", () => {
     );
     expect(ark.submitEvent).not.toHaveBeenCalled();
     expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1");
+  });
+});
+
+describe("usage ledger attribution structure", () => {
+  it("derives model attribution from the Session snapshot, never the Agent tables", () => {
+    // Static regression (T03-B): the online projection's ledger INSERT must
+    // read sessions.model_id/config_snapshot and must not join
+    // platform_agents/personal_agents, whose current model could drift an
+    // existing Session's attribution.
+    const source = readFileSync(
+      resolve(import.meta.dirname, "../packages/db/src/repositories.ts"),
+      "utf8",
+    );
+    const projectEvent = source.slice(
+      source.indexOf("async projectEvent("),
+      source.indexOf("recordByReservation"),
+    );
+    expect(projectEvent).toContain("insert into usage_ledger");
+    expect(projectEvent).not.toMatch(
+      /join[\s]+(public_agents|platform_agents|personal_agents)([^_a-z]|$)/i,
+    );
+    expect(projectEvent).toContain("config_snapshot_state");
+    expect(projectEvent).toContain("model_attribution_precision");
   });
 });

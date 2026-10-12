@@ -44,6 +44,12 @@ describe("platform Agent database integration", () => {
       [sessionId, userId, agentId],
     );
     await database.client.query(
+      `insert into quota_reservations
+         (id, user_id, ark_session_id, status, expires_at, resolved_at)
+       values ($1, $2, 'ark-session-quota', 'consumed', now(), now())`,
+      [sessionId, userId],
+    );
+    await database.client.query(
       `insert into usage_ledger
          (id, user_id, ark_session_id, ark_event_id, metric_type, quantity)
        values ($1, $2, 'ark-session-quota', 'event-usage',

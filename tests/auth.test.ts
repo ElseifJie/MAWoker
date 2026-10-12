@@ -34,6 +34,26 @@ class MemoryAuthStore implements AuthStore {
     this.sessions.set(session.tokenHash, session);
   }
 
+  /** Mirrors the SQL transaction: re-verify status and password version at
+   * issue time, then stamp the session with the user's CURRENT epoch. */
+  async issueVerifiedSession(input: {
+    userId: string;
+    expectedPasswordHash: string;
+    session: Omit<AuthSessionRecord, "issuedEpoch">;
+  }): Promise<{ session: AuthSessionRecord; user: AuthUser } | undefined> {
+    const user = [...this.users.values()].find(
+      ({ id }) => id === input.userId,
+    );
+    if (!user || user.status !== "active") return undefined;
+    if (user.passwordHash !== input.expectedPasswordHash) return undefined;
+    const session: AuthSessionRecord = {
+      ...input.session,
+      issuedEpoch: user.authEpoch,
+    };
+    this.sessions.set(session.tokenHash, session);
+    return { session, user: toAuthUser(user) };
+  }
+
   async findSessionByTokenHash(
     tokenHash: string,
     now: Date,
@@ -54,13 +74,7 @@ class MemoryAuthStore implements AuthStore {
     }
     return {
       session,
-      user: {
-        id: user.id,
-        authSubject: user.authSubject,
-        email: user.email,
-        role: user.role,
-        status: user.status,
-      },
+      user: toAuthUser(user),
     };
   }
 
@@ -92,6 +106,17 @@ class MemoryAuthStore implements AuthStore {
   }
 }
 
+function toAuthUser(user: AuthUserWithPassword): AuthUser {
+  return {
+    id: user.id,
+    authSubject: user.authSubject,
+    email: user.email,
+    role: user.role,
+    status: user.status,
+    authEpoch: user.authEpoch,
+  };
+}
+
 async function activeUser(
   overrides: Partial<AuthUserWithPassword> = {},
 ): Promise<AuthUserWithPassword> {
@@ -102,6 +127,7 @@ async function activeUser(
     passwordHash: await hashPassword(password),
     role: "user",
     status: "active",
+    authEpoch: 0,
     ...overrides,
   };
 }
@@ -282,5 +308,124 @@ describe("application sessions", () => {
 
     expect(randomBytes).toHaveBeenCalledWith(32);
     expect(Buffer.from(issued.token, "base64url")).toHaveLength(32);
+  });
+});
+
+describe("credential epochs and absolute expiry", () => {
+  it("invalidates every existing session when the epoch is bumped", async () => {
+    const user = await activeUser();
+    const store = new MemoryAuthStore([user]);
+    const service = new ApplicationSessionService({ store });
+    const issued = await service.login(user.email, password);
+    await expect(
+      service.authenticate(issued.token),
+    ).resolves.toMatchObject({ userId });
+
+    // An admin-level revocation (password change, disable, role change)
+    // bumps the user's epoch: the old session no longer authenticates.
+    user.authEpoch += 1;
+    await expect(service.authenticate(issued.token)).rejects.toThrow(
+      AuthRequiredError,
+    );
+  });
+
+  it("refuses to issue a session when the account changed after the password check", async () => {
+    const user = await activeUser();
+    const store = new MemoryAuthStore([user]);
+    const service = new ApplicationSessionService({
+      store,
+      // Between password verification and issuance the account is disabled:
+      // the atomic issue re-check must reject the late login.
+      randomToken: () => {
+        user.status = "disabled";
+        return "raced-token";
+      },
+    });
+
+    await expect(service.login(user.email, password)).rejects.toThrow(
+      AuthRequiredError,
+    );
+    expect(store.sessions.size).toBe(0);
+  });
+
+  it("refuses to issue a session when the password changed after verification", async () => {
+    const user = await activeUser();
+    const store = new MemoryAuthStore([user]);
+    const service = new ApplicationSessionService({
+      store,
+      // Between verification and issuance an admin rotates the password: the
+      // store's copy moves while the caller still holds the verified hash.
+      randomToken: () => {
+        store.users.set(user.email, {
+          ...user,
+          passwordHash: "scrypt$rotated",
+        });
+        return "raced-token";
+      },
+    });
+
+    await expect(service.login(user.email, password)).rejects.toThrow(
+      AuthRequiredError,
+    );
+    expect(store.sessions.size).toBe(0);
+  });
+
+  it("enforces the absolute expiry regardless of idle renewal", async () => {
+    const user = await activeUser();
+    const store = new MemoryAuthStore([user]);
+    const now = new Date("2026-10-12T00:00:00.000Z");
+    const service = new ApplicationSessionService({
+      store,
+      now: () => now,
+      sessionTtlMs: 7 * 24 * 60 * 60_000,
+      absoluteTtlMs: 30 * 24 * 60 * 60_000,
+    });
+    const issued = await service.login(user.email, password);
+
+    // 31 days later the idle window is irrelevant: the absolute deadline
+    // has passed and both authenticate and renew refuse.
+    const later = new Date(now.getTime() + 31 * 24 * 60 * 60_000);
+    (service as unknown as { now: () => Date }).now = () => later;
+    await expect(service.authenticate(issued.token)).rejects.toThrow(
+      AuthRequiredError,
+    );
+  });
+
+  it("caps renewal at the absolute deadline", async () => {
+    const user = await activeUser();
+    const store = new MemoryAuthStore([user]);
+    const start = new Date("2026-10-12T00:00:00.000Z");
+    let now = start;
+    const service = new ApplicationSessionService({
+      store,
+      now: () => now,
+      sessionTtlMs: 7 * 24 * 60 * 60_000,
+      absoluteTtlMs: 30 * 24 * 60 * 60_000,
+    });
+    const issued = await service.login(user.email, password);
+    const absoluteDeadline = new Date(
+      start.getTime() + 30 * 24 * 60 * 60_000,
+    );
+
+    // Keep the idle window alive by renewing every 6 days: each renewal is
+    // the full 7-day idle TTL until the absolute deadline starts binding.
+    for (let day = 6; day <= 24; day += 6) {
+      now = new Date(start.getTime() + day * 24 * 60 * 60_000);
+      const renewed = await service.renew(issued.token);
+      expect(renewed.expiresAt.getTime()).toBe(
+        Math.min(
+          now.getTime() + 7 * 24 * 60 * 60_000,
+          absoluteDeadline.getTime(),
+        ),
+      );
+    }
+
+    // Late in day 29 the renewal succeeds but is pinned to day 30, and a
+    // renewal after the deadline is refused outright.
+    now = new Date(start.getTime() + (30 * 24 - 1) * 60 * 60_000);
+    const last = await service.renew(issued.token);
+    expect(last.expiresAt.getTime()).toBe(absoluteDeadline.getTime());
+    now = new Date(start.getTime() + 31 * 24 * 60 * 60_000);
+    await expect(service.renew(issued.token)).rejects.toThrow(AuthRequiredError);
   });
 });

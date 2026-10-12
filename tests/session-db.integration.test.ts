@@ -1,3 +1,5 @@
+import { readdir, readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ArkGatewayError } from "../packages/ark-client/src/index.js";
 import { createRepositories } from "../packages/db/src/index.js";
@@ -48,11 +50,17 @@ function createIntent(userId: string, agentId: string): SessionRecord {
     agentName: "Original Agent",
     agentVersion: "7",
     environmentId: "environment-1",
+    createAttemptedAt: null,
+    modelId: null,
+    configSnapshot: null,
+    configSnapshotState: "unverified",
+    configSnapshotErrorCode: null,
     title: "Task",
     status: "idle",
     lastErrorCode: null,
     errorRecoverable: null,
     archivedAt: null,
+    pinnedAt: null,
     deletionState: "none",
     lastEventAt: null,
     createdAt: timestamp,
@@ -60,7 +68,401 @@ function createIntent(userId: string, agentId: string): SessionRecord {
   };
 }
 
+const observedSnapshot = {
+  agentId: "ark-agent-1",
+  agentVersion: "7",
+  environmentId: "environment-1",
+  modelId: "model-observed",
+  skills: [],
+  tools: [],
+  environment: {
+    id: "environment-1",
+    type: "environment",
+    configType: "cloud",
+    scope: "account",
+  },
+  completeness: "complete" as const,
+};
+
+function verifiedCompletion(
+  arkSessionId: string,
+  status: SessionRecord["status"] = "idle",
+) {
+  return {
+    arkSessionId,
+    status,
+    modelId: observedSnapshot.modelId,
+    configSnapshot: observedSnapshot,
+  };
+}
+
+const invalidVerifiedArkSessionIds = [
+  ["empty", ""],
+  ["whitespace-only", "   "],
+  ["leading whitespace", " ark-session-valid"],
+  ["trailing whitespace", "ark-session-valid "],
+  ["pending namespace", "pending:reservation-id"],
+  ["whitespace-prefixed pending namespace", " pending:reservation-id"],
+] as const;
+
+const invalidDirectSqlConsumedArkSessionIds = [
+  ...invalidVerifiedArkSessionIds,
+  ["tab prefix", "\tark-session-valid"],
+  ["tab suffix", "ark-session-valid\t"],
+  ["newline prefix", "\nark-session-valid"],
+  ["newline suffix", "ark-session-valid\n"],
+  ["carriage return", "ark-session-valid\r"],
+  ["mixed whitespace", "\t\nark-session-valid\r "],
+  ["tab/newline-obscured pending namespace", "\tpending:reservation-id\n"],
+  ["NBSP prefix", "\u00a0ark-session-valid"],
+  ["U+2003 suffix", "ark-session-valid\u2003"],
+  ["U+2028 prefix", "\u2028ark-session-valid"],
+  ["U+3000 suffix", "ark-session-valid\u3000"],
+  ["BOM prefix", "\ufeffark-session-valid"],
+] as const;
+
 describe("Session database integration", () => {
+  it("adds conservative snapshot recovery columns and backfills only old pending creates", async () => {
+    const migrationsDirectory = resolve(
+      import.meta.dirname,
+      "../packages/db/migrations",
+    );
+    const migrationName = (await readdir(migrationsDirectory)).find((name) =>
+      name.startsWith("0021_"),
+    );
+    expect(migrationName).toBeDefined();
+    const migration = await readFile(
+      resolve(migrationsDirectory, migrationName!),
+      "utf8",
+    );
+
+    expect(migration).toMatch(
+      /create type "public"\."config_snapshot_state" as enum\('unverified', 'verified', 'incomplete', 'mismatch'\)/i,
+    );
+    expect(migration).toMatch(
+      /add column "create_attempted_at" timestamp with time zone/i,
+    );
+    expect(migration).toMatch(/add column "model_id" text/i);
+    expect(migration).toMatch(/add column "config_snapshot" jsonb/i);
+    expect(migration).toMatch(
+      /add column "config_snapshot_state" "config_snapshot_state" default 'unverified' not null/i,
+    );
+    expect(migration).toMatch(
+      /update "sessions"\s+set "create_attempted_at" = "created_at"\s+where "ark_session_id" like 'pending:%'/i,
+    );
+    expect(migration).not.toMatch(
+      /update "sessions"[\s\S]+where "ark_session_id" not like 'pending:%'/i,
+    );
+  });
+
+  it("stores an unattempted create intent and grants only one atomic POST claim", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    const prepared = await database.client.query<{
+      create_attempted_at: Date | null;
+      model_id: string | null;
+      config_snapshot: Record<string, unknown> | null;
+      config_snapshot_state: string;
+      config_snapshot_error_code: string | null;
+    }>(
+      `select create_attempted_at, model_id, config_snapshot,
+              config_snapshot_state, config_snapshot_error_code
+         from sessions
+        where id = $1`,
+      [intent.id],
+    );
+    expect(prepared.rows[0]).toEqual({
+      create_attempted_at: null,
+      model_id: null,
+      config_snapshot: null,
+      config_snapshot_state: "unverified",
+      config_snapshot_error_code: null,
+    });
+
+    const claims = await Promise.all([
+      repositories.sessionLifecycle.claimCreateAttempt(
+        intent.id,
+        userId,
+        new Date("2026-09-06T00:00:01.000Z"),
+      ),
+      repositories.sessionLifecycle.claimCreateAttempt(
+        intent.id,
+        userId,
+        new Date("2026-09-06T00:00:02.000Z"),
+      ),
+    ]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const attempted = await database.client.query<{
+      create_attempted_at: Date;
+    }>(`select create_attempted_at from sessions where id = $1`, [intent.id]);
+    expect(attempted.rows[0]?.create_attempted_at).toEqual(
+      claims[0]
+        ? new Date("2026-09-06T00:00:01.000Z")
+        : new Date("2026-09-06T00:00:02.000Z"),
+    );
+    await database.close();
+  });
+
+  it("releases only the matching pending create attempt token", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    const attemptedAt = new Date("2026-09-06T00:00:01.000Z");
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await expect(
+      repositories.sessionLifecycle.claimCreateAttempt(
+        intent.id,
+        userId,
+        attemptedAt,
+      ),
+    ).resolves.toBe(true);
+
+    await expect(
+      repositories.sessionLifecycle.releaseCreateAttempt(
+        intent.id,
+        userId,
+        new Date("2026-09-06T00:00:02.000Z"),
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.sessionLifecycle.releaseCreateAttempt(
+        intent.id,
+        id(),
+        attemptedAt,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      repositories.sessionLifecycle.releaseCreateAttempt(
+        intent.id,
+        userId,
+        attemptedAt,
+      ),
+    ).resolves.toBe(true);
+    await expect(
+      repositories.sessionLifecycle.claimCreateAttempt(
+        intent.id,
+        userId,
+        new Date("2026-09-06T00:00:03.000Z"),
+      ),
+    ).resolves.toBe(true);
+    await database.close();
+  });
+
+  it("persists a verified observed snapshot without overwriting create intent identity", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+
+    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
+      arkSessionId: "ark-session-observed",
+      status: "idle",
+      modelId: "model-observed",
+      configSnapshot: observedSnapshot,
+    });
+
+    const stored = await database.client.query<{
+      ark_session_id: string;
+      ark_agent_id: string;
+      agent_version: string;
+      environment_id: string;
+      model_id: string;
+      config_snapshot: typeof observedSnapshot;
+      config_snapshot_state: string;
+      config_snapshot_error_code: string | null;
+    }>(
+      `select ark_session_id, ark_agent_id, agent_version, environment_id,
+              model_id, config_snapshot, config_snapshot_state,
+              config_snapshot_error_code
+         from sessions
+        where id = $1`,
+      [intent.id],
+    );
+    expect(stored.rows[0]).toEqual({
+      ark_session_id: "ark-session-observed",
+      ark_agent_id: intent.arkAgentId,
+      agent_version: intent.agentVersion,
+      environment_id: intent.environmentId,
+      model_id: "model-observed",
+      config_snapshot: observedSnapshot,
+      config_snapshot_state: "verified",
+      config_snapshot_error_code: null,
+    });
+    const roundTrippedSnapshot = JSON.stringify(
+      stored.rows[0]?.config_snapshot,
+    );
+    expect(roundTrippedSnapshot).not.toContain("system");
+    expect(roundTrippedSnapshot).not.toContain("mcpUrl");
+    expect(roundTrippedSnapshot).not.toContain("secret.example.test");
+    expect(roundTrippedSnapshot).not.toContain("secret-env-value");
+    await database.close();
+  });
+
+  it("retains an incomplete observed cloud identity for GET-only reconciliation", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+
+    await repositories.sessionLifecycle.preserveCreateOutcome(
+      intent.id,
+      userId,
+      {
+        arkSessionId: "ark-session-incomplete",
+        status: "idle",
+        modelId: null,
+        configSnapshot: {
+          ...observedSnapshot,
+          modelId: null,
+          completeness: "incomplete",
+        },
+        configSnapshotState: "incomplete",
+        configSnapshotErrorCode: "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+      },
+    );
+
+    const stored = await database.client.query<{
+      ark_session_id: string;
+      ark_agent_id: string;
+      model_id: string | null;
+      config_snapshot_state: string;
+      config_snapshot_error_code: string;
+      reservation_status: string;
+      job_status: string;
+    }>(
+      `select session.ark_session_id, session.ark_agent_id, session.model_id,
+              session.config_snapshot_state,
+              session.config_snapshot_error_code,
+              reservation.status as reservation_status,
+              job.status as job_status
+         from sessions session
+         join quota_reservations reservation on reservation.id = session.id
+         join background_jobs job on job.id = session.id
+        where session.id = $1`,
+      [intent.id],
+    );
+    expect(stored.rows[0]).toEqual({
+      ark_session_id: "ark-session-incomplete",
+      ark_agent_id: intent.arkAgentId,
+      model_id: null,
+      config_snapshot_state: "incomplete",
+      config_snapshot_error_code: "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+      reservation_status: "consumed",
+      job_status: "pending",
+    });
+    await database.close();
+  });
+
+  it.each([
+    ["incomplete", false],
+    ["mismatch", false],
+    ["incomplete", true],
+    ["mismatch", true],
+  ] as const)(
+    "keeps the worker lease through %s preservation and applies a %s retry",
+    async (snapshotState, final) => {
+      const database = await createTestDatabase();
+      const repositories = createRepositories(database.db);
+      const { userId, agentId } = await seedUserAndAgent(database.client);
+      const intent = createIntent(userId, agentId);
+      const errorCode =
+        snapshotState === "incomplete"
+          ? "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE"
+          : "ARK_SESSION_AGENT_VERSION_MISMATCH";
+      const observation = {
+        arkSessionId: "ark-session-observed",
+        status: "idle" as const,
+        modelId: snapshotState === "incomplete" ? null : "model-observed",
+        configSnapshot: {
+          ...observedSnapshot,
+          ...(snapshotState === "incomplete"
+            ? { modelId: null, completeness: "incomplete" as const }
+            : { agentVersion: "8" }),
+        },
+        configSnapshotState: snapshotState,
+        configSnapshotErrorCode: errorCode,
+      };
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.sessionLifecycle.preserveCreateOutcome(
+        intent.id,
+        userId,
+        observation,
+      );
+      await database.client.query(
+        `update background_jobs
+            set max_attempts = $2, run_after = '2000-01-01'
+          where id = $1`,
+        [intent.id, final ? 1 : 3],
+      );
+      const [claimed] = await repositories.jobs.claim({
+        workerId: "session-worker",
+        limit: 1,
+        now: new Date("2026-09-06T01:00:00.000Z"),
+        types: ["reconcile_session"],
+      });
+      expect(claimed).toBeDefined();
+
+      await repositories.sessionLifecycle.preserveCreateOutcome(
+        intent.id,
+        userId,
+        observation,
+      );
+      const leased = await database.client.query<{
+        status: string;
+        locked_by: string | null;
+      }>(
+        `select status, locked_by
+           from background_jobs
+          where id = $1`,
+        [intent.id],
+      );
+      expect(leased.rows[0]).toEqual({
+        status: "running",
+        locked_by: "session-worker",
+      });
+
+      await repositories.jobs.retry(
+        intent.id,
+        "session-worker",
+        errorCode,
+        final,
+        new Date("2026-09-06T01:00:01.000Z"),
+      );
+      const stored = await database.client.query<{
+        status: string;
+        attempts: number;
+        locked_by: string | null;
+        last_error: string | null;
+        session_status: string;
+        deletion_state: string;
+      }>(
+        `select job.status, job.attempts, job.locked_by, job.last_error,
+                session.status as session_status,
+                session.deletion_state
+           from background_jobs job
+           join sessions session on session.id = job.id
+          where job.id = $1`,
+        [intent.id],
+      );
+      expect(stored.rows[0]).toEqual({
+        status: final ? "failed" : "pending",
+        attempts: 1,
+        locked_by: null,
+        last_error: errorCode,
+        session_status: final ? "terminated" : "idle",
+        deletion_state: final ? "deletion_failed" : "none",
+      });
+      await database.close();
+    },
+  );
+
   it("atomically reserves quota and stores a durable create intent", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
@@ -157,6 +559,71 @@ describe("Session database integration", () => {
     await database.close();
   });
 
+  it("uses UTC reservation days and keeps expired unknown outcomes quota-counted", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    await database.client.query(
+      `update quota_policies set daily_session_limit = 1
+        where key = 'default'`,
+    );
+    const yesterday = createIntent(userId, agentId);
+    yesterday.createdAt = new Date("2026-09-06T23:59:59.999Z");
+    yesterday.updatedAt = yesterday.createdAt;
+    await repositories.sessionLifecycle.prepareCreate(yesterday);
+    await database.client.query(
+      `update quota_reservations
+          set expires_at = '2026-09-06T23:59:59.999Z'
+        where id = $1`,
+      [yesterday.id],
+    );
+
+    const midnight = createIntent(userId, agentId);
+    midnight.createdAt = new Date("2026-09-07T00:00:00.000Z");
+    midnight.updatedAt = midnight.createdAt;
+    await expect(
+      repositories.sessionLifecycle.prepareCreate(midnight),
+    ).resolves.toBeUndefined();
+    await database.client.query(
+      `update quota_reservations
+          set expires_at = '2026-09-07T00:00:00.001Z'
+        where id = $1`,
+      [midnight.id],
+    );
+
+    const sameDay = createIntent(userId, agentId);
+    sameDay.createdAt = new Date("2026-09-07T00:00:00.002Z");
+    sameDay.updatedAt = sameDay.createdAt;
+    await expect(
+      repositories.sessionLifecycle.prepareCreate(sameDay),
+    ).rejects.toMatchObject({ dimension: "daily_sessions" });
+
+    const reservations = await database.client.query<{
+      id: string;
+      status: string;
+      resolved_at: Date | null;
+    }>(
+      `select id, status, resolved_at
+         from quota_reservations
+        where id in ($1, $2)
+        order by created_at`,
+      [yesterday.id, midnight.id],
+    );
+    expect(reservations.rows).toEqual([
+      {
+        id: yesterday.id,
+        status: "unknown_outcome",
+        resolved_at: null,
+      },
+      {
+        id: midnight.id,
+        status: "unknown_outcome",
+        resolved_at: null,
+      },
+    ]);
+    await database.close();
+  });
+
   it("completes creation and keeps immutable Agent metadata in list/detail", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);
@@ -167,12 +634,7 @@ describe("Session database integration", () => {
     const created = await repositories.sessionLifecycle.completeCreate(
       intent.id,
       userId,
-      {
-        arkSessionId: "ark-session-1",
-        arkAgentId: "ark-agent-1",
-        agentVersion: "7",
-        status: "idle",
-      },
+      verifiedCompletion("ark-session-1"),
     );
     await database.client.query(
       `update personal_agents set name = 'Renamed', ark_version = '8'
@@ -223,12 +685,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-projection",
-      arkAgentId: "ark-agent-1",
-      agentVersion: "7",
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-projection"),
+    );
 
     await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
       eventId: "event-1",
@@ -289,12 +750,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-usage",
-      arkAgentId: "ark-agent-1",
-      agentVersion: "7",
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-usage"),
+    );
     const running = {
       eventId: "event-running",
       observedAt: new Date("2026-08-31T23:59:58.000Z"),
@@ -423,12 +883,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-runtime",
-      arkAgentId: "ark-agent-1",
-      agentVersion: "7",
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-runtime"),
+    );
 
     for (const [eventId, observedAt, status] of [
       ["event-running-1", "2026-09-01T00:00:00.000Z", "running"],
@@ -479,12 +938,11 @@ describe("Session database integration", () => {
     );
     for (const intent of intents) {
       await repositories.sessionLifecycle.prepareCreate(intent);
-      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-        arkSessionId: `ark-${intent.id}`,
-        arkAgentId: "ark-agent-1",
-        agentVersion: "7",
-        status: "idle",
-      });
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(`ark-${intent.id}`),
+      );
     }
     const selection = {
       cutoff: new Date("2026-09-01T00:00:00.000Z"),
@@ -546,12 +1004,11 @@ describe("Session database integration", () => {
     );
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-exhausted",
-      arkAgentId: "ark-agent-1",
-      agentVersion: "7",
-      status: "running",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-exhausted", "running"),
+    );
     const projection = {
       eventId: "event-exhausted",
       observedAt: new Date("2026-09-30T23:59:59.999Z"),
@@ -685,7 +1142,7 @@ describe("Session database integration", () => {
       [unknown.id],
     );
     expect(unknownState.rows[0]).toEqual({
-      reservation_status: "consumed",
+      reservation_status: "unknown_outcome",
       job_status: "pending",
     });
     await database.close();
@@ -739,7 +1196,7 @@ describe("Session database integration", () => {
     expect(terminal.rows[0]).toEqual({
       status: "terminated",
       deletion_state: "deletion_failed",
-      reservation_status: "consumed",
+      reservation_status: "unknown_outcome",
       job_status: "failed",
     });
     await expect(
@@ -853,12 +1310,11 @@ describe("Session database integration", () => {
 
     for (const intent of [active, archived]) {
       await repositories.sessionLifecycle.prepareCreate(intent);
-      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-        arkSessionId: `ark-${intent.id}`,
-        arkAgentId: intent.arkAgentId,
-        agentVersion: intent.agentVersion,
-        status: "idle",
-      });
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(`ark-${intent.id}`),
+      );
     }
 
     await expect(
@@ -879,12 +1335,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-archive",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-archive"),
+    );
     const before = await database.client.query<Record<string, unknown>>(
       `select * from sessions where id = $1`,
       [intent.id],
@@ -922,12 +1377,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-saga",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-saga"),
+    );
     const inputId = id();
     const artifactId = id();
     const driveFileId = id();
@@ -1003,22 +1457,549 @@ describe("Session database integration", () => {
     await expect(
       repositories.sessionDeletion.removeLocal(userId, intent.id),
     ).resolves.toBe("removed");
-    const remaining = await database.client.query<{ count: number }>(
+    const remaining = await database.client.query<{
+      sessions: number;
+      inputs: number;
+      artifacts: number;
+      ledger: number;
+      reservations: number;
+    }>(
       `select
-         (select count(*) from sessions where id = $1)
-         + (select count(*) from session_inputs where session_id = $1)
-         + (select count(*) from artifacts where session_id = $1)
-         + (select count(*) from usage_ledger
-             where ark_session_id = 'ark-session-saga')
-         + (select count(*) from quota_reservations where id = $1)
-           as count`,
+         (select count(*)::integer from sessions where id = $1) as sessions,
+         (select count(*)::integer from session_inputs where session_id = $1)
+           as inputs,
+         (select count(*)::integer from artifacts where session_id = $1)
+           as artifacts,
+         (select count(*)::integer from usage_ledger
+             where ark_session_id = 'ark-session-saga') as ledger,
+         (select count(*)::integer from quota_reservations where id = $1)
+           as reservations`,
       [intent.id],
     );
-    expect(remaining.rows[0]?.count).toBe(0);
+    expect(remaining.rows[0]).toEqual({
+      sessions: 0,
+      inputs: 0,
+      artifacts: 0,
+      ledger: 1,
+      reservations: 1,
+    });
     const retainedJob = await database.client.query<{
       payload: Record<string, unknown>;
     }>(`select payload from background_jobs where id = $1`, [intent.id]);
     expect(retainedJob.rows[0]?.payload).toEqual(payload);
+    await database.close();
+  });
+
+  it("keeps user and admin usage stable after permanent Session deletion", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-retained-usage"),
+    );
+    await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+      eventId: "event-retained-usage",
+      observedAt: new Date("2026-09-06T00:00:01.000Z"),
+      metrics: [{ metricType: "input_tokens", quantity: 37 }],
+    });
+    const beforeSummary = await repositories.usage.summary(
+      userId,
+      intent.createdAt,
+    );
+    const beforeAdmin = await repositories.usage.adminOverview({
+      now: intent.createdAt,
+      limit: 10,
+      before: null,
+    });
+
+    await repositories.sessionLifecycle.beginDelete(userId, intent.id);
+    await expect(
+      repositories.sessionDeletion.removeLocal(userId, intent.id),
+    ).resolves.toBe("removed");
+
+    const afterSummary = await repositories.usage.summary(
+      userId,
+      intent.createdAt,
+    );
+    const afterAdmin = await repositories.usage.adminOverview({
+      now: intent.createdAt,
+      limit: 10,
+      before: null,
+    });
+    expect(afterSummary.usage).toEqual(beforeSummary.usage);
+    expect(afterAdmin.totals).toEqual(beforeAdmin.totals);
+    expect(afterAdmin.users).toEqual(beforeAdmin.users);
+    await database.close();
+  });
+
+  it("posts deletion-time usage only through a non-released reservation", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const retained = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(retained);
+    await repositories.sessionLifecycle.completeCreate(
+      retained.id,
+      userId,
+      verifiedCompletion("ark-session-settlement"),
+    );
+    await repositories.sessionLifecycle.beginDelete(userId, retained.id);
+    await repositories.sessionDeletion.removeLocal(userId, retained.id);
+
+    const settlement = {
+      id: id(),
+      reservationId: retained.id,
+      arkEventId: "event-after-delete",
+      metricType: "output_tokens" as const,
+      quantity: 19,
+      recordedAt: new Date("2026-09-06T00:01:00.000Z"),
+    };
+    await expect(
+      repositories.usage.recordByReservation(settlement),
+    ).resolves.toBe(true);
+    await expect(
+      repositories.usage.recordByReservation({ ...settlement, id: id() }),
+    ).resolves.toBe(false);
+
+    const released = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(released);
+    await repositories.sessionLifecycle.failCreate(released.id, userId);
+    await expect(
+      repositories.usage.recordByReservation({
+        ...settlement,
+        id: id(),
+        reservationId: released.id,
+        arkEventId: "forged-released",
+      }),
+    ).resolves.toBe(false);
+    await database.close();
+  });
+
+  it.each(invalidVerifiedArkSessionIds)(
+    "rejects a %s Ark identity through quota consumption",
+    async (_caseName, arkSessionId) => {
+      const database = await createTestDatabase();
+      const repositories = createRepositories(database.db);
+      const { userId } = await seedUserAndAgent(database.client);
+      const reservationId = id();
+      const now = new Date("2026-09-06T00:00:00.000Z");
+      await repositories.quotas.reserveSession({
+        userId,
+        reservationId,
+        expiresAt: new Date("2026-09-06T00:05:00.000Z"),
+        now,
+      });
+
+      expect(repositories.quotas).not.toHaveProperty("resolveReservation");
+      await expect(
+        repositories.quotas.consumeReservation({
+          reservationId,
+          arkSessionId,
+        }),
+      ).rejects.toThrow("verified Ark Session ID");
+
+      const reservation = await database.client.query<{
+        ark_session_id: string;
+        status: string;
+      }>(
+        `select ark_session_id, status
+           from quota_reservations
+          where id = $1`,
+        [reservationId],
+      );
+      expect(reservation.rows[0]).toEqual({
+        ark_session_id: `pending:${reservationId}`,
+        status: "active",
+      });
+      await database.close();
+    },
+  );
+
+  for (const transition of [
+    "completeCreate",
+    "preserveCreateOutcome",
+  ] as const) {
+    it.each(invalidVerifiedArkSessionIds)(
+      `rejects a %s Ark identity through sessionLifecycle.${transition}`,
+      async (_caseName, arkSessionId) => {
+        const database = await createTestDatabase();
+        const repositories = createRepositories(database.db);
+        const { userId, agentId } = await seedUserAndAgent(database.client);
+        const intent = createIntent(userId, agentId);
+        await repositories.sessionLifecycle.prepareCreate(intent);
+
+        await expect(
+          repositories.sessionLifecycle[transition](
+            intent.id,
+            userId,
+            verifiedCompletion(arkSessionId),
+          ),
+        ).rejects.toThrow("verified Ark Session ID");
+
+        const stored = await database.client.query<{
+          session_ark_session_id: string;
+          reservation_ark_session_id: string;
+          reservation_status: string;
+        }>(
+          `select session.ark_session_id as session_ark_session_id,
+                  reservation.ark_session_id as reservation_ark_session_id,
+                  reservation.status as reservation_status
+             from sessions session
+             join quota_reservations reservation
+               on reservation.id = session.id
+            where session.id = $1`,
+          [intent.id],
+        );
+        expect(stored.rows[0]).toEqual({
+          session_ark_session_id: `pending:${intent.id}`,
+          reservation_ark_session_id: `pending:${intent.id}`,
+          reservation_status: "active",
+        });
+        await database.close();
+      },
+    );
+  }
+
+  it.each(["completeCreate", "preserveCreateOutcome"] as const)(
+    "keeps consumed identity immutable and allows exact idempotency through sessionLifecycle.%s",
+    async (transition) => {
+      const database = await createTestDatabase();
+      const repositories = createRepositories(database.db);
+      const { userId, agentId } = await seedUserAndAgent(database.client);
+      const intent = createIntent(userId, agentId);
+      const knownIdentity = "ark-session-immutable";
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.sessionLifecycle[transition](
+        intent.id,
+        userId,
+        verifiedCompletion(knownIdentity),
+      );
+
+      await expect(
+        repositories.sessionLifecycle[transition](
+          intent.id,
+          userId,
+          verifiedCompletion(knownIdentity),
+        ),
+      ).resolves.toEqual(
+        transition === "completeCreate"
+          ? expect.objectContaining({ arkSessionId: knownIdentity })
+          : undefined,
+      );
+      await expect(
+        repositories.sessionLifecycle[transition](
+          intent.id,
+          userId,
+          verifiedCompletion("ark-session-rewrite"),
+        ),
+      ).rejects.toThrow("Ark Session ID is immutable");
+
+      const stored = await database.client.query<{
+        session_ark_session_id: string;
+        reservation_ark_session_id: string;
+        reservation_status: string;
+      }>(
+        `select session.ark_session_id as session_ark_session_id,
+                reservation.ark_session_id as reservation_ark_session_id,
+                reservation.status as reservation_status
+           from sessions session
+           join quota_reservations reservation
+             on reservation.id = session.id
+          where session.id = $1`,
+        [intent.id],
+      );
+      expect(stored.rows[0]).toEqual({
+        session_ark_session_id: knownIdentity,
+        reservation_ark_session_id: knownIdentity,
+        reservation_status: "consumed",
+      });
+      await database.close();
+    },
+  );
+
+  it.each(invalidDirectSqlConsumedArkSessionIds)(
+    "rejects direct SQL consumed reservation with a %s Ark identity",
+    async (_caseName, arkSessionId) => {
+      const database = await createTestDatabase();
+      const { userId } = await seedUserAndAgent(database.client);
+
+      await expect(
+        database.client.query(
+          `insert into quota_reservations
+             (id, user_id, ark_session_id, status, expires_at)
+           values ($1, $2, $3, 'consumed', $4)`,
+          [id(), userId, arkSessionId, new Date("2026-09-06T00:05:00.000Z")],
+        ),
+      ).rejects.toThrow();
+      await database.close();
+    },
+  );
+
+  it("allows direct SQL valid consumed and non-consumed pending identities", async () => {
+    const database = await createTestDatabase();
+    const { userId } = await seedUserAndAgent(database.client);
+    const consumedId = id();
+    const activeId = id();
+
+    await expect(
+      database.client.query(
+        `insert into quota_reservations
+           (id, user_id, ark_session_id, status, expires_at)
+         values ($1, $3, 'ark-session-valid', 'consumed', $5),
+                ($2, $3, $4, 'active', $5)`,
+        [
+          consumedId,
+          activeId,
+          userId,
+          `pending:${activeId}`,
+          new Date("2026-09-06T00:05:00.000Z"),
+        ],
+      ),
+    ).resolves.toMatchObject({ affectedRows: 2 });
+    await database.close();
+  });
+
+  it("atomically consumes a known Ark identity and cascades existing ledger rows", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId } = await seedUserAndAgent(database.client);
+    const reservationId = id();
+    const now = new Date("2026-09-06T00:00:00.000Z");
+    await repositories.quotas.reserveSession({
+      userId,
+      reservationId,
+      expiresAt: new Date("2026-09-06T00:05:00.000Z"),
+      now,
+    });
+    await repositories.usage.recordByReservation({
+      id: id(),
+      reservationId,
+      arkEventId: "event-before-verification",
+      metricType: "input_tokens",
+      quantity: 5,
+      recordedAt: now,
+    });
+
+    await expect(
+      repositories.quotas.consumeReservation({
+        reservationId,
+        arkSessionId: "ark-session-cascade",
+      }),
+    ).resolves.toMatchObject({
+      id: reservationId,
+      userId,
+      arkSessionId: "ark-session-cascade",
+      status: "consumed",
+      resolvedAt: expect.anything(),
+    });
+
+    const stored = await database.client.query<{
+      reservation_ark_session_id: string;
+      status: string;
+      resolved_at: Date | null;
+      ledger_ark_session_id: string;
+    }>(
+      `select reservation.ark_session_id as reservation_ark_session_id,
+              reservation.status, reservation.resolved_at,
+              ledger.ark_session_id as ledger_ark_session_id
+         from quota_reservations reservation
+         join usage_ledger ledger
+           on ledger.user_id = reservation.user_id
+          and ledger.ark_session_id = reservation.ark_session_id
+        where reservation.id = $1
+          and ledger.ark_event_id = 'event-before-verification'`,
+      [reservationId],
+    );
+    expect(stored.rows[0]).toEqual({
+      reservation_ark_session_id: "ark-session-cascade",
+      status: "consumed",
+      resolved_at: expect.any(Date),
+      ledger_ark_session_id: "ark-session-cascade",
+    });
+    await database.close();
+  });
+
+  it("keeps a directly consumed reservation identity immutable and exactly idempotent", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId } = await seedUserAndAgent(database.client);
+    const reservationId = id();
+    const now = new Date("2026-09-06T00:00:00.000Z");
+    await repositories.quotas.reserveSession({
+      userId,
+      reservationId,
+      expiresAt: new Date("2026-09-06T00:05:00.000Z"),
+      now,
+    });
+    await repositories.quotas.consumeReservation({
+      reservationId,
+      arkSessionId: "ark-session-direct-immutable",
+    });
+
+    await expect(
+      repositories.quotas.consumeReservation({
+        reservationId,
+        arkSessionId: "ark-session-direct-immutable",
+      }),
+    ).resolves.toMatchObject({
+      id: reservationId,
+      userId,
+      arkSessionId: "ark-session-direct-immutable",
+      status: "consumed",
+    });
+    await expect(
+      repositories.quotas.consumeReservation({
+        reservationId,
+        arkSessionId: "ark-session-direct-rewrite",
+      }),
+    ).rejects.toThrow("Ark Session ID is immutable");
+
+    const stored = await database.client.query<{
+      ark_session_id: string;
+      status: string;
+    }>(
+      `select ark_session_id, status
+         from quota_reservations
+        where id = $1`,
+      [reservationId],
+    );
+    expect(stored.rows[0]).toEqual({
+      ark_session_id: "ark-session-direct-immutable",
+      status: "consumed",
+    });
+    await database.close();
+  });
+
+  it.each(["completeCreate", "preserveCreateOutcome"] as const)(
+    "does not consume a released reservation through sessionLifecycle.%s",
+    async (transition) => {
+      const database = await createTestDatabase();
+      const repositories = createRepositories(database.db);
+      const { userId, agentId } = await seedUserAndAgent(database.client);
+      const intent = createIntent(userId, agentId);
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.quotas.releaseReservation(intent.id);
+
+      await expect(
+        repositories.sessionLifecycle[transition](
+          intent.id,
+          userId,
+          verifiedCompletion("ark-session-after-release"),
+        ),
+      ).rejects.toThrow("reservation cannot be consumed");
+
+      const stored = await database.client.query<{
+        session_ark_session_id: string;
+        reservation_ark_session_id: string;
+        reservation_status: string;
+      }>(
+        `select session.ark_session_id as session_ark_session_id,
+                reservation.ark_session_id as reservation_ark_session_id,
+                reservation.status as reservation_status
+           from sessions session
+           join quota_reservations reservation
+             on reservation.id = session.id
+          where session.id = $1`,
+        [intent.id],
+      );
+      expect(stored.rows[0]).toEqual({
+        session_ark_session_id: `pending:${intent.id}`,
+        reservation_ark_session_id: `pending:${intent.id}`,
+        reservation_status: "released",
+      });
+      await database.close();
+    },
+  );
+
+  it("releases active or unknown reservations without regressing consumed ones", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId } = await seedUserAndAgent(database.client);
+    const now = new Date("2026-09-06T00:00:00.000Z");
+    const activeId = id();
+    await repositories.quotas.reserveSession({
+      userId,
+      reservationId: activeId,
+      expiresAt: new Date("2026-09-06T00:05:00.000Z"),
+      now,
+    });
+    await expect(
+      repositories.quotas.releaseReservation(activeId),
+    ).resolves.toMatchObject({
+      id: activeId,
+      userId,
+      status: "released",
+      resolvedAt: expect.anything(),
+    });
+    await expect(
+      repositories.quotas.consumeReservation({
+        reservationId: activeId,
+        arkSessionId: "ark-session-released",
+      }),
+    ).resolves.toBeUndefined();
+
+    const releasedId = id();
+    await repositories.quotas.reserveSession({
+      userId,
+      reservationId: releasedId,
+      expiresAt: new Date("2026-09-06T00:05:00.000Z"),
+      now,
+    });
+    await database.client.query(
+      `update quota_reservations
+          set status = 'unknown_outcome'
+        where id = $1`,
+      [releasedId],
+    );
+    await expect(
+      repositories.quotas.releaseReservation(releasedId),
+    ).resolves.toMatchObject({
+      id: releasedId,
+      userId,
+      status: "released",
+      resolvedAt: expect.anything(),
+    });
+
+    const consumedId = id();
+    await repositories.quotas.reserveSession({
+      userId,
+      reservationId: consumedId,
+      expiresAt: new Date("2026-09-06T00:05:00.000Z"),
+      now,
+    });
+    await repositories.quotas.consumeReservation({
+      reservationId: consumedId,
+      arkSessionId: "ark-session-consumed",
+    });
+    const consumedBeforeRelease = await database.client.query<{
+      ark_session_id: string;
+      status: string;
+      resolved_at: Date;
+    }>(
+      `select ark_session_id, status, resolved_at
+         from quota_reservations
+        where id = $1`,
+      [consumedId],
+    );
+
+    await expect(
+      repositories.quotas.releaseReservation(consumedId),
+    ).resolves.toBeUndefined();
+    const consumedAfterRelease = await database.client.query<{
+      ark_session_id: string;
+      status: string;
+      resolved_at: Date;
+    }>(
+      `select ark_session_id, status, resolved_at
+         from quota_reservations
+        where id = $1`,
+      [consumedId],
+    );
+    expect(consumedAfterRelease.rows[0]).toEqual(consumedBeforeRelease.rows[0]);
     await database.close();
   });
 
@@ -1028,12 +2009,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-delete",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-delete"),
+    );
 
     await expect(
       repositories.sessionLifecycle.beginDelete(id(), intent.id),
@@ -1098,12 +2078,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-repeat-delete",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-repeat-delete"),
+    );
     await repositories.sessionLifecycle.beginDelete(userId, intent.id);
     await database.client.query(
       `update sessions
@@ -1200,12 +2179,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-delete-race",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-delete-race"),
+    );
     await repositories.sessionLifecycle.beginDelete(userId, intent.id);
     await database.client.query(
       `update sessions set deletion_state = 'deletion_failed' where id = $1`,
@@ -1277,12 +2255,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-expired-delete",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-expired-delete"),
+    );
     await repositories.sessionLifecycle.beginDelete(userId, intent.id);
     await database.client.query(
       `update background_jobs
@@ -1323,12 +2300,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-retry-delete",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-retry-delete"),
+    );
     await repositories.sessionLifecycle.beginDelete(userId, intent.id);
     const [firstAttempt] = await repositories.jobs.claim({
       workerId: "worker-1",
@@ -1381,12 +2357,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-quota",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-quota"),
+    );
     await database.client.query(
       `insert into usage_ledger
         (id, user_id, ark_session_id, ark_event_id, metric_type, quantity)
@@ -1408,12 +2383,11 @@ describe("Session database integration", () => {
       const { userId, agentId } = await seedUserAndAgent(database.client);
       const intent = createIntent(userId, agentId);
       await repositories.sessionLifecycle.prepareCreate(intent);
-      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-        arkSessionId: `ark-session-message-${deletionState}`,
-        arkAgentId: intent.arkAgentId,
-        agentVersion: intent.agentVersion,
-        status: "idle",
-      });
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(`ark-session-message-${deletionState}`),
+      );
       await database.client.query(
         `update sessions
             set deletion_state = $2,
@@ -1473,12 +2447,11 @@ describe("Session database integration", () => {
     const second = createIntent(userId, agentId);
     for (const intent of [first, second]) {
       await repositories.sessionLifecycle.prepareCreate(intent);
-      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-        arkSessionId: `ark-${intent.id}`,
-        arkAgentId: intent.arkAgentId,
-        agentVersion: intent.agentVersion,
-        status: "idle",
-      });
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(`ark-${intent.id}`),
+      );
     }
 
     const starts = await Promise.allSettled([
@@ -1512,12 +2485,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-running",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "running",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-running", "running"),
+    );
     await database.client.query(
       `update quota_policies set concurrent_session_limit = 0
         where key = 'default'`,
@@ -1544,12 +2516,11 @@ describe("Session database integration", () => {
     const waiting = createIntent(userId, agentId);
     for (const intent of [running, waiting]) {
       await repositories.sessionLifecycle.prepareCreate(intent);
-      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-        arkSessionId: `ark-${intent.id}`,
-        arkAgentId: intent.arkAgentId,
-        agentVersion: intent.agentVersion,
-        status: "idle",
-      });
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(`ark-${intent.id}`),
+      );
     }
 
     let rejectFirst: (reason: unknown) => void = () => undefined;
@@ -1631,12 +2602,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-dual-failure",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-dual-failure"),
+    );
 
     let rejectFirst: (reason: unknown) => void = () => undefined;
     let rejectSecond: (reason: unknown) => void = () => undefined;
@@ -1716,12 +2686,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-mixed-success",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-mixed-success"),
+    );
 
     let resolveFirst: (event: {
       id: string;
@@ -1800,12 +2769,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: "ark-session-mixed-unknown",
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-mixed-unknown"),
+    );
 
     let rejectFirst: (reason: unknown) => void = () => undefined;
     const firstResult = new Promise<never>((_resolve, reject) => {
@@ -1865,12 +2833,11 @@ describe("Session database integration", () => {
     const newer = createIntent(userId, agentId);
     for (const intent of [older, newer]) {
       await repositories.sessionLifecycle.prepareCreate(intent);
-      await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-        arkSessionId: `ark-${intent.id}`,
-        arkAgentId: intent.arkAgentId,
-        agentVersion: intent.agentVersion,
-        status: "idle",
-      });
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(`ark-${intent.id}`),
+      );
     }
 
     await expect(
@@ -1903,12 +2870,11 @@ describe("Session database integration", () => {
     const { userId, agentId } = await seedUserAndAgent(database.client);
     const intent = createIntent(userId, agentId);
     await repositories.sessionLifecycle.prepareCreate(intent);
-    await repositories.sessionLifecycle.completeCreate(intent.id, userId, {
-      arkSessionId: `ark-${intent.id}`,
-      arkAgentId: intent.arkAgentId,
-      agentVersion: intent.agentVersion,
-      status: "idle",
-    });
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion(`ark-${intent.id}`),
+    );
 
     await expect(
       repositories.sessionLifecycle.historyBackfilled(userId, intent.id),
@@ -1973,6 +2939,281 @@ describe("Session database integration", () => {
       [intent.id],
     );
     expect(remaining.rows[0]!.count).toBe(0);
+    await database.close();
+  });
+
+  it("attributes new usage to the verified Session snapshot, not the Agent's current model", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-t03b-1"),
+    );
+
+    // The Agent's model changes after the Session was created and verified.
+    await database.client.query(
+      `update personal_agents set model_id = 'model-b-new' where id = $1`,
+      [agentId],
+    );
+
+    const projected = await repositories.sessionLifecycle.projectEvent(
+      userId,
+      intent.id,
+      {
+        eventId: "event-t03b-1",
+        observedAt: new Date("2026-09-06T00:10:00.000Z"),
+        metrics: [{ metricType: "input_tokens", quantity: 30 }],
+      },
+    );
+    expect(projected).toBe(true);
+
+    const ledger = await database.client.query<{
+      model_id: string | null;
+      model_attribution_precision: string;
+    }>(
+      `select model_id, model_attribution_precision::text
+                from usage_ledger
+               where ark_session_id = 'ark-session-t03b-1'`,
+    );
+    expect(ledger.rows).toHaveLength(1);
+    // The verified snapshot's model stays; the new Agent model never lands,
+    // and the precision says the attribution is exact.
+    expect(ledger.rows[0]!.model_id).toBe("model-observed");
+    expect(ledger.rows[0]!.model_attribution_precision).toBe("exact");
+    await database.close();
+  });
+
+  it("writes unknown attribution for unverified, incomplete, and mismatch snapshots", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+
+    const cases: Array<{
+      arkSessionId: string;
+      state: "unverified" | "incomplete" | "mismatch";
+      modelId: string | null;
+    }> = [
+      {
+        arkSessionId: "ark-t03b-unverified",
+        state: "unverified",
+        modelId: null,
+      },
+      {
+        arkSessionId: "ark-t03b-incomplete",
+        state: "incomplete",
+        modelId: "model-observed",
+      },
+      {
+        arkSessionId: "ark-t03b-mismatch",
+        state: "mismatch",
+        modelId: "model-observed",
+      },
+    ];
+    for (const [index, c] of cases.entries()) {
+      const intent = createIntent(userId, agentId);
+      await repositories.sessionLifecycle.prepareCreate(intent);
+      await repositories.sessionLifecycle.completeCreate(
+        intent.id,
+        userId,
+        verifiedCompletion(c.arkSessionId),
+      );
+      await database.client.query(
+        `update sessions
+            set config_snapshot_state = $2, model_id = $3
+          where id = $1`,
+        [intent.id, c.state, c.modelId],
+      );
+      await repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+        eventId: `event-t03b-state-${index}`,
+        observedAt: new Date("2026-09-06T00:10:00.000Z"),
+        metrics: [{ metricType: "input_tokens", quantity: 10 }],
+      });
+    }
+
+    const ledger = await database.client.query<{
+      ark_session_id: string;
+      model_id: string | null;
+      precision: string;
+    }>(
+      `select ark_session_id, model_id, model_attribution_precision::text as precision
+                from usage_ledger
+               where ark_session_id like 'ark-t03b-%'
+               order by ark_session_id`,
+    );
+    expect(ledger.rows).toHaveLength(3);
+    for (const row of ledger.rows) {
+      // Even a stored observed model must not be attributed when the
+      // snapshot is not verified-and-consistent.
+      expect(row.model_id).toBeNull();
+      expect(row.precision).toBe("unknown");
+    }
+    await database.close();
+  });
+
+  it("keeps attribution stable across duplicate projections and Agent churn", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-t03b-stable"),
+    );
+
+    const project = (eventId: string) =>
+      repositories.sessionLifecycle.projectEvent(userId, intent.id, {
+        eventId,
+        observedAt: new Date("2026-09-06T00:10:00.000Z"),
+        metrics: [{ metricType: "input_tokens", quantity: 5 }],
+      });
+
+    // Duplicate projection of the same event id writes exactly one row.
+    await project("event-t03b-dup");
+    await project("event-t03b-dup");
+    // Agent churn between projections cannot drift attribution.
+    await database.client.query(
+      `update personal_agents set model_id = 'model-c-churn' where id = $1`,
+      [agentId],
+    );
+    await project("event-t03b-after-churn");
+
+    const ledger = await database.client.query<{
+      model_id: string | null;
+      precision: string;
+    }>(
+      `select model_id, model_attribution_precision::text as precision
+                from usage_ledger
+               where ark_session_id = 'ark-session-t03b-stable'
+               order by ark_event_id`,
+    );
+    expect(ledger.rows).toHaveLength(2);
+    for (const row of ledger.rows) {
+      expect(row.model_id).toBe("model-observed");
+      expect(row.precision).toBe("exact");
+    }
+    await database.close();
+  });
+
+  it("persists settlement verification state and evidence", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-settlement"),
+    );
+
+    // The settlement target exposes the admission flags the verifier gates on.
+    await database.client.query(
+      `update sessions set message_unknown_outcome = true where id = $1`,
+      [intent.id],
+    );
+    const target = await repositories.sessionLifecycle.findSettlementTarget(
+      userId,
+      intent.id,
+    );
+    expect(target).toMatchObject({
+      arkSessionId: "ark-session-settlement",
+      messageInFlightCount: 0,
+      messageStartPending: false,
+      messageUnknownOutcome: true,
+    });
+    // A foreign tenant cannot probe another user's settlement target.
+    await expect(
+      repositories.sessionLifecycle.findSettlementTarget(id(), intent.id),
+    ).resolves.toBeUndefined();
+
+    const checkedAt = new Date("2026-09-06T01:00:00.000Z");
+    await repositories.sessionLifecycle.recordSettlement(userId, intent.id, {
+      state: "unknown",
+      evidence: {
+        reason: "message_admission_unclosed",
+        arkEventsRead: 0,
+        historyReadComplete: false,
+      },
+      checkedAt,
+    });
+    const row = await database.client.query<{
+      state: string;
+      checked_at: Date;
+      evidence: Record<string, unknown>;
+    }>(
+      `select settlement_state::text as state, settlement_checked_at as checked_at,
+              settlement_evidence as evidence
+         from sessions where id = $1`,
+      [intent.id],
+    );
+    expect(row.rows[0]!.state).toBe("unknown");
+    expect(new Date(row.rows[0]!.checked_at)).toEqual(checkedAt);
+    expect(row.rows[0]!.evidence).toMatchObject({
+      reason: "message_admission_unclosed",
+    });
+
+    await repositories.sessionLifecycle.recordSettlement(userId, intent.id, {
+      state: "confirmed",
+      evidence: {
+        arkEventsRead: 3,
+        modelRequestsStarted: 1,
+        modelRequestsEnded: 1,
+        modelRequestsOpen: 0,
+        historyReadComplete: true,
+      },
+      checkedAt: new Date("2026-09-06T02:00:00.000Z"),
+    });
+    const confirmed = await database.client.query<{ state: string }>(
+      `select settlement_state::text as state from sessions where id = $1`,
+      [intent.id],
+    );
+    expect(confirmed.rows[0]!.state).toBe("confirmed");
+    await database.close();
+  });
+
+  it("records post-deletion re-accounting with unknown attribution only", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const { userId, agentId } = await seedUserAndAgent(database.client);
+    const intent = createIntent(userId, agentId);
+    await repositories.sessionLifecycle.prepareCreate(intent);
+    await repositories.sessionLifecycle.completeCreate(
+      intent.id,
+      userId,
+      verifiedCompletion("ark-session-t03b-reserved"),
+    );
+
+    // The Session row is gone (permanent delete) but the reservation anchor
+    // survives; controlled re-accounting has no verifiable snapshot to use.
+    await database.client.query(`delete from sessions where id = $1`, [
+      intent.id,
+    ]);
+    const recorded = await repositories.usage.recordByReservation({
+      id: id(),
+      reservationId: intent.id,
+      arkEventId: "event-t03b-settlement",
+      metricType: "output_tokens",
+      quantity: 12,
+    });
+    expect(recorded).toBe(true);
+
+    const ledger = await database.client.query<{
+      model_id: string | null;
+      precision: string;
+    }>(
+      `select model_id, model_attribution_precision::text as precision
+                from usage_ledger
+               where ark_session_id = 'ark-session-t03b-reserved'`,
+    );
+    expect(ledger.rows).toHaveLength(1);
+    expect(ledger.rows[0]!.model_id).toBeNull();
+    expect(ledger.rows[0]!.precision).toBe("unknown");
     await database.close();
   });
 });

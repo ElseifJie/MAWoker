@@ -55,6 +55,11 @@ describe("personal memory persistence", () => {
       agentName: "Agent",
       agentVersion: "1",
       environmentId: "environment",
+      createAttemptedAt: null,
+      modelId: null,
+      configSnapshot: null,
+      configSnapshotState: "unverified",
+      configSnapshotErrorCode: null,
       memoryStoreId,
       title: "",
       status: "idle",
@@ -82,13 +87,38 @@ describe("personal memory persistence", () => {
     return active;
   }
 
-  async function complete(record: SessionRecord) {
-    return repositories.sessionLifecycle.completeCreate(record.id, userId, {
+  function verifiedCompletion(
+    record: SessionRecord,
+    status: SessionRecord["status"] = "idle",
+  ) {
+    return {
       arkSessionId: `ark:${record.id}`,
-      arkAgentId: "ark-agent",
-      agentVersion: "1",
-      status: "idle",
-    });
+      status,
+      modelId: "model",
+      configSnapshot: {
+        agentId: "ark-agent",
+        agentVersion: "1",
+        environmentId: "environment",
+        modelId: "model",
+        skills: [],
+        tools: [],
+        environment: {
+          id: "environment",
+          type: "environment",
+          configType: "cloud",
+          scope: "account",
+        },
+        completeness: "complete" as const,
+      },
+    };
+  }
+
+  async function complete(record: SessionRecord) {
+    return repositories.sessionLifecycle.completeCreate(
+      record.id,
+      userId,
+      verifiedCompletion(record),
+    );
   }
 
   it("exports a standalone factory and reserves exactly one durable intent concurrently", async () => {
@@ -276,12 +306,7 @@ describe("personal memory persistence", () => {
       const stored = await repositories.sessionLifecycle.completeCreate(
         record.id,
         userId,
-        {
-          arkSessionId: `ark:${record.id}`,
-          arkAgentId: "ark-agent",
-          agentVersion: "1",
-          status,
-        },
+        verifiedCompletion(record, status),
       );
       expect(stored.status).toBe(status);
       expect(
@@ -295,8 +320,15 @@ describe("personal memory persistence", () => {
     const pending = intent();
     const running = intent();
     const archived = intent();
-    const deleting = intent();
-    for (const record of [pending, running, archived, deleting]) {
+    const deleteFenced = intent();
+    const deleteFailed = intent();
+    for (const record of [
+      pending,
+      running,
+      archived,
+      deleteFenced,
+      deleteFailed,
+    ]) {
       await repositories.sessionLifecycle.prepareCreate(record);
       if (record !== pending) await complete(record);
     }
@@ -306,21 +338,30 @@ describe("personal memory persistence", () => {
       [archived.id],
     );
     await database.client.query(
+      "update sessions set deletion_state = 'pending' where id = $1",
+      [deleteFenced.id],
+    );
+    await database.client.query(
       "update sessions set deletion_state = 'deletion_failed' where id = $1",
-      [deleting.id],
+      [deleteFailed.id],
     );
     const found = await repositories.memories.sessions(userId);
-    expect(found).toHaveLength(4);
-    for (const record of [pending, running, deleting]) {
+    expect(found).toHaveLength(5);
+    for (const record of [pending, running]) {
       expect(found.find((item) => item.id === record.id)).toMatchObject({
         pending: true,
         memoryStoreId: "store-1",
       });
     }
-    expect(found.find((item) => item.id === archived.id)).toMatchObject({
-      arkSessionId: `ark:${archived.id}`,
-      pending: false,
-    });
+    // Deletion is coordinated by the memory fence, not by consolidation
+    // quiescence: a Session under deletion (or one whose deletion job gave
+    // up) must never wedge a Dream waiting for the Session to go quiet.
+    for (const record of [archived, deleteFenced, deleteFailed]) {
+      expect(found.find((item) => item.id === record.id)).toMatchObject({
+        pending: false,
+        memoryStoreId: "store-1",
+      });
+    }
     expect(await repositories.memories.sessions(await addUser())).toEqual([]);
   });
 
@@ -427,7 +468,20 @@ describe("personal memory persistence", () => {
           id: `ark:${id()}`,
           agentId: "ark-agent",
           agentVersion: 1,
+          environmentId: "environment",
           status: "idle" as const,
+          configSnapshot: {
+            modelId: "model",
+            skills: [],
+            tools: [],
+            environment: {
+              id: "environment",
+              type: "environment",
+              configType: "cloud",
+              scope: "account",
+            },
+            completeness: "complete" as const,
+          },
         };
       }),
       getSession: vi.fn(),

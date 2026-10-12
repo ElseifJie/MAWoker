@@ -190,6 +190,7 @@ function SessionPageContent({
     enabled: sessionLoaded,
     onStreamReady,
     onInvalidEvent: reportInvalidEvent,
+    onAuthInvalid: onAuthRequired,
   });
 
   // The fold owns live status; mirror it onto the record so the header badge and
@@ -721,7 +722,10 @@ function SessionPageContent({
           <div className="session-delete-dialog">
             <p>
               This removes the Session, its event history, and generated
-              artifacts. This action cannot be undone.
+              artifacts. This action cannot be undone. Memories that were
+              already formed from this Session are kept and can be managed
+              separately on the Context page; this deletion does not create a
+              new copy of the conversation.
             </p>
             <Field label="Type DELETE to confirm">
               <Input

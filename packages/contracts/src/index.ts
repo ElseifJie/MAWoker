@@ -1,8 +1,12 @@
 import { z } from "zod";
 import {
+  boundToolErrorCode,
   extractTodos,
   redactCredentials,
+  redactPreview,
   redactText,
+  redactToolArgsSummary,
+  redactToolErrorMessage,
   summarizeToolArgs,
   summarizeToolResult,
 } from "./redact.js";
@@ -394,15 +398,129 @@ function publicEventPayload(event: ArkEvent): Record<string, unknown> {
   return {};
 }
 
+function projectedPayloadRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function projectedString(
+  payload: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  return typeof payload[name] === "string"
+    ? (payload[name] as string)
+    : undefined;
+}
+
+function projectedEventPayload(
+  type: UiEventType,
+  id: string,
+  sourceType: string,
+  value: unknown,
+): Record<string, unknown> {
+  const payload = projectedPayloadRecord(value);
+  if (type === "message") {
+    const content = projectedString(payload, "content");
+    return content === undefined ? {} : { content: redactCredentials(content) };
+  }
+  if (type === "tool_use") {
+    const name = projectedString(payload, "name");
+    const serverName = projectedString(payload, "serverName");
+    const argsSummary = projectedString(payload, "argsSummary");
+    const redactedArgs =
+      argsSummary === undefined
+        ? undefined
+        : redactToolArgsSummary(argsSummary);
+    const todos = extractTodos({ todos: payload.todos });
+    return {
+      callId: id,
+      ...(name === undefined ? {} : { name }),
+      ...(serverName === undefined ? {} : { serverName }),
+      ...(redactedArgs === undefined ? {} : { argsSummary: redactedArgs }),
+      ...(todos === undefined ? {} : { todos }),
+    };
+  }
+  if (type === "tool_result") {
+    const callId = projectedString(payload, "callId");
+    const preview = projectedString(payload, "preview");
+    const errorCode = projectedString(payload, "errorCode");
+    const errorMessage = projectedString(payload, "errorMessage");
+    const status =
+      payload.status === "ok" || payload.status === "failed"
+        ? payload.status
+        : undefined;
+    return {
+      ...(callId === undefined ? {} : { callId }),
+      ...(status === undefined ? {} : { status }),
+      ...(preview === undefined ? {} : { preview: redactPreview(preview) }),
+      ...(errorCode === undefined
+        ? {}
+        : { errorCode: boundToolErrorCode(errorCode) }),
+      ...(errorMessage === undefined
+        ? {}
+        : { errorMessage: redactToolErrorMessage(errorMessage) }),
+    };
+  }
+  if (type === "status") {
+    const statusCandidate = sourceType.startsWith("session.status_")
+      ? sourceType.slice("session.status_".length)
+      : payload.status;
+    const statusResult = sessionStatusSchema.safeParse(statusCandidate);
+    const status = statusResult.success ? statusResult.data : undefined;
+    const stopReason = projectedString(payload, "stopReason");
+    return {
+      ...(status === undefined ? {} : { status }),
+      ...(stopReason === undefined ? {} : { stopReason }),
+    };
+  }
+  if (type === "error") {
+    const code = projectedString(payload, "code");
+    const message = projectedString(payload, "message");
+    const recoverable =
+      typeof payload.recoverable === "boolean"
+        ? payload.recoverable
+        : undefined;
+    return {
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message: redactText(message) }),
+      ...(recoverable === undefined ? {} : { recoverable }),
+    };
+  }
+  return {};
+}
+
+/**
+ * Rebuilds an already-public event from its current allowlist.
+ *
+ * This accepts the projected UiEvent shape, not raw Ark `data`, so persisted
+ * events can be re-projected without pretending they are upstream events.
+ */
+export function projectUiEvent(input: UiEvent): UiEvent {
+  const type = uiEventType(input.sourceType);
+  return {
+    id: input.id,
+    sourceType: input.sourceType,
+    type,
+    createdAt: input.createdAt,
+    payload: projectedEventPayload(
+      type,
+      input.id,
+      input.sourceType,
+      input.payload,
+    ),
+  };
+}
+
 export function normalizeArkEvent(input: ArkEvent): UiEvent {
   const event = arkEventSchema.parse(input);
-  return {
+  return projectUiEvent({
     id: event.id,
     sourceType: event.type,
-    type: eventTypes[event.type] ?? "unknown",
+    type: uiEventType(event.type),
     createdAt: event.createdAt,
     payload: publicEventPayload(event),
-  };
+  });
 }
 
 export interface FeatureCapability {

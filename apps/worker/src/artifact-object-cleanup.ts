@@ -58,7 +58,41 @@ interface ArtifactObjectCleanupService {
   cleanupStoredObject(objectKey: string, userId: string): PromiseLike<void>;
 }
 
+/**
+ * Live state of the drive row that owns the object key, re-read before the
+ * DELETE. A tombstoned row proves the bytes are unreferenced; a missing row or
+ * any live state leaves the remote write outcome unverified.
+ */
+export interface ArtifactCleanupGuard {
+  ownerUserId: string;
+  deletionState: "pending" | "none" | "deletion_failed" | "deleted";
+  writeLeaseUntil: Date | null;
+  orphanedAt: Date | null;
+}
+
+interface ArtifactObjectCleanupGuards {
+  findObjectCleanupGuard(
+    objectKey: string,
+  ): PromiseLike<ArtifactCleanupGuard | undefined>;
+  /** Re-reads the live job claim; a mismatch means this execution lost it. */
+  findCleanupJobClaim(
+    jobId: string,
+    ownerUserId: string,
+  ): PromiseLike<
+    { generation: number; lockedBy: string | null; type: string } | undefined
+  >;
+}
+
 class InvalidArtifactObjectCleanupJobError extends Error {}
+class ArtifactObjectCleanupClaimLostError extends Error {
+  constructor() {
+    super("Artifact cleanup job claim lost");
+  }
+}
+
+function assertArtifactCleanupClaim(result: boolean): void {
+  if (!result) throw new ArtifactObjectCleanupClaimLostError();
+}
 
 function parsePayload(
   payload: Record<string, unknown>,
@@ -131,6 +165,7 @@ export class ArtifactObjectCleanupProcessor {
   constructor(
     private readonly dependencies: {
       jobs: ArtifactObjectCleanupJobs;
+      guards: ArtifactObjectCleanupGuards;
       service: ArtifactObjectCleanupService;
       workerId: string;
       batchSize?: number;
@@ -158,28 +193,92 @@ export class ArtifactObjectCleanupProcessor {
       }
       const payload = parsePayload(job.payload, job.ownerUserId);
       cleanupGeneration = payload.cleanupGeneration;
+      const now = this.dependencies.now?.() ?? new Date();
+      // Re-read the live row BEFORE destroying bytes. Only a tombstoned row
+      // proves the bytes are unreferenced.
+      const guard = await this.dependencies.guards.findObjectCleanupGuard(
+        payload.objectKey,
+      );
+      if (guard && guard.ownerUserId !== job.ownerUserId) {
+        throw new InvalidArtifactObjectCleanupJobError();
+      }
+      // A staged write is still in flight: reschedule past its lease instead of
+      // deleting a partial object the writer is about to finish. Legacy jobs
+      // have no guard row, so only they fall back to the payload lease.
+      const leaseUntil = guard
+        ? guard.writeLeaseUntil
+          ? new Date(guard.writeLeaseUntil)
+          : null
+        : (payload.uploadInProgressUntil ?? null);
+      if (leaseUntil && leaseUntil.getTime() > now.getTime()) {
+        assertArtifactCleanupClaim(
+          await this.dependencies.jobs.deferArtifactCleanup(
+            job.id,
+            this.dependencies.workerId,
+            payload.cleanupGeneration,
+          ),
+        );
+        return;
+      }
+      // A legacy job without a guard row has no durable proof that its write
+      // Lease expiry (or a missing lease) leaves the remote outcome
+      // unknown, so preserve the bytes and finish only this job generation.
+      if (!guard) {
+        assertArtifactCleanupClaim(
+          await this.dependencies.jobs.retryArtifactCleanup(
+            job.id,
+            this.dependencies.workerId,
+            payload.cleanupGeneration,
+            "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+            true,
+          ),
+        );
+        return;
+      }
+      // A tombstoned row's bytes are safely reaped. `pending` means a staged
+      // write with an unknown remote outcome and `none`/`deletion_failed` mean
+      // the object may be live: finish the fenced job instead of guessing.
+      if (guard.deletionState !== "deleted") {
+        assertArtifactCleanupClaim(
+          await this.dependencies.jobs.retryArtifactCleanup(
+            job.id,
+            this.dependencies.workerId,
+            payload.cleanupGeneration,
+            "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+            true,
+          ),
+        );
+        return;
+      }
+      // Ownership re-check immediately before the destructive call: if the
+      // job was re-armed (generation moved) or re-locked to another worker
+      // after this claim, this execution must not touch bytes. Stop without
+      // writing status — the current claim owner owns the outcome.
+      const claim = await this.dependencies.guards.findCleanupJobClaim(
+        job.id,
+        job.ownerUserId,
+      );
+      if (
+        !claim ||
+        claim.type !== "cleanup_artifact_object" ||
+        claim.generation !== payload.cleanupGeneration ||
+        claim.lockedBy !== this.dependencies.workerId
+      ) {
+        return;
+      }
       await this.dependencies.service.cleanupStoredObject(
         payload.objectKey,
         job.ownerUserId,
       );
-      if (
-        payload.uploadInProgressUntil &&
-        new Date(job.lockedAt).getTime() <
-          payload.uploadInProgressUntil.getTime()
-      ) {
-        await this.dependencies.jobs.deferArtifactCleanup(
+      assertArtifactCleanupClaim(
+        await this.dependencies.jobs.succeedArtifactCleanup(
           job.id,
           this.dependencies.workerId,
           payload.cleanupGeneration,
-        );
-        return;
-      }
-      await this.dependencies.jobs.succeedArtifactCleanup(
-        job.id,
-        this.dependencies.workerId,
-        payload.cleanupGeneration,
+        ),
       );
     } catch (error) {
+      if (error instanceof ArtifactObjectCleanupClaimLostError) throw error;
       const code = retryError(error);
       if (cleanupGeneration === undefined) {
         await this.dependencies.jobs.retry(
@@ -189,12 +288,14 @@ export class ArtifactObjectCleanupProcessor {
           job.attempts >= job.maxAttempts,
         );
       } else {
-        await this.dependencies.jobs.retryArtifactCleanup(
-          job.id,
-          this.dependencies.workerId,
-          cleanupGeneration,
-          code,
-          job.attempts >= job.maxAttempts,
+        assertArtifactCleanupClaim(
+          await this.dependencies.jobs.retryArtifactCleanup(
+            job.id,
+            this.dependencies.workerId,
+            cleanupGeneration,
+            code,
+            job.attempts >= job.maxAttempts,
+          ),
         );
       }
     }

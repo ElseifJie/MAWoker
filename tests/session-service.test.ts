@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { ArkGatewayError } from "../packages/ark-client/src/index.js";
+import {
+  ArkGatewayError,
+  type ArkSession,
+} from "../packages/ark-client/src/index.js";
 import {
   ResourceNotFoundError,
   SessionService,
@@ -12,6 +15,31 @@ const userId = "00000000-0000-4000-8000-000000000001";
 const agentId = "00000000-0000-4000-8000-000000000002";
 const sessionId = "00000000-0000-4000-8000-000000000003";
 const now = new Date("2026-09-06T00:00:00.000Z");
+
+const completeConfigSnapshot = {
+  modelId: "model-a",
+  skills: [],
+  tools: [],
+  environment: {
+    id: "environment-1",
+    type: "environment",
+    configType: "cloud",
+    scope: "account",
+  },
+  completeness: "complete" as const,
+};
+
+function arkSession(overrides: Partial<ArkSession> = {}): ArkSession {
+  return {
+    id: "ark-session-1",
+    agentId: "ark-agent-1",
+    agentVersion: 7,
+    environmentId: "environment-1",
+    status: "idle",
+    configSnapshot: completeConfigSnapshot,
+    ...overrides,
+  };
+}
 
 const agent = {
   id: agentId,
@@ -38,11 +66,17 @@ function session(overrides: Partial<SessionRecord> = {}): SessionRecord {
     agentName: agent.name,
     agentVersion: agent.arkVersion,
     environmentId: "environment-1",
+    createAttemptedAt: null,
+    modelId: null,
+    configSnapshot: null,
+    configSnapshotState: "unverified",
+    configSnapshotErrorCode: null,
     title: "Task",
     status: "idle",
     lastErrorCode: null,
     errorRecoverable: null,
     archivedAt: null,
+    pinnedAt: null,
     deletionState: "none",
     lastEventAt: null,
     createdAt: now,
@@ -57,7 +91,10 @@ function setup() {
     string,
     { operation: "create"; status: "pending" | "succeeded" | "failed" }
   >();
-  const reservations = new Map<string, "active" | "consumed" | "released">();
+  const reservations = new Map<
+    string,
+    "active" | "unknown_outcome" | "consumed" | "released"
+  >();
   const audits: Array<Parameters<SessionRepository["audit"]>[0]> = [];
   const messageAccounting = new Map<
     string,
@@ -73,14 +110,48 @@ function setup() {
       });
       reservations.set(record.id, "active");
     },
+    async claimCreateAttempt(
+      id: string,
+      ownerUserId: string,
+      attemptedAt: Date,
+    ) {
+      const current = records.get(id);
+      if (
+        !current ||
+        current.ownerUserId !== ownerUserId ||
+        !current.arkSessionId.startsWith("pending:") ||
+        current.createAttemptedAt !== null
+      ) {
+        return false;
+      }
+      records.set(id, { ...current, createAttemptedAt: attemptedAt });
+      return true;
+    },
+    async releaseCreateAttempt(
+      id: string,
+      ownerUserId: string,
+      attemptedAt: Date,
+    ) {
+      const current = records.get(id);
+      if (
+        !current ||
+        current.ownerUserId !== ownerUserId ||
+        !current.arkSessionId.startsWith("pending:") ||
+        current.createAttemptedAt?.getTime() !== attemptedAt.getTime()
+      ) {
+        return false;
+      }
+      records.set(id, { ...current, createAttemptedAt: null });
+      return true;
+    },
     async completeCreate(
       id: string,
       ownerUserId: string,
       upstream: {
         arkSessionId: string;
-        arkAgentId: string;
-        agentVersion: string;
         status: SessionRecord["status"];
+        modelId: string;
+        configSnapshot: NonNullable<SessionRecord["configSnapshot"]>;
       },
     ) {
       const current = records.get(id);
@@ -90,6 +161,8 @@ function setup() {
       const completed = {
         ...current,
         ...upstream,
+        configSnapshotState: "verified" as const,
+        configSnapshotErrorCode: null,
         updatedAt: now,
       };
       records.set(id, completed);
@@ -102,9 +175,11 @@ function setup() {
       ownerUserId: string,
       upstream?: {
         arkSessionId: string;
-        arkAgentId: string;
-        agentVersion: string;
         status: SessionRecord["status"];
+        modelId: string | null;
+        configSnapshot: NonNullable<SessionRecord["configSnapshot"]>;
+        configSnapshotState: "incomplete" | "mismatch";
+        configSnapshotErrorCode: string;
       },
     ) {
       const current = records.get(id);
@@ -112,7 +187,7 @@ function setup() {
         throw new Error("missing");
       }
       if (upstream) records.set(id, { ...current, ...upstream });
-      reservations.set(id, "consumed");
+      reservations.set(id, upstream ? "consumed" : "unknown_outcome");
     },
     async failCreate(id: string, ownerUserId: string) {
       const current = records.get(id);
@@ -222,20 +297,8 @@ function setup() {
     },
   };
   const ark = {
-    createSession: vi.fn(async () => ({
-      id: "ark-session-1",
-      agentId: agent.arkAgentId,
-      agentVersion: 7,
-      environmentId: "environment-1",
-      status: "idle" as const,
-    })),
-    getSession: vi.fn(async () => ({
-      id: "ark-session-1",
-      agentId: agent.arkAgentId,
-      agentVersion: 7,
-      environmentId: "environment-1",
-      status: "idle" as const,
-    })),
+    createSession: vi.fn(async () => arkSession()),
+    getSession: vi.fn(async () => arkSession()),
     submitEvent: vi.fn(async (_id, event) => ({
       id: "event-1",
       type: event.type,
@@ -294,6 +357,7 @@ describe("SessionService", () => {
       agentVersion: Number(stale.agentVersion),
       environmentId: stale.environmentId,
       status: "idle",
+      configSnapshot: completeConfigSnapshot,
     }));
 
     await expect(
@@ -355,6 +419,7 @@ describe("SessionService", () => {
 
   it("creates an idle Session with fixed environment and immutable Agent snapshot", async () => {
     const state = setup();
+    const claimCreateAttempt = vi.spyOn(state.repository, "claimCreateAttempt");
 
     const created = await state.service.create(
       { agentId, title: " Task " },
@@ -381,9 +446,147 @@ describe("SessionService", () => {
       environmentId: "environment-1",
       title: "Task",
       status: "idle",
+      modelId: "model-a",
+      configSnapshotState: "verified",
+      configSnapshotErrorCode: null,
+      configSnapshot: {
+        agentId: "ark-agent-1",
+        agentVersion: "7",
+        environmentId: "environment-1",
+        ...completeConfigSnapshot,
+      },
     });
+    expect(claimCreateAttempt).toHaveBeenCalledWith(sessionId, userId, now);
+    expect(claimCreateAttempt.mock.invocationCallOrder[0]).toBeLessThan(
+      state.ark.createSession.mock.invocationCallOrder[0]!,
+    );
     expect(state.reservations.get(sessionId)).toBe("consumed");
     expect(state.reconciliation.get(sessionId)?.status).toBe("succeeded");
+  });
+
+  it.each([
+    [
+      "Agent ID",
+      { agentId: "ark-agent-other" },
+      "ARK_SESSION_AGENT_ID_MISMATCH",
+    ],
+    [
+      "Agent version",
+      { agentVersion: 8 },
+      "ARK_SESSION_AGENT_VERSION_MISMATCH",
+    ],
+    [
+      "Environment",
+      { environmentId: "environment-other" },
+      "ARK_SESSION_ENVIRONMENT_ID_MISMATCH",
+    ],
+    [
+      "snapshot Environment",
+      {
+        configSnapshot: {
+          ...completeConfigSnapshot,
+          environment: {
+            ...completeConfigSnapshot.environment,
+            id: "environment-other",
+          },
+        },
+      },
+      "ARK_SESSION_SNAPSHOT_ENVIRONMENT_ID_MISMATCH",
+    ],
+  ] as const)(
+    "persists cloud identity and observed snapshot when %s mismatches intent",
+    async (_label, overrides, errorCode) => {
+      const state = setup();
+      state.ark.createSession.mockResolvedValueOnce(arkSession(overrides));
+
+      await expect(
+        state.service.create(
+          { agentId, title: "" },
+          { userId, requestId: "request-mismatch" },
+        ),
+      ).rejects.toMatchObject({ code: errorCode });
+
+      expect(state.records.get(sessionId)).toMatchObject({
+        arkSessionId: "ark-session-1",
+        arkAgentId: "ark-agent-1",
+        agentVersion: "7",
+        environmentId: "environment-1",
+        configSnapshotState: "mismatch",
+        configSnapshotErrorCode: errorCode,
+        configSnapshot: expect.objectContaining({
+          agentId: arkSession(overrides).agentId,
+          agentVersion: String(arkSession(overrides).agentVersion),
+          environmentId: arkSession(overrides).environmentId,
+        }),
+      });
+      expect(state.reconciliation.get(sessionId)?.status).toBe("pending");
+      expect(state.ark.createSession).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("persists an incomplete snapshot and reconciles it with GET only", async () => {
+    const state = setup();
+    state.ark.createSession.mockResolvedValueOnce(
+      arkSession({
+        configSnapshot: {
+          ...completeConfigSnapshot,
+          modelId: null,
+          completeness: "incomplete",
+        },
+      }),
+    );
+
+    await expect(
+      state.service.create(
+        { agentId, title: "" },
+        { userId, requestId: "request-incomplete" },
+      ),
+    ).rejects.toMatchObject({
+      code: "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+    });
+    expect(state.records.get(sessionId)).toMatchObject({
+      arkSessionId: "ark-session-1",
+      modelId: null,
+      configSnapshotState: "incomplete",
+      configSnapshotErrorCode: "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+    });
+
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-incomplete",
+      }),
+    ).resolves.toMatchObject({
+      arkSessionId: "ark-session-1",
+      modelId: "model-a",
+      configSnapshotState: "verified",
+    });
+    expect(state.ark.createSession).toHaveBeenCalledTimes(1);
+    expect(state.ark.getSession).toHaveBeenCalledOnce();
+  });
+
+  it("reconciles a mismatched known cloud Session with GET only", async () => {
+    const state = setup();
+    state.ark.createSession.mockResolvedValueOnce(
+      arkSession({ agentVersion: 8 }),
+    );
+    await expect(
+      state.service.create(
+        { agentId, title: "" },
+        { userId, requestId: "request-mismatch" },
+      ),
+    ).rejects.toMatchObject({
+      code: "ARK_SESSION_AGENT_VERSION_MISMATCH",
+    });
+
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-mismatch",
+      }),
+    ).resolves.toMatchObject({ configSnapshotState: "verified" });
+    expect(state.ark.createSession).toHaveBeenCalledTimes(1);
+    expect(state.ark.getSession).toHaveBeenCalledOnce();
   });
 
   it("resolves tenant Agent access before reserving quota or calling Ark", async () => {
@@ -421,7 +624,7 @@ describe("SessionService", () => {
     expect(state.reconciliation.get(sessionId)?.status).toBe("failed");
   });
 
-  it("preserves unknown create outcomes for idempotent reconciliation", async () => {
+  it("fails closed after an unknown create outcome without another POST", async () => {
     const state = setup();
     state.ark.createSession.mockRejectedValueOnce(
       new ArkGatewayError("unknown_write_outcome"),
@@ -437,20 +640,82 @@ describe("SessionService", () => {
     expect(state.records.get(sessionId)?.arkSessionId).toBe(
       `pending:${sessionId}`,
     );
-    expect(state.reservations.get(sessionId)).toBe("consumed");
+    expect(state.records.get(sessionId)?.createAttemptedAt).toEqual(now);
+    expect(state.reservations.get(sessionId)).toBe("unknown_outcome");
     expect(state.reconciliation.get(sessionId)?.status).toBe("pending");
 
-    await state.service.reconcileCreate(sessionId, {
-      userId,
-      requestId: "worker-1",
-    });
-    expect(state.ark.createSession).toHaveBeenLastCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        idempotencyKey: `session-create:${sessionId}`,
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-1",
       }),
+    ).rejects.toMatchObject({
+      code: "ARK_SESSION_CREATE_OUTCOME_UNKNOWN",
+    });
+    expect(state.ark.createSession).toHaveBeenCalledTimes(1);
+    expect(state.ark.getSession).not.toHaveBeenCalled();
+    expect(state.records.get(sessionId)?.arkSessionId).toBe(
+      `pending:${sessionId}`,
     );
-    expect(state.records.get(sessionId)?.arkSessionId).toBe("ark-session-1");
+  });
+
+  it("allows an unattempted prepared intent exactly one first POST", async () => {
+    const state = setup();
+    const claimCreateAttempt = vi.spyOn(state.repository, "claimCreateAttempt");
+    const prepared = session({
+      arkSessionId: `pending:${sessionId}`,
+      createAttemptedAt: null,
+      modelId: null,
+      configSnapshot: null,
+      configSnapshotState: "unverified",
+      configSnapshotErrorCode: null,
+    });
+    await state.repository.prepareCreate(prepared);
+
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-first-attempt",
+      }),
+    ).resolves.toMatchObject({
+      arkSessionId: "ark-session-1",
+      configSnapshotState: "verified",
+    });
+    expect(state.ark.createSession).toHaveBeenCalledOnce();
+    expect(state.ark.getSession).not.toHaveBeenCalled();
+    expect(claimCreateAttempt).toHaveBeenCalledOnce();
+    expect(state.records.get(sessionId)?.createAttemptedAt).toEqual(now);
+  });
+
+  it("releases a prepared recovery claim after a definite create failure", async () => {
+    const state = setup();
+    const prepared = session({
+      arkSessionId: `pending:${sessionId}`,
+      createAttemptedAt: null,
+    });
+    await state.repository.prepareCreate(prepared);
+    state.ark.createSession.mockRejectedValueOnce(
+      new ArkGatewayError("rate_limited"),
+    );
+
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-first-attempt",
+      }),
+    ).rejects.toMatchObject({ category: "rate_limited" });
+    expect(state.records.get(sessionId)?.createAttemptedAt).toBeNull();
+
+    await expect(
+      state.service.reconcileCreate(sessionId, {
+        userId,
+        requestId: "worker-second-attempt",
+      }),
+    ).resolves.toMatchObject({
+      arkSessionId: "ark-session-1",
+      configSnapshotState: "verified",
+    });
+    expect(state.ark.createSession).toHaveBeenCalledTimes(2);
   });
 
   it("preserves the upstream identity when final local persistence fails", async () => {

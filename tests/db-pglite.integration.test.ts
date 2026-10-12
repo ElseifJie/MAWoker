@@ -54,6 +54,12 @@ async function seedPersonalSession(
      values ($1, $2, $3, 'personal', $4, $5, '1', 'env-1', 'idle')`,
     [sessionId, input.ownerUserId, arkSessionId, personalAgentId, arkAgentId],
   );
+  await client.query(
+    `insert into quota_reservations
+      (id, user_id, ark_session_id, status, expires_at, resolved_at)
+     values ($1, $2, $3, 'consumed', now(), now())`,
+    [sessionId, input.ownerUserId, arkSessionId],
+  );
 
   return { personalAgentId, arkAgentId, sessionId, arkSessionId };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { TodoEntry, UiEvent } from "@pwa/contracts";
-import type { SessionStatus } from "../api.js";
+import { ApiClientError, apiClient, type SessionStatus } from "../api.js";
 import {
   currentTodos,
   initialTimeline,
@@ -41,6 +41,12 @@ export interface SessionTimelineOptions {
   enabled: boolean;
   onStreamReady: (sessionId: string) => void;
   onInvalidEvent?: () => void;
+  /**
+   * The server closed the stream because the login session was revoked
+   * (`auth_invalid` control event). The source is closed without letting
+   * EventSource reconnect; the app should re-verify the account.
+   */
+  onAuthInvalid?: () => void;
 }
 
 export interface SessionTimeline {
@@ -90,7 +96,8 @@ function toReadyFrame(value: unknown): ReadyFrame | undefined {
 export function useSessionTimeline(
   options: SessionTimelineOptions,
 ): SessionTimeline {
-  const { sessionId, enabled, onStreamReady, onInvalidEvent } = options;
+  const { sessionId, enabled, onStreamReady, onInvalidEvent, onAuthInvalid } =
+    options;
   const [state, dispatch] = useReducer(timelineReducer, initialTimeline);
   const [connection, setConnection] =
     useState<TimelineConnection>("connecting");
@@ -100,6 +107,10 @@ export function useSessionTimeline(
   const invalidEventRef = useRef(onInvalidEvent);
   useEffect(() => {
     invalidEventRef.current = onInvalidEvent;
+  });
+  const authInvalidRef = useRef(onAuthInvalid);
+  useEffect(() => {
+    authInvalidRef.current = onAuthInvalid;
   });
 
   useEffect(() => {
@@ -111,6 +122,8 @@ export function useSessionTimeline(
       { withCredentials: true },
     );
     sourceRef.current = source;
+    let authTerminated = false;
+    let disposed = false;
 
     const read = (raw: Event): unknown | undefined => {
       if (!(raw instanceof MessageEvent) || typeof raw.data !== "string") {
@@ -131,17 +144,50 @@ export function useSessionTimeline(
       const frame = toReadyFrame(read(raw));
       if (frame) dispatch({ type: "ready", ready: frame });
     };
+    // A revoked login session closes the stream server-side. EventSource would
+    // reconnect into a 401 loop, so close it here and let the app re-verify
+    // the account instead of retrying an unwinnable request.
+    const terminateAuth = () => {
+      if (disposed || authTerminated) return;
+      authTerminated = true;
+      source.close();
+      setConnection("ended");
+      authInvalidRef.current?.();
+    };
+    // A plain stream error is ambiguous (server restart, network blip, or a
+    // revoked session on reconnect). EventSource cannot see the status code,
+    // so one identity probe separates the two: 401 closes the stream for
+    // re-auth, anything else leaves the browser's bounded retry in charge.
+    let probeInFlight = false;
+    source.onerror = () => {
+      if (disposed || authTerminated) return;
+      setConnection("reconnecting");
+      if (probeInFlight) return;
+      probeInFlight = true;
+      apiClient
+        .getMe()
+        .catch((error: unknown) => {
+          if (error instanceof ApiClientError && error.isAuthRequired) {
+            terminateAuth();
+          }
+          // Any other failure is transient; keep the EventSource retrying.
+        })
+        .finally(() => {
+          if (!disposed) probeInFlight = false;
+        });
+    };
 
     for (const name of sessionEventNames) {
       source.addEventListener(name, receive);
     }
     source.addEventListener("ready", ready);
+    source.addEventListener("auth_invalid", terminateAuth);
     source.onopen = () => {
       setConnection("live");
       onStreamReady(sessionId);
     };
-    source.onerror = () => setConnection("reconnecting");
     return () => {
+      disposed = true;
       source.close();
       sourceRef.current = null;
     };

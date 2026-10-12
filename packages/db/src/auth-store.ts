@@ -14,6 +14,9 @@ interface QueryResult<T extends Row> {
 
 interface DatabaseClient {
   execute<T extends Row = Row>(query: SQL): PromiseLike<QueryResult<T>>;
+  transaction<T>(
+    work: (transaction: DatabaseClient) => PromiseLike<T>,
+  ): PromiseLike<T>;
 }
 
 async function first<T extends Row>(
@@ -38,7 +41,8 @@ export function createAuthStore(database: unknown): AuthStore {
                    email,
                    password_hash as "passwordHash",
                    role,
-                   status
+                   status,
+                   auth_epoch as "authEpoch"
               from users
              where email = ${email}
              limit 1`,
@@ -49,11 +53,73 @@ export function createAuthStore(database: unknown): AuthStore {
     async createSession(session: AuthSessionRecord): Promise<void> {
       await db.execute(
         sql`insert into auth_sessions
-              (id, user_id, token_hash, expires_at, revoked_at, created_at)
+              (id, user_id, token_hash, expires_at, revoked_at, created_at,
+               issued_epoch)
             values
               (${session.id}, ${session.userId}, ${session.tokenHash},
-               ${session.expiresAt}, ${session.revokedAt}, ${session.createdAt})`,
+               ${session.expiresAt}, ${session.revokedAt}, ${session.createdAt},
+               ${session.issuedEpoch})`,
       );
+    },
+
+    async issueVerifiedSession(input: {
+      userId: string;
+      expectedPasswordHash: string;
+      session: Omit<AuthSessionRecord, "issuedEpoch">;
+    }) {
+      // One transaction: the user row is locked and re-verified (status and
+      // the exact password hash the caller checked) before the session is
+      // inserted, so a disable or password rotation that lands between the
+      // password check and issuance cannot leak a valid session. The session
+      // is stamped with the epoch read under the same lock.
+      const issued = await db.transaction(async (transaction) => {
+        const user = await first<
+          AuthUserWithPassword & { authEpoch: number } & Row
+        >(
+          transaction,
+          sql`select id,
+                     auth_subject as "authSubject",
+                     email,
+                     password_hash as "passwordHash",
+                     role,
+                     status,
+                     auth_epoch as "authEpoch"
+                from users
+               where id = ${input.userId}
+                 for update`,
+        );
+        if (
+          !user ||
+          user.status !== "active" ||
+          user.passwordHash !== input.expectedPasswordHash
+        ) {
+          return undefined;
+        }
+        await transaction.execute(
+          sql`insert into auth_sessions
+                (id, user_id, token_hash, expires_at, revoked_at, created_at,
+                 issued_epoch)
+              values
+                (${input.session.id}, ${input.session.userId},
+                 ${input.session.tokenHash}, ${input.session.expiresAt},
+                 ${input.session.revokedAt}, ${input.session.createdAt},
+                 ${user.authEpoch})`,
+        );
+        const session: AuthSessionRecord = {
+          ...input.session,
+          issuedEpoch: user.authEpoch,
+        };
+        const publicUser: AuthUser = {
+          id: user.id,
+          authSubject: user.authSubject,
+          email: user.email,
+          role: user.role,
+          status: user.status,
+          authEpoch: user.authEpoch,
+        };
+        return { session, user: publicUser };
+      });
+      return issued ?? undefined;
     },
 
     async findSessionByTokenHash(tokenHash: string, now: Date) {
@@ -73,11 +139,13 @@ export function createAuthStore(database: unknown): AuthStore {
                    s.expires_at as "expiresAt",
                    s.revoked_at as "revokedAt",
                    s.created_at as "createdAt",
+                   s.issued_epoch as "issuedEpoch",
                    u.id,
                    u.auth_subject as "authSubject",
                    u.email,
                    u.role,
-                   u.status
+                   u.status,
+                   u.auth_epoch as "authEpoch"
               from auth_sessions s
               join users u on u.id = s.user_id
              where s.token_hash = ${tokenHash}
@@ -93,9 +161,11 @@ export function createAuthStore(database: unknown): AuthStore {
           id: row.sessionId,
           userId: row.sessionUserId,
           tokenHash: row.tokenHash,
-          expiresAt: row.expiresAt,
-          revokedAt: row.revokedAt,
-          createdAt: row.createdAt,
+          // The driver may hand timestamps back as strings.
+          expiresAt: new Date(row.expiresAt),
+          revokedAt: row.revokedAt === null ? null : new Date(row.revokedAt),
+          createdAt: new Date(row.createdAt),
+          issuedEpoch: Number(row.issuedEpoch ?? 0),
         },
         user: {
           id: row.id,
@@ -103,6 +173,7 @@ export function createAuthStore(database: unknown): AuthStore {
           email: row.email,
           role: row.role,
           status: row.status,
+          authEpoch: Number(row.authEpoch ?? 0),
         },
       };
     },

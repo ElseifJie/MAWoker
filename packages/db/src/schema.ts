@@ -51,6 +51,34 @@ export const sessionStatus = pgEnum("session_status", [
   "upgrading",
   "failed",
 ]);
+export const configSnapshotState = pgEnum("config_snapshot_state", [
+  "unverified",
+  "verified",
+  "incomplete",
+  "mismatch",
+]);
+/**
+ * How trustworthy a ledger row's model attribution is. New online postings
+ * carry the Session's create-time verified snapshot as `exact`; rows without
+ * a verifiable snapshot (including everything predating this column and
+ * post-deletion re-accounting) are `unknown`. `approximate` is reserved for
+ * the historical backfill task and is never written by new flows.
+ */
+export const modelAttributionPrecision = pgEnum("model_attribution_precision", [
+  "exact",
+  "approximate",
+  "unknown",
+]);
+/**
+ * Pre-deletion usage settlement: `pending` until a verification pass proves
+ * the history is complete (`confirmed`); `unknown` when completeness cannot
+ * be proven. Only `confirmed` unlocks the irreversible delete steps.
+ */
+export const settlementState = pgEnum("settlement_state", [
+  "pending",
+  "confirmed",
+  "unknown",
+]);
 export const deletionState = pgEnum("deletion_state", [
   "none",
   "pending",
@@ -82,6 +110,7 @@ export const usageMetricType = pgEnum("usage_metric_type", [
 ]);
 export const quotaReservationStatus = pgEnum("quota_reservation_status", [
   "active",
+  "unknown_outcome",
   "consumed",
   "released",
 ]);
@@ -117,6 +146,8 @@ export const users = pgTable(
     passwordHash: text("password_hash"),
     role: userRole("role").default("user").notNull(),
     status: userStatus("status").default("active").notNull(),
+    /** Credential version; bumped with every admin-level session revocation. */
+    authEpoch: integer("auth_epoch").default(0).notNull(),
     ...timestamps,
   },
   (table) => [uniqueIndex("users_email_unique").on(table.email)],
@@ -135,6 +166,8 @@ export const authSessions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
+    /** The user's authEpoch at issue time; a mismatch kills the session. */
+    issuedEpoch: integer("issued_epoch").default(0).notNull(),
   },
   (table) => [
     index("auth_sessions_user_id_idx").on(table.userId),
@@ -325,6 +358,15 @@ export const sessions = pgTable(
     agentName: text("agent_name").default("").notNull(),
     agentVersion: text("agent_version").notNull(),
     environmentId: text("environment_id").notNull(),
+    createAttemptedAt: timestamp("create_attempted_at", {
+      withTimezone: true,
+    }),
+    modelId: text("model_id"),
+    configSnapshot: jsonb("config_snapshot").$type<Record<string, unknown>>(),
+    configSnapshotState: configSnapshotState("config_snapshot_state")
+      .default("unverified")
+      .notNull(),
+    configSnapshotErrorCode: text("config_snapshot_error_code"),
     memoryStoreId: text("memory_store_id"),
     title: text("title").default("").notNull(),
     status: sessionStatus("status").default("idle").notNull(),
@@ -342,6 +384,16 @@ export const sessions = pgTable(
     archivedAt: timestamp("archived_at", { withTimezone: true }),
     pinnedAt: timestamp("pinned_at", { withTimezone: true }),
     deletionState: deletionState("deletion_state").default("none").notNull(),
+    settlementState: settlementState("settlement_state")
+      .default("pending")
+      .notNull(),
+    settlementCheckedAt: timestamp("settlement_checked_at", {
+      withTimezone: true,
+    }),
+    /** Verification basis: counters, booleans and reason codes only. */
+    settlementEvidence: jsonb("settlement_evidence").$type<
+      Record<string, unknown>
+    >(),
     lastEventAt: timestamp("last_event_at", { withTimezone: true }),
     ...timestamps,
   },
@@ -632,6 +684,7 @@ export const quotaReservations = pgTable(
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    arkSessionId: text("ark_session_id").notNull(),
     status: quotaReservationStatus("status").default("active").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -640,10 +693,36 @@ export const quotaReservations = pgTable(
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   },
   (table) => [
+    unique("quota_reservations_user_ark_session_unique").on(
+      table.userId,
+      table.arkSessionId,
+    ),
     index("quota_reservations_active_idx").on(
       table.userId,
       table.status,
       table.expiresAt,
+    ),
+    index("quota_reservations_user_created_counted_idx")
+      .on(table.userId, table.createdAt)
+      .where(sql`${table.status} in ('active', 'unknown_outcome', 'consumed')`),
+    check(
+      "quota_reservations_consumed_ark_identity_check",
+      sql`${table.status} <> 'consumed'
+          or (
+            length(${table.arkSessionId}) > 0
+            and ${table.arkSessionId} = btrim(
+              ${table.arkSessionId},
+              concat(
+                chr(9), chr(10), chr(11), chr(12), chr(13), chr(32),
+                chr(160), chr(5760),
+                chr(8192), chr(8193), chr(8194), chr(8195), chr(8196),
+                chr(8197), chr(8198), chr(8199), chr(8200), chr(8201),
+                chr(8202), chr(8232), chr(8233), chr(8239), chr(8287),
+                chr(12288), chr(65279)
+              )
+            )
+            and ${table.arkSessionId} not like 'pending:%'
+          )`,
     ),
   ],
 );
@@ -660,25 +739,35 @@ export const usageLedger = pgTable(
     metricType: usageMetricType("metric_type").notNull(),
     quantity: bigint("quantity", { mode: "number" }).notNull(),
     /**
-     * Attribution captured at posting time so per-model / per-agent cost
-     * accounting stays exact even after an Agent's model is changed later.
-     * Rows predating the columns are backfilled from the session join and are
-     * therefore approximate for model attribution only.
+     * Attribution captured at posting time. The model comes from the
+     * Session's create-time verified snapshot (never the Agent's current
+     * configuration), paired with `modelAttributionPrecision`; rows that
+     * predate the precision column keep their historical model as `unknown`.
      */
     agentKind: agentKind("agent_kind"),
     platformAgentId: uuid("platform_agent_id"),
     personalAgentId: uuid("personal_agent_id"),
     modelId: text("model_id"),
+    modelAttributionPrecision: modelAttributionPrecision(
+      "model_attribution_precision",
+    )
+      .default("unknown")
+      .notNull(),
     recordedAt: timestamp("recorded_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
   (table) => [
     foreignKey({
-      name: "usage_ledger_session_owner_fk",
+      name: "usage_ledger_reservation_owner_fk",
       columns: [table.userId, table.arkSessionId],
-      foreignColumns: [sessions.ownerUserId, sessions.arkSessionId],
-    }).onDelete("cascade"),
+      foreignColumns: [
+        quotaReservations.userId,
+        quotaReservations.arkSessionId,
+      ],
+    })
+      .onUpdate("cascade")
+      .onDelete("no action"),
     uniqueIndex("usage_ledger_event_metric_unique").on(
       table.userId,
       table.arkSessionId,

@@ -9,6 +9,7 @@ import {
   MemoryService,
   SessionInputService,
   SessionService,
+  SessionSettlementService,
   UserAgentService,
 } from "@pwa/domain";
 import { createTosArtifactStorage } from "@pwa/storage";
@@ -80,11 +81,16 @@ const driveFiles = new DriveFileService({
   storage: artifactStorage,
   createId: randomUUID,
 });
+const sessionSettlement = new SessionSettlementService({
+  repository: repositories.sessionLifecycle,
+  ark,
+});
 const sessionDeletionProcessor = new SessionDeletionProcessor({
   jobs: repositories.jobs,
   repository: repositories.sessionDeletion,
   ark,
   memory,
+  settlement: sessionSettlement,
   workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
   alert: (event) =>
     logger.error(
@@ -139,6 +145,10 @@ const artifactDeletionProcessor = new ArtifactDeletionProcessor({
 });
 const artifactObjectCleanupProcessor = new ArtifactObjectCleanupProcessor({
   jobs: repositories.jobs,
+  guards: {
+    findObjectCleanupGuard: repositories.driveFiles.findObjectCleanupGuard,
+    findCleanupJobClaim: repositories.driveFiles.findCleanupJobClaim,
+  },
   service: new ArtifactService({
     repository: repositories.artifacts,
     drive: driveFiles,
@@ -150,6 +160,10 @@ const artifactObjectCleanupProcessor = new ArtifactObjectCleanupProcessor({
 });
 const driveObjectCleanupProcessor = new DriveObjectCleanupProcessor({
   jobs: repositories.jobs,
+  guards: {
+    findDriveCleanupGuard: repositories.driveFiles.findCleanupGuard,
+    findCleanupJobClaim: repositories.driveFiles.findCleanupJobClaim,
+  },
   service: driveFiles,
   workerId: `drive-object-cleanup-worker:${process.pid}:${randomUUID()}`,
 });

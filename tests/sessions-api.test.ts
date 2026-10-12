@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ArkGatewayError } from "../packages/ark-client/src/index.js";
 import {
   ResourceNotFoundError,
+  SessionCreateVerificationError,
   SessionTerminatedError,
   type SessionRecord,
 } from "../packages/domain/src/index.js";
@@ -48,6 +49,11 @@ const record: SessionRecord = {
   agentName: "Snapshot Name",
   agentVersion: "7",
   environmentId: "environment-secret",
+  createAttemptedAt: timestamp,
+  modelId: "model-secret",
+  configSnapshot: null,
+  configSnapshotState: "verified",
+  configSnapshotErrorCode: null,
   title: "Task",
   status: "idle",
   lastErrorCode: null,
@@ -128,6 +134,36 @@ function sessionService() {
       },
     ]),
   } satisfies SessionApiService;
+}
+
+function holdAuthInvalidWrite(app: ReturnType<typeof buildApp>) {
+  let controlWrites = 0;
+  let resolveAttempted!: () => void;
+  const attempted = new Promise<void>((resolve) => {
+    resolveAttempted = resolve;
+  });
+
+  app.server.prependListener("request", (_request, response) => {
+    const write = response.write.bind(response) as (
+      ...args: unknown[]
+    ) => boolean;
+    response.write = ((chunk: unknown, ...args: unknown[]) => {
+      if (String(chunk).includes("event: auth_invalid")) {
+        controlWrites += 1;
+        resolveAttempted();
+        const callbackIndex = args.findLastIndex(
+          (argument) => typeof argument === "function",
+        );
+        if (callbackIndex >= 0) args[callbackIndex] = () => {};
+      }
+      return write(chunk, ...args);
+    }) as typeof response.write;
+  });
+
+  return {
+    attempted,
+    controlWrites: () => controlWrites,
+  };
 }
 
 describe("Session API", () => {
@@ -507,6 +543,65 @@ describe("Session API", () => {
   });
 
   it.each([
+    [
+      "ARK_SESSION_CREATE_OUTCOME_UNKNOWN",
+      503,
+      "ARK_UNAVAILABLE",
+      "Ark service is unavailable",
+    ],
+    [
+      "ARK_SESSION_AGENT_ID_MISMATCH",
+      502,
+      "ARK_INVALID_RESPONSE",
+      "Ark rejected the request or returned an unexpected response",
+    ],
+    [
+      "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+      502,
+      "ARK_INVALID_RESPONSE",
+      "Ark rejected the request or returned an unexpected response",
+    ],
+  ] as const)(
+    "maps %s without exposing verification details",
+    async (internalCode, status, publicCode, message) => {
+      const sessions = sessionService();
+      sessions.create.mockRejectedValueOnce(
+        Object.assign(new SessionCreateVerificationError(internalCode), {
+          modelId: "model-secret",
+          agentId: "ark-agent-secret",
+          environmentId: "environment-secret",
+          configSnapshot: {
+            modelId: "model-secret",
+            internal: "snapshot-secret",
+          },
+        }),
+      );
+      const app = buildApp({ auth: auth(), sessions });
+
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/sessions",
+        cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+        payload: { agentId },
+      });
+
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toEqual({
+        error: {
+          code: publicCode,
+          message,
+          requestId: expect.any(String),
+          retryable: false,
+        },
+      });
+      expect(response.body).not.toMatch(
+        /snapshot-secret|model-secret|ark-agent-secret|environment-secret|ARK_SESSION_/,
+      );
+      await app.close();
+    },
+  );
+
+  it.each([
     ["pending", "DELETION_PENDING", "Session deletion is pending"],
     ["deletion_failed", "DELETION_FAILED", "Session deletion has failed"],
   ] as const)(
@@ -662,6 +757,251 @@ describe("Session API", () => {
     request.destroy();
     await vi.waitFor(() => expect(upstreamSignal?.aborted).toBe(true));
     await app.close();
+  });
+
+  it("closes an established stream immediately when an admin disables the user", async () => {
+    const sessions = sessionService();
+    sessions.openEvents.mockImplementationOnce(async (_id, _ctx, signal) => ({
+      session: record,
+      events: {
+        [Symbol.asyncIterator]() {
+          // Mirrors the real upstream iterator: it observes the abort signal
+          // and ends the stream when the server revokes the connection.
+          return {
+            next: () =>
+              new Promise<IteratorResult<unknown>>((resolve) => {
+                signal?.addEventListener(
+                  "abort",
+                  () => resolve({ value: undefined, done: true }),
+                  { once: true },
+                );
+              }),
+          };
+        },
+      },
+    }));
+    const admin = {
+      setUserStatus: vi.fn(async () => ({
+        from: "active",
+        to: "disabled",
+        revokedSessions: 1,
+      })),
+    };
+    const app = buildApp({
+      auth: auth(),
+      sessions,
+      // @ts-expect-error minimal admin service: only setUserStatus is reached
+      admin,
+      // A recheck interval far beyond the test window: only the in-process
+      // stream registry can explain an immediate close.
+      sseAuthRecheckIntervalMs: 600_000,
+      sseAuthRecheckBudgetMs: 500,
+    });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: `/api/v1/sessions/${sessionId}/events`,
+      headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+    });
+    request.on("error", () => {});
+    const closed = new Promise<void>((resolve) => {
+      request.on("response", (response) => {
+        response.on("data", () => {});
+        response.on("close", resolve);
+      });
+    });
+    request.end();
+    await vi.waitFor(() => {
+      if (request.res?.statusCode !== 200) throw new Error("stream not open");
+    });
+
+    const disabled = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/admin/users/${userId}/status`,
+      cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      payload: { status: "disabled" },
+    });
+    expect(disabled.statusCode).toBe(200);
+    expect(admin.setUserStatus).toHaveBeenCalled();
+
+    // Same-process revocation closes the established stream at once, long
+    // before any periodic recheck could fire.
+    const closedWithinSecond = await Promise.race([
+      closed.then(() => true),
+      new Promise<boolean>((resolve) =>
+        setTimeout(() => resolve(false), 1_000),
+      ),
+    ]);
+    expect(closedWithinSecond).toBe(true);
+    await app.close();
+  });
+
+  it("closes an established stream after the login session is revoked", async () => {
+    const sessions = sessionService();
+    let upstreamSignal: AbortSignal | undefined;
+    sessions.openEvents.mockImplementation(async (_id, _context, signal) => {
+      upstreamSignal ??= signal;
+      return {
+        session: record,
+        events: {
+          [Symbol.asyncIterator]() {
+            return {
+              async next() {
+                await new Promise<void>((resolve) => {
+                  signal?.addEventListener("abort", () => resolve(), {
+                    once: true,
+                  });
+                });
+                return { done: true, value: undefined };
+              },
+            };
+          },
+        },
+      };
+    });
+    let authenticateCalls = 0;
+    const revocableAuth: ApiAuthService = {
+      ...auth(),
+      async authenticate() {
+        authenticateCalls += 1;
+        if (authenticateCalls === 2) {
+          throw Object.assign(new Error(), { name: "AuthRequiredError" });
+        }
+        return { userId, authSubject: "managed:user", role: "user" };
+      },
+    };
+    const app = buildApp({
+      auth: revocableAuth,
+      sessions,
+      rateLimit: { max: 1, windowMs: 1 },
+      sseAuthRecheckIntervalMs: 10,
+      sseAuthRecheckBudgetMs: 500,
+    });
+    const control = holdAuthInvalidWrite(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: `/api/v1/sessions/${sessionId}/events`,
+      headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+    });
+    const chunks: string[] = [];
+    request.on("error", () => {});
+    request.on("response", (response) => {
+      response.on("data", (chunk) => chunks.push(chunk.toString()));
+    });
+    request.end();
+
+    await vi.waitFor(() => expect(chunks.join("")).toContain("event: ready"));
+    await control.attempted;
+    const abortedAtControlWrite = upstreamSignal?.aborted;
+    const secondStatus = await new Promise<number | undefined>(
+      (resolve, reject) => {
+        const second = httpRequest(
+          {
+            host: "127.0.0.1",
+            port,
+            path: `/api/v1/sessions/${sessionId}/events`,
+            headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+          },
+          (response) => {
+            resolve(response.statusCode);
+            response.destroy();
+          },
+        );
+        second.once("error", reject);
+        second.end();
+      },
+    );
+    request.destroy();
+    await app.close();
+
+    expect(abortedAtControlWrite).toBe(true);
+    expect(secondStatus).toBe(200);
+    expect(control.controlWrites()).toBe(1);
+  });
+
+  it("does not recheck or write another control frame after a timed-out check rejects late", async () => {
+    const sessions = sessionService();
+    sessions.openEvents.mockImplementationOnce(
+      async (_id, _context, signal) => ({
+        session: record,
+        events: {
+          [Symbol.asyncIterator]() {
+            return {
+              async next() {
+                await new Promise<void>((resolve) => {
+                  signal?.addEventListener("abort", () => resolve(), {
+                    once: true,
+                  });
+                });
+                return { done: true, value: undefined };
+              },
+            };
+          },
+        },
+      }),
+    );
+    let authenticateCalls = 0;
+    let rejectLateCheck!: (error: Error) => void;
+    const lateCheck = new Promise<never>((_resolve, reject) => {
+      rejectLateCheck = reject;
+    });
+    const slowAuth: ApiAuthService = {
+      ...auth(),
+      authenticate(token) {
+        authenticateCalls += 1;
+        if (token === "admin-token") {
+          return Promise.reject(
+            Object.assign(new Error(), { name: "AuthRequiredError" }),
+          );
+        }
+        if (authenticateCalls === 1) {
+          return Promise.resolve({
+            userId,
+            authSubject: "managed:user",
+            role: "user" as const,
+          });
+        }
+        return lateCheck;
+      },
+    };
+    const app = buildApp({
+      auth: slowAuth,
+      sessions,
+      sseAuthRecheckIntervalMs: 10,
+      sseAuthRecheckBudgetMs: 30,
+    });
+    const control = holdAuthInvalidWrite(app);
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    const { port } = app.server.address() as AddressInfo;
+    const request = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path: `/api/v1/sessions/${sessionId}/events`,
+      headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+    });
+    const chunks: string[] = [];
+    request.on("error", () => {});
+    request.on("response", (response) => {
+      response.on("data", (chunk) => chunks.push(chunk.toString()));
+    });
+    request.end();
+
+    await vi.waitFor(() => expect(chunks.join("")).toContain("event: ready"));
+    await control.attempted;
+    rejectLateCheck(Object.assign(new Error(), { name: "AuthRequiredError" }));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    const finalAuthenticateCalls = authenticateCalls;
+    const finalControlWrites = control.controlWrites();
+    request.destroy();
+    await app.close();
+
+    expect(finalAuthenticateCalls).toBe(2);
+    expect(finalControlWrites).toBe(1);
   });
 
   it("backpressures a slow SSE client and cancels the blocked stream", async () => {

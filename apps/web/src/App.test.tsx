@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -714,6 +715,35 @@ describe("workspace shell", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Send task" })).toBeDisabled();
+  });
+
+  it("refreshes the quota snapshot on window focus and on returning home", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp();
+    await screen.findByRole("heading", { name: "New task" });
+
+    const usageCalls = () =>
+      vi
+        .mocked(fetch)
+        .mock.calls.filter(([input]) => String(input).endsWith("/api/v1/usage"))
+        .length;
+    expect(usageCalls()).toBe(1);
+
+    // Regaining focus refetches the authoritative snapshot instead of leaving
+    // a stale exhausted-quota blocker on the intro page.
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(usageCalls()).toBe(2));
+
+    // Returning home from another page refetches as well; the initial mount
+    // of the workspace does not double-fetch.
+    fireEvent.click(screen.getByRole("link", { name: "Agents" }));
+    await screen.findByRole("heading", { name: "Agents" });
+    expect(usageCalls()).toBe(2);
+    fireEvent.click(screen.getByRole("link", { name: "New task" }));
+    await screen.findByRole("heading", { name: "New task" });
+    await waitFor(() => expect(usageCalls()).toBe(3));
   });
 });
 

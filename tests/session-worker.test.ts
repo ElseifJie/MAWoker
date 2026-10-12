@@ -3,6 +3,7 @@ import {
   SessionReconciliationProcessor,
   type SessionReconciliationJob,
 } from "../apps/worker/src/session-reconciliation.js";
+import { SessionCreateVerificationError } from "../packages/domain/src/index.js";
 
 const now = new Date("2026-09-06T00:00:00.000Z");
 
@@ -91,6 +92,40 @@ describe("SessionReconciliationProcessor", () => {
     );
     expect(jobs.succeed).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["ARK_SESSION_AGENT_VERSION_MISMATCH", 1, false],
+    ["ARK_SESSION_AGENT_VERSION_MISMATCH", 10, true],
+    ["ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE", 10, true],
+  ] as const)(
+    "retries %s at attempt %s with final=%s",
+    async (code, attempts, final) => {
+      const jobs = {
+        claim: vi.fn(async () => [job({ attempts })]),
+        succeed: vi.fn(async () => undefined),
+        retry: vi.fn(async () => undefined),
+      };
+      const service = {
+        reconcileCreate: vi.fn(async () => {
+          throw new SessionCreateVerificationError(code);
+        }),
+      };
+      const processor = new SessionReconciliationProcessor({
+        jobs,
+        service,
+        workerId: "worker-1",
+      });
+
+      await expect(processor.runOnce()).resolves.toBe(1);
+      expect(jobs.retry).toHaveBeenCalledWith(
+        "00000000-0000-4000-8000-000000000001",
+        "worker-1",
+        "Ark Session response does not verify the requested configuration",
+        final,
+      );
+      expect(jobs.succeed).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects malformed or unowned reconciliation jobs", async () => {
     const jobs = {

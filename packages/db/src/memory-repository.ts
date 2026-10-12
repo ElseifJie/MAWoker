@@ -165,12 +165,18 @@ export function createMemoryRepository(database: unknown): MemoryRepository {
         memoryStoreId: string | null;
         pending: boolean;
       }>(
+        // Deletion is deliberately absent from this predicate: a Session
+        // being deleted (or one whose deletion job exhausted retries) has no
+        // in-flight message work, and its consolidation is coordinated by
+        // fenceDeletion, which holds the upstream delete until no run is
+        // active. Counting deletion here deadlocked the two sides — the run
+        // waited for deletion_state to clear while deletion waited for the
+        // run to finish.
         sql`select id, ark_session_id as "arkSessionId",
                    memory_store_id as "memoryStoreId",
                    (message_in_flight_count > 0 or message_start_pending
                     or message_unknown_outcome
-                    or ark_session_id like 'pending:%'
-                    or deletion_state <> 'none') as pending
+                    or ark_session_id like 'pending:%') as pending
               from sessions where owner_user_id = ${userId}
              order by created_at, id`,
       );

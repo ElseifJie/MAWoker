@@ -4,6 +4,7 @@ import type {
   ArkAgent,
   ArkAgentInput,
   ArkAgentUpdate,
+  ArkSkillBindingInput,
   ArkArtifact,
   ArkCall,
   ArkEvent,
@@ -95,7 +96,7 @@ export class InMemoryArkGateway implements ArkGateway {
   private readonly now: () => Date;
   private readonly agents = new Map<string, ArkAgent>();
   private readonly agentsByCreateIdempotencyKey = new Map<string, string>();
-  private readonly agentSkills = new Map<string, string[]>();
+  private readonly agentSkills = new Map<string, ArkSkillBindingInput[]>();
   private readonly skills = new Map<string, ArkSkill>();
   private readonly sessions = new Map<string, ArkSession>();
   private readonly sessionsByCreateIdempotencyKey = new Map<string, string>();
@@ -398,10 +399,7 @@ export class InMemoryArkGateway implements ArkGateway {
       version: 1,
     };
     this.agents.set(agent.id, agent);
-    this.agentSkills.set(
-      agent.id,
-      (input.skills ?? []).map((skill) => skill.skillId),
-    );
+    this.agentSkills.set(agent.id, structuredClone(input.skills ?? []));
     if (options?.idempotencyKey) {
       this.agentsByCreateIdempotencyKey.set(options.idempotencyKey, agent.id);
     }
@@ -437,10 +435,7 @@ export class InMemoryArkGateway implements ArkGateway {
     };
     this.agents.set(agentId, updated);
     if (input.skills !== undefined) {
-      this.agentSkills.set(
-        agentId,
-        input.skills.map((skill) => skill.skillId),
-      );
+      this.agentSkills.set(agentId, structuredClone(input.skills));
     }
     return structuredClone(updated);
   }
@@ -461,7 +456,9 @@ export class InMemoryArkGateway implements ArkGateway {
    */
   agentSkillIds(agentId: string): string[] {
     this.requireAgent(agentId);
-    return [...(this.agentSkills.get(agentId) ?? [])];
+    return (this.agentSkills.get(agentId) ?? []).map(
+      (binding) => binding.skillId,
+    );
   }
 
   async createSkill(
@@ -536,6 +533,27 @@ export class InMemoryArkGateway implements ArkGateway {
       agentVersion: input.agentVersion,
       environmentId: input.environmentId,
       status: "idle",
+      configSnapshot: {
+        modelId: agent.modelId,
+        skills: (this.agentSkills.get(agent.id) ?? []).map((binding) => {
+          const skill = this.skills.get(binding.skillId)!;
+          return {
+            type: skill.source,
+            skillId: binding.skillId,
+            version: binding.version ?? skill.latestVersion,
+            useLatest: binding.version === undefined,
+            displayName: skill.displayTitle,
+          };
+        }),
+        tools: [],
+        environment: {
+          id: input.environmentId,
+          type: null,
+          configType: null,
+          scope: null,
+        },
+        completeness: "incomplete",
+      },
     };
     this.sessions.set(session.id, session);
     if (options?.idempotencyKey) {
