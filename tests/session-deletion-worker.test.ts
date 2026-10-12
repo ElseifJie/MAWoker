@@ -46,6 +46,13 @@ function setup(
     payload?: SessionDeletionJob["payload"];
     localRemoval?: "removed" | "missing";
     settlement?: "confirmed" | "pending" | "unknown";
+    deletionLog?:
+      | {
+          appendAndConfirm: () => Promise<
+            { confirmed: true } | { confirmed: false; reason: string }
+          >;
+        }
+      | undefined;
   } = {},
 ) {
   const order: string[] = [];
@@ -112,15 +119,28 @@ function setup(
   const settlement = {
     verify: vi.fn(async () => input.settlement ?? "confirmed"),
   };
+  const deletionLog =
+    input.deletionLog === undefined
+      ? undefined
+      : { appendAndConfirm: vi.fn(input.deletionLog.appendAndConfirm) };
   const processor = new SessionDeletionProcessor({
     jobs,
     repository,
     ark,
     settlement,
+    ...(deletionLog ? { deletionLog } : {}),
     workerId: "worker-1",
     now: () => timestamp,
   });
-  return { processor, jobs, repository, ark, order, settlement };
+  return {
+    processor,
+    jobs,
+    repository,
+    ark,
+    order,
+    settlement,
+    ...(deletionLog ? { deletionLog } : {}),
+  };
 }
 
 describe("SessionDeletionProcessor", () => {
@@ -283,7 +303,7 @@ describe("SessionDeletionProcessor", () => {
     // The fence gates the Ark deletion specifically: capture lands in the
     // episodic digest first. Waiting defers the job without consuming an
     // attempt — consolidation progresses in this same worker.
-    expect(fence).toHaveBeenCalledWith(ownerUserId, "ark-session-1");
+    expect(fence).toHaveBeenCalledWith(ownerUserId, "ark-session-1", sessionId);
     expect(state.ark.deleteSession).not.toHaveBeenCalled();
     expect(state.jobs.deferSessionDeletion).toHaveBeenCalledWith(
       sessionId,
@@ -420,6 +440,81 @@ describe("SessionDeletionProcessor", () => {
       true,
       1,
     );
+  });
+
+  it("defers before the irreversible delete until the deletion log confirms", async () => {
+    const state = setup({
+      deletionLog: {
+        appendAndConfirm: async () => ({
+          confirmed: false,
+          reason: "DELETION_LOG_UNAVAILABLE",
+        }),
+      },
+    });
+
+    await state.processor.runOnce();
+
+    // The intent could not be durably logged outside the business database:
+    // the irreversible upstream delete must not run, and the job defers
+    // without consuming attempts.
+    expect(state.deletionLog!.appendAndConfirm).toHaveBeenCalledTimes(1);
+    expect(state.ark.deleteSession).not.toHaveBeenCalled();
+    expect(state.jobs.deferSessionDeletion).toHaveBeenCalled();
+    expect(state.jobs.retry).not.toHaveBeenCalled();
+  });
+
+  it("writes the deletion intent before the Ark delete and keeps it idempotent", async () => {
+    const logged: unknown[] = [];
+    const state = setup({
+      deletionLog: {
+        appendAndConfirm: async (intent: unknown) => {
+          logged.push(intent);
+          return { confirmed: true as const };
+        },
+      },
+    });
+
+    await state.processor.runOnce();
+
+    expect(state.deletionLog!.appendAndConfirm).toHaveBeenCalledTimes(1);
+    // The intent carries identity and scope only, and is keyed by the job id
+    // so retries cannot fork the log.
+    expect(logged[0]).toMatchObject({
+      kind: "session",
+      deletionRequestId: sessionId,
+      userId: ownerUserId,
+      sessionId,
+      arkSessionId: "ark-session-1",
+      scope: "session_history_and_artifacts",
+    });
+    expect(JSON.stringify(logged[0])).not.toMatch(/content|message/i);
+    // The log write happened BEFORE the irreversible delete.
+    expect(state.order.indexOf("ark-delete")).toBeGreaterThan(-1);
+    await state.processor.runOnce();
+  });
+
+  it("skips the deletion log on a resumed job already past the Ark delete", async () => {
+    const state = setup({
+      payload: {
+        sessionId,
+        completed: {
+          nonRunningObserved: true,
+          settlementConfirmed: true,
+          arkDeleted: true,
+          artifactsOrphaned: true,
+        },
+      },
+      deletionLog: {
+        appendAndConfirm: async () => ({ confirmed: true as const }),
+      },
+    });
+
+    await state.processor.runOnce();
+
+    // The irreversible step already happened under a confirmed log; the
+    // resume path does not rewrite it.
+    expect(state.deletionLog!.appendAndConfirm).not.toHaveBeenCalled();
+    expect(state.order).toContain("local");
   });
 
   it("stops before any side effect when the lease was taken over", async () => {

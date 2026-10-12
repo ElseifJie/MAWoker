@@ -84,6 +84,7 @@ export * from "./quota-policy.js";
 export * from "./artifacts.js";
 export * from "./drive-files.js";
 export * from "./session-settlement.js";
+export * from "./deletion-log.js";
 export * from "./storage-keys.js";
 export * from "./session-inputs.js";
 export * from "./sessions.js";

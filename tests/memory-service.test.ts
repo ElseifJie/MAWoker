@@ -967,6 +967,69 @@ describe("personal memory coordinator", () => {
     expect((await service.status("a")).run).toBeNull();
   });
 
+  it("binds the exclusion tombstone to the deletion request identity", async () => {
+    const { service, ark, sessions, states } = setup();
+    const store = await service.ensure("a");
+    const agent = await ark.createAgent({
+      name: "A",
+      description: "",
+      modelId: "model-a",
+      systemPrompt: "",
+    });
+    const session = await ark.createSession({
+      agentId: agent.id,
+      agentVersion: 1,
+      environmentId: "env",
+      resources: [
+        { type: "memory_store", memoryStoreId: store, access: "read_write" },
+      ],
+    });
+    sessions.push({
+      id: "local",
+      arkSessionId: session.id,
+      memoryStoreId: store,
+      pending: false,
+      userId: "a",
+    });
+
+    await service.fenceDeletion("a", session.id, "delete-request-42");
+
+    const state = states.get("a")!;
+    expect(state.excludedSourceIds).toContain(session.id);
+    // The tombstone names WHO asked for the deletion, so a later audit or
+    // recovery replay can attribute the exclusion — identity only, no text.
+    expect(state.sourceExclusions).toEqual([
+      expect.objectContaining({
+        arkSessionId: session.id,
+        deletionRequestId: "delete-request-42",
+      }),
+    ]);
+    // Without a request id the binding is simply absent (other callers).
+    const other = await ark.createSession({
+      agentId: agent.id,
+      agentVersion: 1,
+      environmentId: "env",
+      resources: [
+        { type: "memory_store", memoryStoreId: store, access: "read_write" },
+      ],
+    });
+    sessions.push({
+      id: "local-2",
+      arkSessionId: other.id,
+      memoryStoreId: store,
+      pending: false,
+      userId: "a",
+    });
+    await service.fenceDeletion("a", other.id);
+    expect(states.get("a")!.sourceExclusions).toHaveLength(2);
+    expect(
+      states
+        .get("a")!
+        .sourceExclusions!.find((entry) => entry.arkSessionId === other.id)!
+        .deletionRequestId,
+    ).toBeUndefined();
+  });
+
   it("waits for an in-flight run, then excludes the source and keeps its output", async () => {
     const { service, ark, sessions, states } = setup();
     const store = await service.ensure("a");

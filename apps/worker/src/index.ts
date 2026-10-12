@@ -4,6 +4,7 @@ import { parseServerConfig } from "@pwa/config";
 import { createDatabase, createRepositories } from "@pwa/db";
 import {
   ArtifactService,
+  DeletionLogStore,
   DriveFileService,
   LoggingNotifier,
   MemoryService,
@@ -87,12 +88,14 @@ const sessionSettlement = new SessionSettlementService({
   repository: repositories.sessionLifecycle,
   ark,
 });
+const deletionLog = new DeletionLogStore({ storage: artifactStorage });
 const sessionDeletionProcessor = new SessionDeletionProcessor({
   jobs: repositories.jobs,
   repository: repositories.sessionDeletion,
   ark,
   memory,
   settlement: sessionSettlement,
+  deletionLog,
   workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
   // One deletion at a time: its steps can be slow (memory fence, settlement,
   // Ark calls), and queued claims would burn their lease while waiting.

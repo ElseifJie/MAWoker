@@ -1,4 +1,5 @@
 import type { ArkGateway, SessionStatus } from "@pwa/ark-client";
+import type { DeletionLogStore } from "@pwa/domain";
 
 type CompletedSteps = {
   interruptRequested?: true;
@@ -223,6 +224,12 @@ export class SessionDeletionProcessor {
         ): PromiseLike<"pending" | "confirmed" | "unknown">;
       };
       /**
+       * Append-only deletion intent log, stored outside the business
+       * database. The irreversible upstream delete only runs after the
+       * intent is persisted AND read back intact.
+       */
+      deletionLog?: Pick<DeletionLogStore, "appendAndConfirm">;
+      /**
        * The memory fence: ended sessions must have their increments captured
        * into the episodic digest before the upstream record is deleted.
        */
@@ -230,6 +237,7 @@ export class SessionDeletionProcessor {
         fenceDeletion(
           userId: string,
           arkSessionId: string,
+          deletionRequestId?: string,
         ): Promise<"clear" | "capturing">;
       };
       workerId: string;
@@ -349,6 +357,34 @@ export class SessionDeletionProcessor {
         // the settlement gate: a slow executor must not delete after a
         // takeover re-armed the job.
         if (!(await this.stillOwns(job))) return;
+        // The irreversible delete needs its intent durably logged outside the
+        // business database first: a backup restore must never resurrect
+        // content the user asked to delete. An unconfirmed log defers the
+        // job without consuming attempts.
+        if (this.dependencies.deletionLog) {
+          const logged = await this.dependencies.deletionLog.appendAndConfirm({
+            kind: "session",
+            deletionRequestId: job.id,
+            userId: ownerUserId,
+            sessionId: payload.sessionId,
+            arkSessionId: session.arkSessionId,
+            scope: "session_history_and_artifacts",
+            requestedAt: (
+              this.dependencies.now ?? (() => new Date())
+            )().toISOString(),
+          });
+          if (!logged.confirmed) {
+            const now = (this.dependencies.now ?? (() => new Date()))();
+            const deferred = await this.dependencies.jobs.deferSessionDeletion(
+              job.id,
+              this.dependencies.workerId,
+              new Date(now.getTime() + SETTLEMENT_PENDING_DEFER_MS),
+              job.leaseGeneration,
+            );
+            if (!deferred) throw new SessionStillRunningError();
+            return;
+          }
+        }
         // The memory fence re-runs until "clear": the capture edit run it
         // plans is applied by the memory loop in this same worker, so waiting
         // here is bounded by consolidation progress. Waiting defers the job
@@ -357,6 +393,7 @@ export class SessionDeletionProcessor {
         const fence = await this.dependencies.memory?.fenceDeletion(
           ownerUserId,
           session.arkSessionId,
+          job.id,
         );
         if (fence === "capturing") {
           const now = (this.dependencies.now ?? (() => new Date()))();

@@ -55,6 +55,16 @@ export interface MemoryState {
   lastCompactAt: number;
   summarizedSources?: string[];
   excludedSourceIds?: string[];
+  /**
+   * Deletion tombstones: when a source was excluded because its Session was
+   * permanently deleted, the entry binds the exclusion to the deletion
+   * request that caused it. Identity fields only — never conversation text.
+   */
+  sourceExclusions?: Array<{
+    arkSessionId: string;
+    deletionRequestId?: string;
+    excludedAt: string;
+  }>;
 }
 export interface MemoryRepository {
   reserve(
@@ -313,6 +323,7 @@ export class MemoryService {
   async fenceDeletion(
     userId: string,
     arkSessionId: string,
+    deletionRequestId?: string,
   ): Promise<"clear" | "capturing"> {
     const state = await this.dependencies.repository.get(userId);
     if (!state || !state.storeId || state.status === "provisioning")
@@ -333,6 +344,16 @@ export class MemoryService {
       return "capturing";
     state.excludedSourceIds = [
       ...new Set([...(state.excludedSourceIds ?? []), arkSessionId]),
+    ];
+    state.sourceExclusions = [
+      ...(state.sourceExclusions ?? []).filter(
+        (entry) => entry.arkSessionId !== arkSessionId,
+      ),
+      {
+        arkSessionId,
+        ...(deletionRequestId === undefined ? {} : { deletionRequestId }),
+        excludedAt: new Date().toISOString(),
+      },
     ];
     // A failed save (lost CAS) throws and the deletion retries: reporting
     // "clear" with the exclusion unwritten could let a later consolidation
