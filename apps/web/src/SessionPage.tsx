@@ -600,7 +600,7 @@ function SessionPageContent({
                 <PanelRightOpen size={18} aria-hidden="true" />
               )}
             </IconButton>
-            {session.status === "running" ? (
+            {session.status === "running" && session.upstreamReady !== false ? (
               <Button
                 variant="secondary"
                 size="compact"

@@ -186,6 +186,11 @@ export interface SessionRepository {
     id: string,
     userId: string,
     attemptedAt: Date,
+    deliveryFence?: {
+      jobId: string;
+      workerId: string;
+      leaseGeneration: number;
+    },
   ): PromiseLike<boolean>;
   releaseCreateAttempt(
     id: string,
@@ -791,6 +796,11 @@ export class SessionService {
   ): Promise<{ eventId: string; delivery: "accepted" }> {
     const session = await this.requireOwned(context.userId, id);
     this.assertNotTerminated(session);
+    if (session.arkSessionId.startsWith("pending:"))
+      throw Object.assign(
+        new Error("A pending task cannot be interrupted yet"),
+        { name: "SessionPendingOperationError", code: "SESSION_BUSY" },
+      );
 
     try {
       const event = await this.dependencies.ark.submitEvent(
@@ -1100,7 +1110,16 @@ export class SessionService {
           context.leaseGeneration,
         );
         writeStarted = true;
-        session = await this.reconcileCreate(item.sessionId, context);
+        session = await this.reconcileCreate(item.sessionId, {
+          ...context,
+          deliveryFence: {
+            jobId: id,
+            workerId: context.workerId,
+            leaseGeneration: context.leaseGeneration,
+          },
+        });
+        // The remote create identity is now recorded; no user message was sent yet.
+        writeStarted = false;
       }
       session = await repository.validateSubmission!(
         context.userId,
@@ -1138,6 +1157,12 @@ export class SessionService {
         isArkCategory(error, "unknown_write_outcome") ||
         error instanceof SessionCreateVerificationError ||
         (writeStarted &&
+          !(
+            typeof error === "object" &&
+            error !== null &&
+            "createAdmissionRejected" in error &&
+            error.createAdmissionRejected === true
+          ) &&
           !definiteCategories.some((category) =>
             isArkCategory(error, category),
           ));
@@ -1198,7 +1223,10 @@ export class SessionService {
               sourceType: event.type,
               type: normalizeArkEvent(event).type,
               occurredAt: new Date(event.createdAt),
-              payload: event.data ?? {},
+              payload: {
+                ...event.data,
+                content: event.data?.content ?? item.content,
+              },
             },
           },
         );
@@ -1233,7 +1261,13 @@ export class SessionService {
 
   async reconcileCreate(
     id: string,
-    context: SessionContext,
+    context: SessionContext & {
+      deliveryFence?: {
+        jobId: string;
+        workerId: string;
+        leaseGeneration: number;
+      };
+    },
   ): Promise<SessionRecord> {
     const intent = await this.dependencies.repository.findCreateIntent(
       context.userId,
@@ -1261,6 +1295,7 @@ export class SessionService {
         id,
         context.userId,
         attemptedAt,
+        ...(context.deliveryFence ? ([context.deliveryFence] as const) : []),
       );
       if (!claimed) {
         throw new SessionCreateVerificationError(

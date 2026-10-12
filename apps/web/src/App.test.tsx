@@ -2409,6 +2409,9 @@ describe("new task composer", () => {
         source.url.includes(createdSessionId),
       ),
     ).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "Interrupt Session" }),
+    ).not.toBeInTheDocument();
   });
 
   it("clears a persisted followup draft while its detail refresh is still pending", async () => {

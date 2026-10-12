@@ -108,6 +108,7 @@ interface SessionDeletionRepository {
         ownerUserId: string;
         arkSessionId: string;
         status: SessionStatus;
+        createAttemptedAt?: Date | null;
       }
     | undefined
   >;
@@ -272,6 +273,28 @@ export class SessionDeletionProcessor {
           job.leaseGeneration,
         );
         return;
+      }
+
+      if (session.arkSessionId.startsWith("pending:")) {
+        if (session.createAttemptedAt !== null) {
+          // Attempted/unknown creation must keep its local correlation until
+          // the remote identity can be observed. A placeholder is no evidence.
+          const now = (this.dependencies.now ?? (() => new Date()))();
+          const deferred = await this.dependencies.jobs.deferSessionDeletion(
+            job.id,
+            this.dependencies.workerId,
+            new Date(now.getTime() + SETTLEMENT_UNKNOWN_DEFER_MS),
+            job.leaseGeneration,
+          );
+          if (!deferred) throw new SessionStillRunningError();
+          return;
+        }
+        // Deletion admission fences new create attempts. No remote session
+        // ever existed, so all upstream-only gates are vacuously complete.
+        payload.completed.nonRunningObserved = true;
+        payload.completed.settlementConfirmed = true;
+        payload.completed.arkDeleted = true;
+        await this.checkpoint(job, payload);
       }
 
       if (!payload.completed.nonRunningObserved) {

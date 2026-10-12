@@ -1790,6 +1790,17 @@ function sendSessionError(
   reply: FastifyReply,
 ) {
   captureArkRequestId(error, request);
+  if (hasErrorName(error, "SessionPendingOperationError"))
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "SESSION_BUSY",
+          "A pending task cannot be interrupted yet",
+          false,
+        ),
+      );
   if (
     typeof error === "object" &&
     error !== null &&

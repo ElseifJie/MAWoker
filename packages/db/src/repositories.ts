@@ -2713,10 +2713,11 @@ export function createRepositories(database: unknown) {
           ownerUserId: string;
           arkSessionId: string;
           status: SessionRecord["status"];
+          createAttemptedAt: Date | null;
         }>(
           db,
           sql`select id, owner_user_id as "ownerUserId",
-                     ark_session_id as "arkSessionId", status
+                     ark_session_id as "arkSessionId", status, create_attempted_at as "createAttemptedAt"
                 from sessions
                where id = ${id}
                  and owner_user_id = ${userId}
@@ -2755,9 +2756,18 @@ export function createRepositories(database: unknown) {
       },
       async removeLocal(userId: string, id: string) {
         return db.transaction(async (transaction) => {
-          const session = await first(
+          // Job-before-session lock order matches delivery admission/acknowledgement.
+          await rows(
             transaction,
-            sql`select id
+            sql`select id from background_jobs where owner_user_id=${userId} and payload->>'operation'='deliver' and payload->>'sessionId'=${id} for update`,
+          );
+          const session = await first<{
+            id: string;
+            arkSessionId: string;
+            createAttemptedAt: Date | null;
+          }>(
+            transaction,
+            sql`select id,ark_session_id as "arkSessionId",create_attempted_at as "createAttemptedAt"
                   from sessions
                  where id = ${id}
                    and owner_user_id = ${userId}
@@ -2765,6 +2775,18 @@ export function createRepositories(database: unknown) {
                  for update`,
           );
           if (!session) return "missing" as const;
+          const localOnly =
+            session.arkSessionId.startsWith("pending:") &&
+            session.createAttemptedAt === null;
+          if (session.arkSessionId.startsWith("pending:") && !localOnly)
+            return "cleanup_pending" as const;
+          await transaction.execute(
+            sql`update background_jobs set status='succeeded',locked_at=null,locked_by=null,last_error='SESSION_DELETED',updated_at=now() where owner_user_id=${userId} and payload->>'operation'='deliver' and payload->>'sessionId'=${id} and status in ('pending','running')`,
+          );
+          if (localOnly)
+            await transaction.execute(
+              sql`update quota_reservations set status='released',resolved_at=now() where id=${id} and user_id=${userId} and status in ('active','unknown_outcome')`,
+            );
           await transaction.execute(
             sql`update quota_reservations
                    set status = 'unknown_outcome',
@@ -3029,12 +3051,32 @@ export function createRepositories(database: unknown) {
             (item.status !== "unknown" || input.status !== "accepted")
           )
             return false;
+          if (input.status === "accepted") {
+            const body = input.event?.payload.content;
+            if (
+              input.event?.sourceType !== "user.message" ||
+              typeof body !== "string" ||
+              body.length === 0 ||
+              (item.content !== null && body !== item.content)
+            )
+              return false;
+          }
           if (input.event)
             await createRepositories(transaction).sessionLifecycle.appendEvents(
               userId,
               item.sessionId,
               [input.event],
             );
+          if (input.status === "accepted") {
+            await transaction.execute(
+              sql`update session_events set payload=payload || jsonb_build_object('content',${input.event!.payload.content}::text) where session_id=${item.sessionId} and event_id=${input.eventId!} and source_type='user.message' and (payload->>'content' is null or payload->>'content'='')`,
+            );
+            const stored = await first(
+              transaction,
+              sql`select event_id from session_events where session_id=${item.sessionId} and event_id=${input.eventId!} and source_type='user.message' and jsonb_typeof(payload->'content')='string' and payload->>'content'=${input.event!.payload.content}::text`,
+            );
+            if (!stored) return false;
+          }
           await transaction.execute(
             sql`update message_submissions set status=${input.status}, upstream_event_id=coalesce(${input.eventId ?? null},upstream_event_id), last_error_code=${input.errorCode ?? null}, content=case when ${input.status}='accepted' then null else content end,updated_at=now() where id=${id}`,
           );
@@ -3283,7 +3325,46 @@ export function createRepositories(database: unknown) {
         }
         return result.selectedInputs;
       },
-      async claimCreateAttempt(id: string, userId: string, attemptedAt: Date) {
+      async claimCreateAttempt(
+        id: string,
+        userId: string,
+        attemptedAt: Date,
+        deliveryFence?: {
+          jobId: string;
+          workerId: string;
+          leaseGeneration: number;
+        },
+      ) {
+        if (deliveryFence)
+          return db.transaction(async (transaction) => {
+            const reject = (code: string) =>
+              Object.assign(new Error("Create admission rejected"), {
+                code,
+                createAdmissionRejected: true,
+              });
+            const owner = await first(
+              transaction,
+              sql`select id from users where id=${userId} and status='active' and role='user' for update`,
+            );
+            if (!owner) throw reject("ACCOUNT_DISABLED");
+            const lease = await first(
+              transaction,
+              sql`select job.id from background_jobs job where job.id=${deliveryFence.jobId} and job.owner_user_id=${userId} and job.type='reconcile_session' and job.payload->>'operation'='deliver' and job.payload->>'sessionId'=${id} and job.status='running' and job.locked_by=${deliveryFence.workerId} and job.lease_generation=${deliveryFence.leaseGeneration} and job.locked_at > clock_timestamp()-interval '5 minutes' and exists(select 1 from message_submissions ms where ms.id=job.id and ms.session_id=${id} and ms.owner_user_id=${userId} and ms.status='sending' and ms.lease_generation=${deliveryFence.leaseGeneration}) for update`,
+            );
+            if (!lease) throw reject("DELIVERY_LEASE_LOST");
+            const session = await first<{ createAttemptedAt: Date | null }>(
+              transaction,
+              sql`select create_attempted_at as "createAttemptedAt" from sessions where id=${id} and owner_user_id=${userId} and ark_session_id like 'pending:%' and deletion_state='none' and status <> 'terminated' for update`,
+            );
+            if (!session) throw reject("SESSION_UNAVAILABLE");
+            if (session.createAttemptedAt !== null) return false;
+            const admitted = await first(
+              transaction,
+              sql`update sessions set create_attempted_at=${attemptedAt},updated_at=now() where id=${id} and owner_user_id=${userId} and exists(select 1 from background_jobs where id=${deliveryFence.jobId} and status='running' and locked_by=${deliveryFence.workerId} and lease_generation=${deliveryFence.leaseGeneration} and locked_at > clock_timestamp()-interval '5 minutes') returning id`,
+            );
+            if (!admitted) throw reject("DELIVERY_LEASE_LOST");
+            return true;
+          });
         const claimed = await rows<{ id: string }>(
           db,
           sql`update sessions
@@ -3293,6 +3374,8 @@ export function createRepositories(database: unknown) {
                  and owner_user_id = ${userId}
                  and ark_session_id like 'pending:%'
                  and create_attempted_at is null
+                 and deletion_state='none'
+                 and exists(select 1 from users where id=${userId} and status='active' and role='user')
                returning id`,
         );
         return claimed.length === 1;
@@ -3332,7 +3415,7 @@ export function createRepositories(database: unknown) {
             sql`select status from background_jobs
                  where id = ${id}
                    and owner_user_id = ${userId}
-                   and type = 'reconcile_session'
+                   and type in ('reconcile_session','delete_session')
                  for update`,
           );
           if (job.status === "failed") {
@@ -6063,8 +6146,7 @@ export function createRepositories(database: unknown) {
           const updated = await rows(
             transaction,
             sql`update background_jobs
-                  set status = ${final && error !== "SUBMISSION_WAITING" ? "failed" : "pending"}::background_job_status,
-                      attempts = case when ${error} = 'SUBMISSION_WAITING' then greatest(attempts-1,0) else attempts end,
+                  set status = ${final ? "failed" : "pending"}::background_job_status,
                       run_after = ${runAfter},
                       locked_at = null,
                       locked_by = null,
@@ -6267,7 +6349,8 @@ export function createRepositories(database: unknown) {
           }>(
             transaction,
             sql`update background_jobs
-                  set status = ${final ? "failed" : "pending"}::background_job_status,
+                  set status = case when type='reconcile_session' and payload->>'operation'='deliver' and ${error}='SUBMISSION_WAITING' then 'pending'::background_job_status else ${final ? "failed" : "pending"}::background_job_status end,
+                      attempts = case when type='reconcile_session' and payload->>'operation'='deliver' and ${error}='SUBMISSION_WAITING' then greatest(attempts-1,0) else attempts end,
                       run_after = ${runAfter},
                       locked_at = null,
                       locked_by = null,

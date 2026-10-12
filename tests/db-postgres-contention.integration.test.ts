@@ -34,6 +34,7 @@ describeWithPostgres("background job contention in real PostgreSQL", () => {
         run_after timestamptz not null default now(),
         locked_at timestamptz,
         locked_by text,
+        lease_generation integer not null default 0,
         last_error text,
         created_at timestamptz not null default now(),
         updated_at timestamptz not null default now()
@@ -110,10 +111,12 @@ describeWithPostgres("background job contention in real PostgreSQL", () => {
         last_error_code text,
         updated_at timestamptz
       );
+      create type quota_reservation_status as enum ('active','unknown_outcome','consumed','released');
       create table quota_reservations (
         id uuid primary key,
         user_id uuid,
-        status text,
+        ark_session_id text,
+        status quota_reservation_status,
         resolved_at timestamptz
       );
     `);

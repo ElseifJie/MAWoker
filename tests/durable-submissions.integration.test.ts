@@ -1,3 +1,6 @@
+import { SessionSettlementService } from "../packages/domain/src/session-settlement.js";
+import { SessionDeletionProcessor } from "../apps/worker/src/session-deletion.js";
+import { SessionReconciliationProcessor } from "../apps/worker/src/session-reconciliation.js";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Pool } from "pg";
@@ -793,6 +796,412 @@ describe("durable acknowledgement storage boundary", () => {
       expect(
         (await f.service.get(f.context.userId, session.id)).submissions?.[0],
       ).toMatchObject({ status: "sending", content: "hello" });
+    } finally {
+      await f.close();
+    }
+  });
+});
+
+// Review regressions exercise the production processors and repositories.
+function remoteSession() {
+  return {
+    id: "ark-session",
+    agentId: "ark-agent",
+    agentVersion: 1,
+    environmentId: "env",
+    status: "idle" as const,
+    configSnapshot: {
+      modelId: "model",
+      skills: [],
+      tools: [],
+      environment: {
+        id: "env",
+        type: "environment",
+        configType: "cloud",
+        scope: "account",
+      },
+      completeness: "complete" as const,
+    },
+  };
+}
+function deletionProcessor(f: Awaited<ReturnType<typeof fixture>>) {
+  const ark = { ...f.ark, deleteSession: vi.fn(async () => {}) };
+  const settlement = new SessionSettlementService({
+    repository: f.repositories.sessionLifecycle,
+    ark,
+  });
+  vi.spyOn(settlement, "verify");
+  return {
+    ark,
+    settlement,
+    processor: new SessionDeletionProcessor({
+      jobs: f.repositories.jobs,
+      repository: f.repositories.sessionDeletion,
+      ark,
+      settlement,
+      workerId: "delete-worker",
+    }),
+  };
+}
+
+describe("Task 1 review regression", () => {
+  it("keeps ordered waiting work queued across the generic retry budget", async () => {
+    const f = await fixture();
+    try {
+      const session = await f.service.create(f.input, f.context);
+      const first = await claim(f);
+      await f.repositories.sessionLifecycle.claimSubmission(
+        f.context.userId,
+        first.id,
+        "worker-1",
+        first.leaseGeneration,
+      );
+      await f.repositories.sessionLifecycle.finishSubmission(
+        f.context.userId,
+        first.id,
+        first.leaseGeneration,
+        { workerId: "worker-1", status: "unknown" },
+      );
+      await f.repositories.jobs.succeed(
+        first.id,
+        "worker-1",
+        first.leaseGeneration,
+      );
+      const submissionId = id();
+      await f.service.sendMessage(
+        session.id,
+        { content: "later", submissionId },
+        f.context,
+      );
+      await f.client.query(
+        "update background_jobs set max_attempts=1 where payload->>'operation'='deliver'",
+      );
+      const processor = new SessionReconciliationProcessor({
+        jobs: f.repositories.jobs,
+        service: f.service,
+        workerId: "delivery-worker",
+      });
+      for (let attempt = 0; attempt < 4; attempt++) {
+        await f.client.query(
+          "update background_jobs set run_after=now()-interval '1 second' where status='pending'",
+        );
+        await processor.runOnce();
+      }
+      const receipt = (
+        await f.service.get(f.context.userId, session.id)
+      ).submissions!.find((item) => item.submissionId === submissionId)!;
+      expect(receipt.status).toBe("queued");
+      expect(
+        (
+          await f.client.query(
+            "select status,attempts from background_jobs where id=$1",
+            [receipt.id],
+          )
+        ).rows[0],
+      ).toMatchObject({ status: "pending", attempts: 0 });
+      expect(f.ark.submitEvent).not.toHaveBeenCalled();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("deletes never-attempted local creation without sending the placeholder upstream", async () => {
+    const f = await fixture();
+    try {
+      const session = await f.service.create(f.input, f.context);
+      await f.service.requestDelete(session.id, f.context.userId);
+      const deletion = deletionProcessor(f);
+      deletion.ark.getSession.mockRejectedValue(
+        Object.assign(new Error("placeholder missing"), {
+          category: "not_found",
+        }),
+      );
+      await deletion.processor.runOnce();
+      expect(deletion.ark.getSession).not.toHaveBeenCalled();
+      expect(deletion.ark.submitEvent).not.toHaveBeenCalled();
+      expect(deletion.ark.deleteSession).not.toHaveBeenCalled();
+      expect(
+        (
+          await f.client.query("select * from sessions where id=$1", [
+            session.id,
+          ])
+        ).rows,
+      ).toHaveLength(0);
+      expect(
+        (
+          await f.client.query(
+            "select status from quota_reservations where id=$1",
+            [session.id],
+          )
+        ).rows[0],
+      ).toMatchObject({ status: "released" });
+      expect(
+        (
+          await f.client.query(
+            "select status from background_jobs where payload->>'operation'='deliver'",
+          )
+        ).rows[0],
+      ).toMatchObject({ status: "succeeded" });
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("retains pending deletion while a held remote create response is unresolved", async () => {
+    const f = await fixture();
+    try {
+      let release!: (value: ReturnType<typeof remoteSession>) => void;
+      const response = new Promise<ReturnType<typeof remoteSession>>(
+        (resolve) => {
+          release = resolve;
+        },
+      );
+      f.ark.createSession.mockReturnValueOnce(response);
+      const session = await f.service.create(f.input, f.context);
+      const job = await claim(f);
+      const delivery = f.service.deliverSubmission(job.id, {
+        ...f.context,
+        workerId: "worker-1",
+        leaseGeneration: job.leaseGeneration,
+      });
+      await vi.waitFor(() =>
+        expect(f.ark.createSession).toHaveBeenCalledTimes(1),
+      );
+      await f.service.requestDelete(session.id, f.context.userId);
+      const deletion = deletionProcessor(f);
+      deletion.ark.getSession.mockRejectedValue(
+        Object.assign(new Error("placeholder missing"), {
+          category: "not_found",
+        }),
+      );
+      await deletion.processor.runOnce();
+      expect(
+        (
+          await f.client.query("select id from sessions where id=$1", [
+            session.id,
+          ])
+        ).rows,
+      ).toHaveLength(1);
+      expect(deletion.ark.getSession).not.toHaveBeenCalled();
+      release(remoteSession());
+      await delivery;
+      expect(
+        (
+          await f.client.query(
+            "select ark_session_id from sessions where id=$1",
+            [session.id],
+          )
+        ).rows[0],
+      ).toMatchObject({ ark_session_id: "ark-session" });
+      expect(f.ark.submitEvent).not.toHaveBeenCalled();
+      deletion.ark.getSession.mockResolvedValue(remoteSession());
+      await f.client.query(
+        "update background_jobs set run_after=now()-interval '1 second' where type='delete_session'",
+      );
+      await deletion.processor.runOnce();
+      expect(deletion.ark.deleteSession).toHaveBeenCalledWith(
+        "ark-session",
+        expect.any(Object),
+      );
+      expect(
+        (
+          await f.client.query("select id from sessions where id=$1", [
+            session.id,
+          ])
+        ).rows,
+      ).toHaveLength(0);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("retains pending deletion after an unknown remote creation outcome", async () => {
+    const f = await fixture();
+    try {
+      f.ark.createSession.mockRejectedValueOnce(
+        Object.assign(new Error("response lost"), {
+          category: "unknown_write_outcome",
+        }),
+      );
+      const session = await f.service.create(f.input, f.context);
+      const job = await claim(f);
+      await f.service.deliverSubmission(job.id, {
+        ...f.context,
+        workerId: "worker-1",
+        leaseGeneration: job.leaseGeneration,
+      });
+      await f.service.requestDelete(session.id, f.context.userId);
+      const deletion = deletionProcessor(f);
+      deletion.ark.getSession.mockRejectedValue(
+        Object.assign(new Error("placeholder missing"), {
+          category: "not_found",
+        }),
+      );
+      await deletion.processor.runOnce();
+      expect(
+        (
+          await f.client.query("select id from sessions where id=$1", [
+            session.id,
+          ])
+        ).rows,
+      ).toHaveLength(1);
+      expect(deletion.ark.getSession).not.toHaveBeenCalled();
+      expect(
+        (await f.client.query("select status from message_submissions"))
+          .rows[0],
+      ).toMatchObject({ status: "unknown" });
+      expect(
+        (
+          await f.client.query(
+            "select status from quota_reservations where id=$1",
+            [session.id],
+          )
+        ).rows[0],
+      ).toMatchObject({ status: "unknown_outcome" });
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("recovers minimal history acknowledgements and enriches a cached minimal user event", async () => {
+    const f = await fixture();
+    try {
+      const session = await f.service.create(f.input, f.context);
+      await makeDeliverable(f, session.id);
+      const job = await claim(f);
+      await f.repositories.sessionLifecycle.claimSubmission(
+        f.context.userId,
+        job.id,
+        "worker-1",
+        job.leaseGeneration,
+      );
+      await f.repositories.sessionLifecycle.finishSubmission(
+        f.context.userId,
+        job.id,
+        job.leaseGeneration,
+        { workerId: "worker-1", status: "unknown", eventId: "minimal" },
+      );
+      await f.repositories.sessionLifecycle.appendEvents(
+        f.context.userId,
+        session.id,
+        [
+          {
+            eventId: "minimal",
+            sourceType: "user.message",
+            type: "message",
+            occurredAt: new Date(),
+            payload: {},
+          },
+        ],
+      );
+      f.ark.listEvents.mockResolvedValueOnce([
+        {
+          id: "minimal",
+          type: "user.message",
+          createdAt: new Date().toISOString(),
+          data: {},
+        },
+      ] as never);
+      expect(
+        (
+          await f.service.reconcileSubmission(
+            f.context.userId,
+            session.id,
+            f.input.submissionId,
+            f.context,
+          )
+        ).status,
+      ).toBe("accepted");
+      expect(
+        (await f.service.get(f.context.userId, session.id)).submissions?.[0],
+      ).toMatchObject({ content: null, acceptedContent: "hello" });
+      expect(
+        (
+          await f.repositories.sessionLifecycle.listEvents(
+            f.context.userId,
+            session.id,
+          )
+        )[0]?.payload.content,
+      ).toBe("hello");
+    } finally {
+      await f.close();
+    }
+  });
+
+  it.each(["lease", "expired", "account", "deletion"])(
+    "checks the final create claim after held intent reads (%s)",
+    async (reason) => {
+      const f = await fixture();
+      try {
+        const session = await f.service.create(f.input, f.context);
+        const job = await claim(f);
+        const original = f.repositories.sessionLifecycle.listInputs;
+        let release!: () => void;
+        let entered!: () => void;
+        const readEntered = new Promise<void>((resolve) => {
+          entered = resolve;
+        });
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        vi.spyOn(
+          f.repositories.sessionLifecycle,
+          "listInputs",
+        ).mockImplementationOnce(async (...args) => {
+          entered();
+          await gate;
+          return original(...args);
+        });
+        f.ark.createSession.mockResolvedValue(remoteSession());
+        const delivery = f.service
+          .deliverSubmission(job.id, {
+            ...f.context,
+            workerId: "worker-1",
+            leaseGeneration: job.leaseGeneration,
+          })
+          .catch(() => {});
+        await readEntered;
+        if (reason === "lease" || reason === "expired") {
+          await f.client.query(
+            "update background_jobs set locked_at=now()-interval '10 minutes' where id=$1",
+            [job.id],
+          );
+          if (reason === "lease") await claim(f, "replacement");
+        } else if (reason === "account")
+          await f.client.query(
+            "update users set status='disabled' where id=$1",
+            [f.context.userId],
+          );
+        else await f.service.requestDelete(session.id, f.context.userId);
+        release();
+        await delivery;
+        expect(f.ark.createSession).not.toHaveBeenCalled();
+        expect(
+          (
+            await f.client.query(
+              "select create_attempted_at from sessions where id=$1",
+              [session.id],
+            )
+          ).rows[0],
+        ).toMatchObject({ create_attempted_at: null });
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it("rejects interruption of a pending local task without reporting successful stop", async () => {
+    const f = await fixture();
+    try {
+      const session = await f.service.create(f.input, f.context);
+      await expect(
+        f.service.interrupt(session.id, f.context),
+      ).rejects.toMatchObject({ code: "SESSION_BUSY" });
+      expect(f.ark.submitEvent).not.toHaveBeenCalled();
+      expect(
+        (await f.service.get(f.context.userId, session.id)).submissions?.[0]
+          ?.status,
+      ).toBe("queued");
     } finally {
       await f.close();
     }
