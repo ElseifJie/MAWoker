@@ -15,7 +15,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { App, FIRST_MESSAGE_STREAM_TIMEOUT_MS } from "./App.js";
+import { App } from "./App.js";
 
 function readCss(path: string): string {
   return readFileSync(
@@ -2352,232 +2352,121 @@ describe("new task composer", () => {
     expect(findStyleRules(".ui-app-shell__main > .page")).toHaveLength(1);
   });
 
-  it("fails a first message the event stream never opened for", async () => {
-    const handler = authenticatedHandler();
-    vi.mocked(fetch).mockImplementation(async (input, init) => {
-      const path = new URL(String(input), "http://localhost").pathname;
-      if (path === "/api/v1/sessions" && (init?.method ?? "GET") === "POST") {
-        return json({
-          ...sessionsResponse.sessions[0],
-          id: createdSessionId,
-        });
-      }
-      return handler(input, init);
-    });
-
-    renderApp();
-    const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "New task" });
-    await user.type(screen.getByLabelText("Task message"), "Prepare the plan");
-
-    // Fake timers from here: this is the moment the delivery timer is armed.
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      const flush = async () => {
-        for (let tick = 0; tick < 5; tick += 1) {
-          await act(async () => {
-            await vi.advanceTimersByTimeAsync(0);
-          });
-        }
-      };
-
-      await act(async () => {
-        screen.getByRole("button", { name: "Send task" }).click();
-      });
-      await flush();
-
-      expect(
-        within(
-          document.querySelector<HTMLFormElement>(".session-composer")!,
-        ).getByText("Connecting…"),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByRole("button", { name: "Retry first message" }),
-      ).not.toBeInTheDocument();
-
-      // The stream is never opened, so the delivery must not wait forever.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(FIRST_MESSAGE_STREAM_TIMEOUT_MS);
-      });
-
-      expect(
-        screen.getByText(
-          "The first message could not be sent. Retry from this Session.",
-        ),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByRole("button", { name: "Retry first message" }),
-      ).toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("retains a created Session and retries only its failed first message", async () => {
+  it("persists the first message in creation and renders it without waiting for the stream", async () => {
     const calls: FetchCall[] = [];
-    let uploadAttempts = 0;
-    let resolveCreate!: (response: Response) => void;
-    let resolveMessage!: (response: Response) => void;
-    let messageAttempts = 0;
-    const createResponse = new Promise<Response>((resolve) => {
-      resolveCreate = resolve;
-    });
-    const messageResponse = new Promise<Response>((resolve) => {
-      resolveMessage = resolve;
-    });
-
+    const durable = {
+      ...sessionsResponse.sessions[0],
+      id: createdSessionId,
+      title: "Prepare the plan",
+      upstreamReady: false,
+      inputs: [],
+      submissions: [
+        {
+          submissionId: "00000000-0000-4000-8000-000000000099",
+          status: "queued",
+          content: "Prepare the plan",
+          upstreamEventId: null,
+          errorCode: null,
+          createdAt: "2026-09-08T00:00:00Z",
+        },
+      ],
+    };
+    const handler = authenticatedHandler();
     vi.mocked(fetch).mockImplementation(async (input, init) => {
       const path = new URL(String(input), "http://localhost").pathname;
       const method = init?.method ?? "GET";
       calls.push({ path, method, body: init?.body });
-
-      if (path === "/api/v1/uploads") {
-        uploadAttempts += 1;
-        return uploadAttempts === 1
-          ? apiError("ARK_UNAVAILABLE", 503, true)
-          : json(
-              {
-                id: uploadId,
-                name: "brief.txt",
-                mimeType: "text/plain",
-                sizeBytes: 5,
-                mountPath: `/mnt/session/inputs/${uploadId}-brief.txt`,
-                status: "uploaded",
-                expiresAt: "2026-09-08T00:00:00.000Z",
-              },
-              201,
-            );
-      }
-      if (path === "/api/v1/sessions" && method === "POST") {
-        return createResponse;
-      }
-      if (path === `/api/v1/sessions/${createdSessionId}/messages`) {
-        messageAttempts += 1;
-        return messageAttempts === 1
-          ? messageResponse
-          : json({ eventId: "event-2", delivery: "accepted" }, 202);
-      }
-      return authenticatedHandler()(input, init);
+      if (path === "/api/v1/sessions" && method === "POST")
+        return json(durable, 202);
+      if (path === `/api/v1/sessions/${createdSessionId}`) return json(durable);
+      return handler(input, init);
     });
-
     renderApp();
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "New task" });
-
-    const file = new File(["hello"], "brief.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("File picker"), file);
+    await user.type(screen.getByLabelText("Task message"), "Prepare the plan");
+    await user.click(screen.getByRole("button", { name: "Send task" }));
     expect(
-      await screen.findByText("brief.txt could not be uploaded."),
+      await within(
+        await screen.findByRole("region", { name: "Session timeline" }),
+      ).findByText("Prepare the plan"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send task" })).toBeDisabled();
-
-    await user.click(screen.getByRole("button", { name: "Retry upload" }));
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
-    await user.type(
-      screen.getByLabelText("Task message"),
-      "Summarize the attached brief",
-    );
-
-    const send = screen.getByRole("button", { name: "Send task" });
-    expect(send).toHaveAttribute("title", "Send task");
-    await user.click(send);
-    expect(await screen.findByText("Creating Session…")).toBeInTheDocument();
-
-    resolveCreate(
-      json(
-        {
-          ...sessionsResponse.sessions[0],
-          id: createdSessionId,
-          title: "Summarize the attached brief",
-          status: "idle",
-        },
-        201,
-      ),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Current location")).toHaveTextContent(
-        `/sessions/${createdSessionId}`,
-      );
+    const createCall = calls.find(
+      (call) => call.path === "/api/v1/sessions" && call.method === "POST",
+    )!;
+    expect(JSON.parse(String(createCall.body))).toEqual({
+      agentId,
+      uploadIds: [],
+      title: "Prepare the plan",
+      content: "Prepare the plan",
+      submissionId: expect.any(String),
     });
-    expect(
-      await screen.findByRole("link", { name: /Summarize the attached brief/ }),
-    ).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        within(
-          document.querySelector<HTMLFormElement>(".session-composer")!,
-        ).getByText("Connecting…"),
-      ).toBeInTheDocument(),
-    );
     expect(
       calls.filter((call) => call.path.endsWith("/messages")),
     ).toHaveLength(0);
-    const createdSource = MockEventSource.instances.find((source) =>
-      source.url.includes(createdSessionId),
-    )!;
-    act(() => createdSource.emitOpen());
-    await waitFor(() =>
-      expect(
-        within(
-          document.querySelector<HTMLFormElement>(".session-composer")!,
-        ).getByText("Sending…"),
-      ).toBeInTheDocument(),
-    );
-    expect(document.querySelector(".session-delivery")).not.toBeInTheDocument();
-    resolveMessage(apiError("ARK_UNAVAILABLE", 503, true));
-
     expect(
-      await within(
-        document.querySelector<HTMLFormElement>(".session-composer")!,
-      ).findByText(
-        "The first message could not be sent. Retry from this Session.",
+      MockEventSource.instances.filter((source) =>
+        source.url.includes(createdSessionId),
       ),
+    ).toHaveLength(0);
+  });
+
+  it("clears a persisted followup draft while its detail refresh is still pending", async () => {
+    const handler = authenticatedHandler();
+    let posted = false;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === `/api/v1/sessions/${sessionId}/messages`) {
+        posted = true;
+        return json(
+          { eventId: "receipt-1", delivery: "queued", status: "queued" },
+          202,
+        );
+      }
+      if (path === `/api/v1/sessions/${sessionId}` && posted)
+        return new Promise<Response>(() => {});
+      return handler(input, init);
+    });
+    renderApp(`/sessions/${sessionId}`);
+    const user = userEvent.setup();
+    const input = await screen.findByLabelText("Message");
+    await user.type(input, "Persist this followup");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await waitFor(() => expect(input).toHaveValue(""));
+    expect(screen.getByText("Persist this followup")).toBeInTheDocument();
+  });
+
+  it("recovers the durable unknown message after reloading and does not offer blind retry", async () => {
+    const handler = authenticatedHandler();
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const path = new URL(String(input), "http://localhost").pathname;
+      if (path === `/api/v1/sessions/${sessionId}`)
+        return json({
+          ...sessionsResponse.sessions[0],
+          inputs: [],
+          submissions: [
+            {
+              submissionId: "00000000-0000-4000-8000-000000000099",
+              status: "unknown",
+              content: "Saved before disconnect",
+              upstreamEventId: null,
+              errorCode: "ARK_UNKNOWN_WRITE_OUTCOME",
+              createdAt: "2026-09-08T00:00:00Z",
+            },
+          ],
+        });
+      return handler(input, init);
+    });
+    renderApp(`/sessions/${sessionId}`);
+    expect(
+      await screen.findByText("Saved before disconnect"),
     ).toBeInTheDocument();
-    const firstMessageAlert = within(
-      document.querySelector<HTMLFormElement>(".session-composer")!,
-    ).getByRole("alert");
-    expect(firstMessageAlert).toHaveClass("ui-alert--danger");
-    expect(firstMessageAlert.closest(".session-page")).toHaveClass(
-      "session-page--composer-error",
-    );
-    expect(document.querySelector(".session-delivery")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Current location")).toHaveTextContent(
-      `/sessions/${createdSessionId}`,
-    );
-
-    await user.click(
-      screen.getByRole("button", { name: "Retry first message" }),
-    );
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: "Retry first message" }),
-      ).not.toBeInTheDocument();
-    });
-
-    const createCall = calls.find(
-      (call) => call.path === "/api/v1/sessions" && call.method === "POST",
-    );
-    const messageCall = calls.find((call) => call.path.endsWith("/messages"));
-    expect(JSON.parse(String(createCall?.body))).toEqual({
-      agentId,
-      uploadIds: [uploadId],
-      title: "Summarize the attached brief",
-    });
-    expect(JSON.parse(String(messageCall?.body))).toEqual({
-      content: "Summarize the attached brief",
-    });
-    expect(calls.indexOf(createCall!)).toBeLessThan(
-      calls.indexOf(messageCall!),
+    expect(screen.getByText(/Delivery is being confirmed/)).toHaveTextContent(
+      "00000000-0000-4000-8000-000000000099",
     );
     expect(
-      calls.filter(
-        (call) => call.path === "/api/v1/sessions" && call.method === "POST",
-      ),
-    ).toHaveLength(1);
-    expect(
-      calls.filter((call) => call.path.endsWith("/messages")),
-    ).toHaveLength(2);
+      screen.queryByRole("button", { name: "Retry first message" }),
+    ).not.toBeInTheDocument();
   });
 });
 

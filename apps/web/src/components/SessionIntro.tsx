@@ -1,3 +1,4 @@
+import { clearDraft, readDraft, writeDraft } from "../submission-drafts.js";
 import {
   FileText,
   Paperclip,
@@ -83,6 +84,7 @@ export function quotaBlocker(usage: UsageSummary): string | null {
 }
 
 export interface SessionIntroProps {
+  draftKey?: string;
   agents: AgentList;
   usage: UsageSummary;
   onAuthRequired: () => void;
@@ -90,6 +92,7 @@ export interface SessionIntroProps {
 }
 
 export function SessionIntro({
+  draftKey = "new",
   agents,
   usage,
   onAuthRequired,
@@ -101,7 +104,10 @@ export function SessionIntro({
   const [selectedAgentId, setSelectedAgentId] = useState(
     agents.selection?.agentId ?? "",
   );
-  const [message, setMessage] = useState("");
+  const [draft] = useState(() => readDraft(draftKey));
+  const [submissionId, setSubmissionId] = useState(draft.submissionId);
+  const [message, setMessage] = useState(draft.content);
+  const attemptedRequest = useRef("");
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [submissionStatus, setSubmissionStatus] = useState("");
   const [submissionError, setSubmissionError] = useState<string | null>(null);
@@ -189,13 +195,28 @@ export function SessionIntro({
     setSubmissionError(null);
     setSubmissionStatus("Creating Session…");
     try {
+      const requestHash = JSON.stringify({
+        selectedAgentId,
+        content,
+        uploads: uploads.map((upload) => upload.key),
+      });
+      const stableId =
+        attemptedRequest.current && attemptedRequest.current !== requestHash
+          ? crypto.randomUUID()
+          : submissionId;
+      attemptedRequest.current = requestHash;
+      setSubmissionId(stableId);
+      writeDraft(draftKey, content, stableId);
       const session = await apiClient.createSession({
+        submissionId: stableId,
+        content,
         agentId: selectedAgentId,
         uploadIds: uploads.flatMap((upload) =>
           upload.status === "ready" ? [upload.upload.id] : [],
         ),
         title: content.slice(0, 120),
       });
+      clearDraft(draftKey);
       onSessionCreated(session, content);
     } catch (error) {
       if (isAuthError(error)) {
@@ -245,7 +266,12 @@ export function SessionIntro({
           id="task-message"
           ref={messageInput}
           value={message}
-          onChange={(event) => setMessage(event.target.value)}
+          onChange={(event) => {
+            const id = crypto.randomUUID();
+            setSubmissionId(id);
+            setMessage(event.target.value);
+            writeDraft(draftKey, event.target.value, id);
+          }}
           placeholder="Describe what you need done…"
           rows={6}
           disabled={submitting}

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   boolean,
   check,
   foreignKey,
@@ -914,5 +915,45 @@ export const auditLogs = pgTable(
     ),
     index("audit_logs_action_created_idx").on(table.action, table.createdAt),
     index("audit_logs_request_id_idx").on(table.requestId),
+  ],
+);
+
+export const messageSubmissions = pgTable(
+  "message_submissions",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id),
+    sessionId: uuid("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    submissionId: uuid("submission_id").notNull(),
+    requestHash: text("request_hash").notNull(),
+    content: text("content"),
+    temporary: boolean("temporary").notNull().default(false),
+    sequence: bigserial("sequence", { mode: "number" }).notNull(),
+    status: text("status").notNull().default("queued"),
+    upstreamEventId: text("upstream_event_id"),
+    lastErrorCode: text("last_error_code"),
+    leaseGeneration: integer("lease_generation").notNull().default(0),
+    retainUntil: timestamp("retain_until", { withTimezone: true })
+      .notNull()
+      .default(sql`now() + interval '7 days'`),
+    ...timestamps,
+  },
+  (table) => [
+    unique("message_submissions_owner_submission_key").on(
+      table.ownerUserId,
+      table.submissionId,
+    ),
+    index("message_submissions_session_sequence_idx").on(
+      table.sessionId,
+      table.sequence,
+    ),
+    check(
+      "message_submissions_status_check",
+      sql`${table.status} in ('queued','sending','accepted','failed','unknown')`,
+    ),
   ],
 );

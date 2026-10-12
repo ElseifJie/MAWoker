@@ -33,6 +33,7 @@ const USER_DATA_TABLES = [
   "session_inputs",
   "quota_interrupt_jobs",
   "background_jobs",
+  "message_submissions",
   "sessions",
   "session_event_cursors",
   "personal_agents",

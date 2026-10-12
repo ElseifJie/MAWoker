@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ArkEvent,
   ArkGateway,
@@ -103,7 +104,80 @@ interface SessionAuditEntry {
   errorCode?: string | undefined;
 }
 
+export interface MessageSubmission {
+  id: string;
+  ownerUserId: string;
+  sessionId: string;
+  submissionId: string;
+  requestHash: string;
+  content: string | null;
+  temporary: boolean;
+  sequence: number;
+  status: "queued" | "sending" | "accepted" | "failed" | "unknown";
+  acceptedContent?: string | null;
+  upstreamEventId: string | null;
+  lastErrorCode: string | null;
+  leaseGeneration: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
 export interface SessionRepository {
+  findSubmission?(
+    userId: string,
+    submissionId: string,
+  ): PromiseLike<MessageSubmission | undefined>;
+  enqueueSubmission?(input: {
+    id: string;
+    ownerUserId: string;
+    sessionId: string;
+    submissionId: string;
+    requestHash: string;
+    content: string;
+    temporary: boolean;
+    intent?: SessionRecord;
+    uploadIds?: string[];
+  }): PromiseLike<MessageSubmission>;
+  listSubmissions?(
+    userId: string,
+    sessionId: string,
+  ): PromiseLike<MessageSubmission[]>;
+  claimSubmission?(
+    userId: string,
+    id: string,
+    workerId: string,
+    generation: number,
+  ): PromiseLike<MessageSubmission | undefined>;
+  validateSubmission?(
+    userId: string,
+    id: string,
+    workerId: string,
+    generation: number,
+  ): PromiseLike<SessionRecord>;
+  attachSubmissionMemory?(
+    userId: string,
+    sessionId: string,
+    memoryStoreId: string,
+  ): PromiseLike<void>;
+  finishSubmission?(
+    userId: string,
+    id: string,
+    generation: number,
+    input: {
+      status: "queued" | "accepted" | "unknown" | "failed";
+      eventId?: string;
+      errorCode?: string;
+      event?: StoredSessionEvent;
+      workerId?: string;
+    },
+  ): PromiseLike<boolean>;
+  rememberSubmissionReceipt?(
+    userId: string,
+    id: string,
+    generation: number,
+    eventId: string,
+  ): PromiseLike<void>;
+  expireSubmissionBodies?(): PromiseLike<void>;
+
   prepareCreate(
     record: SessionRecord,
     uploadIds?: string[],
@@ -361,15 +435,38 @@ export class SessionService {
       title?: string;
       uploadIds?: string[];
       temporary?: boolean;
+      content?: string;
+      submissionId?: string;
     },
     context: SessionContext,
   ): Promise<SessionRecord & { inputs?: SessionInputRecord[] }> {
+    const requestHash = this.hash({
+      agentId: input.agentId,
+      title: input.title?.trim() ?? "",
+      uploadIds: [...new Set(input.uploadIds ?? [])].sort(),
+      temporary: input.temporary ?? false,
+      content: input.content?.trim(),
+    });
+    if (input.submissionId) {
+      const existing = await this.dependencies.repository.findSubmission?.(
+        context.userId,
+        input.submissionId,
+      );
+      if (existing) {
+        if (existing.requestHash !== requestHash)
+          throw Object.assign(
+            new Error("Submission ID was used for another request"),
+            { code: "SUBMISSION_CONFLICT" },
+          );
+        return this.get(context.userId, existing.sessionId);
+      }
+    }
     const agent = await this.dependencies.agentResolver.resolveForNewSession(
       context.userId,
       input.agentId,
     );
     const memoryStoreId =
-      !input.temporary && this.dependencies.memory
+      !input.submissionId && !input.temporary && this.dependencies.memory
         ? await this.dependencies.memory.ensure(context.userId)
         : null;
     const id = this.dependencies.createId();
@@ -403,6 +500,20 @@ export class SessionService {
       updatedAt: timestamp,
     };
     const uploadIds = [...new Set(input.uploadIds ?? [])];
+    if (input.submissionId && input.content) {
+      const submission = await this.enqueue({
+        id: this.dependencies.createId(),
+        ownerUserId: context.userId,
+        sessionId: id,
+        submissionId: input.submissionId,
+        requestHash,
+        content: input.content.trim(),
+        temporary: input.temporary ?? false,
+        intent,
+        uploadIds,
+      });
+      return this.get(context.userId, submission.sessionId);
+    }
     const inputs =
       (await this.dependencies.repository.prepareCreate(intent, uploadIds)) ??
       [];
@@ -479,12 +590,28 @@ export class SessionService {
   async get(
     userId: string,
     id: string,
-  ): Promise<SessionRecord & { inputs: SessionInputRecord[] }> {
+  ): Promise<
+    SessionRecord & {
+      inputs: SessionInputRecord[];
+      submissions?: MessageSubmission[];
+    }
+  > {
     const session = await this.requireOwned(userId, id);
     const inputs = this.dependencies.repository.listInputs
       ? await this.dependencies.repository.listInputs(userId, id)
       : [];
-    return { ...session, inputs };
+    return {
+      ...session,
+      inputs,
+      ...(this.dependencies.repository.listSubmissions
+        ? {
+            submissions: await this.dependencies.repository.listSubmissions(
+              userId,
+              id,
+            ),
+          }
+        : {}),
+    };
   }
 
   async archive(id: string, userId: string): Promise<SessionRecord> {
@@ -565,9 +692,35 @@ export class SessionService {
 
   async sendMessage(
     id: string,
-    input: { content: string },
+    input: { content: string; submissionId?: string },
     context: SessionContext,
-  ): Promise<{ eventId: string; delivery: "accepted" | "queued" }> {
+  ): Promise<{
+    eventId: string;
+    delivery: "accepted" | "queued";
+    submissionId?: string;
+    status?: MessageSubmission["status"];
+  }> {
+    if (input.submissionId) {
+      await this.requireOwned(context.userId, id);
+      const submission = await this.enqueue({
+        id: this.dependencies.createId(),
+        ownerUserId: context.userId,
+        sessionId: id,
+        submissionId: input.submissionId,
+        requestHash: this.hash({
+          sessionId: id,
+          content: input.content.trim(),
+        }),
+        content: input.content.trim(),
+        temporary: true,
+      });
+      return {
+        eventId: submission.upstreamEventId ?? submission.id,
+        delivery: submission.status === "accepted" ? "accepted" : "queued",
+        submissionId: submission.submissionId,
+        status: submission.status,
+      };
+    }
     if (this.dependencies.memory) {
       const session = await this.requireOwned(context.userId, id);
       if (session.memoryStoreId != null) {
@@ -663,6 +816,9 @@ export class SessionService {
   ): Promise<{ session: SessionRecord; events: AsyncIterable<UiEvent> }> {
     const session = await this.requireOwned(context.userId, id);
     const repository = this.dependencies.repository;
+    if (session.arkSessionId.startsWith("pending:")) {
+      return { session, events: { async *[Symbol.asyncIterator]() {} } };
+    }
     const stored = repository.listEvents
       ? await repository.listEvents(context.userId, id)
       : [];
@@ -824,6 +980,257 @@ export class SessionService {
     };
   }
 
+  async expireSubmissionBodies(): Promise<void> {
+    await this.dependencies.repository.expireSubmissionBodies?.();
+  }
+
+  private hash(input: unknown): string {
+    return createHash("sha256").update(JSON.stringify(input)).digest("hex");
+  }
+
+  private enqueue(
+    input: Parameters<NonNullable<SessionRepository["enqueueSubmission"]>>[0],
+  ) {
+    const enqueue = this.dependencies.repository.enqueueSubmission;
+    if (!enqueue) throw new Error("Durable submissions unavailable");
+    return enqueue.call(this.dependencies.repository, input);
+  }
+
+  async deliverSubmission(
+    id: string,
+    context: SessionContext & {
+      workerId: string;
+      leaseGeneration: number;
+      finalAttempt?: boolean;
+    },
+  ): Promise<void> {
+    const repository = this.dependencies.repository;
+    const item = await repository.claimSubmission?.(
+      context.userId,
+      id,
+      context.workerId,
+      context.leaseGeneration,
+    );
+    if (!item)
+      throw Object.assign(new Error("Delivery lease lost"), {
+        code: "DELIVERY_LEASE_LOST",
+      });
+    if (item.status === "accepted" || item.status === "failed") return;
+    const finish = async (
+      status: "queued" | "accepted" | "unknown" | "failed",
+      errorCode?: string,
+      event?: ArkEvent,
+    ) => {
+      const saved = await repository.finishSubmission?.(
+        context.userId,
+        id,
+        context.leaseGeneration,
+        {
+          status,
+          workerId: context.workerId,
+          ...(errorCode ? { errorCode } : {}),
+          ...(event
+            ? {
+                eventId: event.id,
+                event: {
+                  eventId: event.id,
+                  sourceType: event.type,
+                  type: normalizeArkEvent(event).type,
+                  occurredAt: new Date(event.createdAt),
+                  payload: {
+                    ...event.data,
+                    content: event.data?.content ?? item.content,
+                  },
+                },
+              }
+            : {}),
+        },
+      );
+      if (saved === false)
+        throw Object.assign(new Error("Delivery lease lost"), {
+          code: "DELIVERY_LEASE_LOST",
+        });
+    };
+    if (item.status === "unknown") {
+      // Only a recorded receipt verified against upstream history is evidence.
+      if (item.upstreamEventId) {
+        const session = await this.requireOwned(context.userId, item.sessionId);
+        if (!session.arkSessionId.startsWith("pending:")) {
+          const events = await this.dependencies.ark.listEvents(
+            session.arkSessionId,
+            { correlationId: context.requestId },
+          );
+          const event = events.find(
+            (event) =>
+              event.id === item.upstreamEventId &&
+              event.type === "user.message",
+          );
+          if (event) await finish("accepted", undefined, event);
+        }
+      }
+      return;
+    }
+    let writeStarted = false;
+    try {
+      let session = await repository.validateSubmission!(
+        context.userId,
+        id,
+        context.workerId,
+        context.leaseGeneration,
+      );
+      if (!item.content) {
+        await finish("failed", "SUBMISSION_BODY_EXPIRED");
+        return;
+      }
+      if (session.arkSessionId.startsWith("pending:")) {
+        if (!item.temporary && this.dependencies.memory) {
+          const memoryId = await this.dependencies.memory.ensure(
+            context.userId,
+          );
+          await repository.attachSubmissionMemory?.(
+            context.userId,
+            item.sessionId,
+            memoryId,
+          );
+        }
+        await repository.validateSubmission!(
+          context.userId,
+          id,
+          context.workerId,
+          context.leaseGeneration,
+        );
+        writeStarted = true;
+        session = await this.reconcileCreate(item.sessionId, context);
+      }
+      session = await repository.validateSubmission!(
+        context.userId,
+        id,
+        context.workerId,
+        context.leaseGeneration,
+      );
+      writeStarted = true;
+      const event = await this.dependencies.ark.submitEvent(
+        session.arkSessionId,
+        { type: "user.message", data: { content: item.content } },
+        { correlationId: `submission:${item.submissionId}` },
+      );
+      await repository.rememberSubmissionReceipt?.(
+        context.userId,
+        id,
+        context.leaseGeneration,
+        event.id,
+      );
+      await finish("accepted", undefined, event);
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? String(error.code)
+          : arkErrorCode(error);
+      const definiteCategories = [
+        "rate_limited",
+        "runtime_busy",
+        "unavailable",
+        "version_conflict",
+        "session_terminated",
+        "not_found",
+      ];
+      const unknown =
+        isArkCategory(error, "unknown_write_outcome") ||
+        error instanceof SessionCreateVerificationError ||
+        (writeStarted &&
+          !definiteCategories.some((category) =>
+            isArkCategory(error, category),
+          ));
+      const retryable =
+        !unknown &&
+        (isArkCategory(error, "rate_limited") ||
+          isArkCategory(error, "unavailable") ||
+          isArkCategory(error, "runtime_busy"));
+      await finish(
+        unknown
+          ? "unknown"
+          : retryable && !context.finalAttempt
+            ? "queued"
+            : "failed",
+        code,
+      );
+      if (retryable && !context.finalAttempt)
+        throw Object.assign(new Error(code), { code });
+    }
+  }
+
+  async reconcileSubmission(
+    userId: string,
+    sessionId: string,
+    submissionId: string,
+    context: SessionContext,
+  ): Promise<
+    Omit<MessageSubmission, "content" | "requestHash" | "acceptedContent">
+  > {
+    const session = await this.requireOwned(userId, sessionId);
+    const item = (
+      await this.dependencies.repository.listSubmissions?.(userId, sessionId)
+    )?.find((item) => item.submissionId === submissionId);
+    if (!item) throw new ResourceNotFoundError();
+    if (
+      item.status === "unknown" &&
+      item.upstreamEventId &&
+      !session.arkSessionId.startsWith("pending:")
+    ) {
+      const events = await this.dependencies.ark.listEvents(
+        session.arkSessionId,
+        { correlationId: context.requestId },
+      );
+      const event = events.find(
+        (event) =>
+          event.id === item.upstreamEventId && event.type === "user.message",
+      );
+      if (event)
+        await this.dependencies.repository.finishSubmission?.(
+          userId,
+          item.id,
+          item.leaseGeneration,
+          {
+            status: "accepted",
+            eventId: event.id,
+            event: {
+              eventId: event.id,
+              sourceType: event.type,
+              type: normalizeArkEvent(event).type,
+              occurredAt: new Date(event.createdAt),
+              payload: event.data ?? {},
+            },
+          },
+        );
+    }
+    const refreshed = (
+      await this.dependencies.repository.listSubmissions!(userId, sessionId)
+    ).find((value) => value.id === item.id)!;
+    await this.dependencies.repository.audit({
+      actorUserId: context.userId,
+      ownerUserId: userId,
+      action: "session.submission_reconcile",
+      resourceType: "session",
+      resourceId: sessionId,
+      result: "succeeded",
+      requestId: context.requestId,
+    });
+    return {
+      id: refreshed.id,
+      ownerUserId: refreshed.ownerUserId,
+      sessionId: refreshed.sessionId,
+      submissionId: refreshed.submissionId,
+      temporary: refreshed.temporary,
+      sequence: refreshed.sequence,
+      status: refreshed.status,
+      upstreamEventId: refreshed.upstreamEventId,
+      lastErrorCode: refreshed.lastErrorCode,
+      leaseGeneration: refreshed.leaseGeneration,
+      createdAt: refreshed.createdAt,
+      updatedAt: refreshed.updatedAt,
+    };
+  }
+
   async reconcileCreate(
     id: string,
     context: SessionContext,
@@ -969,7 +1376,7 @@ export class SessionService {
     const complete = repository.historyBackfilled
       ? await repository.historyBackfilled(context.userId, id)
       : true;
-    if (!complete) {
+    if (!complete && !session.arkSessionId.startsWith("pending:")) {
       const sources = await this.dependencies.ark.listEvents(
         session.arkSessionId,
         {

@@ -4,6 +4,24 @@ import { createMemoryRepository } from "./memory-repository.js";
 
 type Row = Record<string, unknown>;
 
+interface SubmissionRow extends Row {
+  id: string;
+  ownerUserId: string;
+  sessionId: string;
+  submissionId: string;
+  requestHash: string;
+  content: string | null;
+  temporary: boolean;
+  sequence: number;
+  status: "queued" | "sending" | "accepted" | "failed" | "unknown";
+  upstreamEventId: string | null;
+  lastErrorCode: string | null;
+  leaseGeneration: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+const submissionSelection = sql`id,owner_user_id as "ownerUserId",session_id as "sessionId",submission_id as "submissionId",request_hash as "requestHash",content,temporary,sequence,status,upstream_event_id as "upstreamEventId",last_error_code as "lastErrorCode",lease_generation as "leaseGeneration",created_at as "createdAt",updated_at as "updatedAt"`;
+
 interface QueryResult<T extends Row> {
   rows: T[];
 }
@@ -966,6 +984,21 @@ async function enqueuePersonalAgentReconciliation(
               last_error = null,
               updated_at = now()`,
   );
+}
+
+async function releaseUnattemptedDurableCreate(
+  database: DatabaseClient,
+  userId: string,
+  sessionId: string,
+): Promise<void> {
+  const terminal = await first(
+    database,
+    sql`update sessions set status='terminated',last_error_code='SUBMISSION_FAILED',error_recoverable=false,updated_at=now() where id=${sessionId} and owner_user_id=${userId} and ark_session_id like 'pending:%' and create_attempted_at is null and not exists(select 1 from message_submissions where session_id=${sessionId} and status in ('queued','sending','unknown')) returning id`,
+  );
+  if (terminal)
+    await database.execute(
+      sql`update quota_reservations set status='released',resolved_at=now() where id=${sessionId} and user_id=${userId} and status in ('active','unknown_outcome')`,
+    );
 }
 
 export function createRepositories(database: unknown) {
@@ -2750,6 +2783,362 @@ export function createRepositories(database: unknown) {
     },
     sessions: tenantRepository(db, sql.raw("sessions")),
     sessionLifecycle: {
+      findSubmission(userId: string, submissionId: string) {
+        return first<SubmissionRow>(
+          db,
+          sql`select ${submissionSelection} from message_submissions where owner_user_id=${userId} and submission_id=${submissionId}`,
+        );
+      },
+      async enqueueSubmission(input: {
+        id: string;
+        ownerUserId: string;
+        sessionId: string;
+        submissionId: string;
+        requestHash: string;
+        content: string;
+        temporary: boolean;
+        intent?: SessionRecordData;
+        uploadIds?: string[];
+      }): Promise<SubmissionRow> {
+        return db.transaction(async (transaction) => {
+          const owner = await first(
+            transaction,
+            sql`select id from users where id=${input.ownerUserId} and role='user' and status='active' for update`,
+          );
+          if (!owner)
+            throw Object.assign(new Error("Resource not found"), {
+              name: "ResourceNotFoundError",
+            });
+          const existing = await first<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where owner_user_id=${input.ownerUserId} and submission_id=${input.submissionId}`,
+          );
+          if (existing) {
+            if (existing.requestHash !== input.requestHash)
+              throw Object.assign(
+                new Error("Submission ID was already used for another request"),
+                { code: "SUBMISSION_CONFLICT" },
+              );
+            return existing;
+          }
+          const lifecycle = createRepositories(transaction).sessionLifecycle;
+          if (input.intent) {
+            await lifecycle.prepareCreate(input.intent, input.uploadIds);
+            // The delivery job owns creation. Retain the existing reservation/job
+            // identity for completeCreate and deletion without a competing worker.
+            await transaction.execute(
+              sql`update background_jobs set status='succeeded' where id=${input.sessionId}`,
+            );
+          }
+          const prepared = await lifecycle.beginMessage(
+            input.ownerUserId,
+            input.sessionId,
+            true,
+          );
+          if (!prepared)
+            throw Object.assign(new Error("Session unavailable"), {
+              name: "ResourceNotFoundError",
+            });
+          if (prepared.kind === "deletion_conflict")
+            throw Object.assign(new Error("Session deletion pending"), {
+              name: "SessionDeletionConflictError",
+              deletionState: prepared.deletionState,
+              code:
+                prepared.deletionState === "pending"
+                  ? "DELETION_PENDING"
+                  : "DELETION_FAILED",
+            });
+          if (prepared.session.status === "terminated")
+            throw Object.assign(new Error("Session terminated"), {
+              name: "SessionTerminatedError",
+            });
+          const firstSubmission = await first<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where session_id=${input.sessionId} order by sequence limit 1`,
+          );
+          const temporary = input.intent
+            ? input.temporary
+            : (firstSubmission?.temporary ?? input.temporary);
+          if (!temporary) {
+            const memory = createMemoryRepository(transaction);
+            if (await memory.get(input.ownerUserId))
+              await memory.gate(input.ownerUserId);
+          }
+          const submission = await requiredFirst<SubmissionRow>(
+            transaction,
+            sql`insert into message_submissions
+            (id,owner_user_id,session_id,submission_id,request_hash,content,temporary)
+            values (${input.id},${input.ownerUserId},${input.sessionId},${input.submissionId},${input.requestHash},${input.content},${temporary}) returning ${submissionSelection}`,
+          );
+          await transaction.execute(sql`insert into background_jobs (id,owner_user_id,type,status,priority,payload,run_after)
+            values (${input.id},${input.ownerUserId},'reconcile_session','pending',100,${JSON.stringify({ operation: "deliver", sessionId: input.sessionId })}::jsonb,now())`);
+          return submission;
+        });
+      },
+      async listSubmissions(
+        userId: string,
+        sessionId: string,
+      ): Promise<SubmissionRow[]> {
+        return rows<SubmissionRow>(
+          db,
+          sql`select ${submissionSelection}, (select payload->>'content' from session_events where session_id=message_submissions.session_id and event_id=message_submissions.upstream_event_id) as "acceptedContent" from message_submissions where owner_user_id=${userId} and session_id=${sessionId} order by sequence`,
+        );
+      },
+      async claimSubmission(
+        userId: string,
+        id: string,
+        workerId: string,
+        generation: number,
+      ): Promise<SubmissionRow | undefined> {
+        return db.transaction(async (transaction) => {
+          const job = await first(
+            transaction,
+            sql`select id from background_jobs where id=${id} and owner_user_id=${userId} and status='running' and locked_by=${workerId} and lease_generation=${generation} and locked_at > now() - interval '5 minutes' for update`,
+          );
+          if (!job) return undefined;
+          const item = await first<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where id=${id} and owner_user_id=${userId} for update`,
+          );
+          if (!item) return undefined;
+          if (item.status === "sending") {
+            return requiredFirst<SubmissionRow>(
+              transaction,
+              sql`update message_submissions set status='unknown',lease_generation=${generation},last_error_code='DELIVERY_LEASE_LOST',updated_at=now() where id=${id} returning ${submissionSelection}`,
+            );
+          }
+          if (item.status === "unknown")
+            return requiredFirst<SubmissionRow>(
+              transaction,
+              sql`update message_submissions set lease_generation=${generation} where id=${id} returning ${submissionSelection}`,
+            );
+          if (item.status !== "queued") return item;
+          const earlier = await first(
+            transaction,
+            sql`select id from message_submissions where session_id=${item.sessionId} and sequence < ${item.sequence} and status in ('queued','sending','unknown') limit 1`,
+          );
+          if (earlier)
+            throw Object.assign(new Error("Earlier submission pending"), {
+              code: "SUBMISSION_WAITING",
+            });
+          return requiredFirst<SubmissionRow>(
+            transaction,
+            sql`update message_submissions set status='sending',lease_generation=${generation},updated_at=now() where id=${id} returning ${submissionSelection}`,
+          );
+        });
+      },
+      async validateSubmission(
+        userId: string,
+        id: string,
+        workerId: string,
+        generation: number,
+      ): Promise<SessionRecord> {
+        return db.transaction(async (transaction) => {
+          const owner = await first(
+            transaction,
+            sql`select id from users where id=${userId} and status='active' and role='user' for update`,
+          );
+          if (!owner)
+            throw Object.assign(new Error("Account unavailable"), {
+              code: "ACCOUNT_DISABLED",
+            });
+          const item = await first<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where id=${id} and owner_user_id=${userId} and status='sending' and lease_generation=${generation}`,
+          );
+          const job = await first(
+            transaction,
+            sql`select id from background_jobs where id=${id} and status='running' and locked_by=${workerId} and lease_generation=${generation} and locked_at > now()-interval '5 minutes'`,
+          );
+          if (!item || !job)
+            throw Object.assign(new Error("Delivery lease lost"), {
+              code: "DELIVERY_LEASE_LOST",
+            });
+          const session = await first<SessionRecord>(
+            transaction,
+            sql`select ${sessionSelection} from sessions where id=${item.sessionId} and owner_user_id=${userId} and deletion_state='none' and status <> 'terminated' for update`,
+          );
+          if (!session)
+            throw Object.assign(new Error("Session unavailable"), {
+              code: "SESSION_UNAVAILABLE",
+            });
+          if (session.memoryStoreId != null)
+            await createMemoryRepository(transaction).gate(userId);
+          const quota = await effectiveQuota(transaction, userId);
+          const month = utcMonthWindow(new Date());
+          const usage = await requiredFirst<{
+            tokens: number;
+            concurrent: number;
+          }>(
+            transaction,
+            sql`select
+            (select coalesce(sum(quantity),0)::bigint from usage_ledger where user_id=${userId} and metric_type in ('input_tokens','output_tokens') and recorded_at >= ${month.start} and recorded_at < ${month.end}) as tokens,
+            (select count(*)::integer from sessions where owner_user_id=${userId} and status in ('running','rescheduled') and deletion_state <> 'deleted') as concurrent`,
+          );
+          if (
+            usage.tokens >= quota.monthlyTokenLimit ||
+            usage.concurrent > quota.concurrentSessionLimit
+          )
+            throw Object.assign(new Error("Quota exceeded"), {
+              code: "QUOTA_EXCEEDED",
+            });
+          return session;
+        });
+      },
+      async attachSubmissionMemory(
+        userId: string,
+        sessionId: string,
+        memoryStoreId: string,
+      ): Promise<void> {
+        await db.execute(
+          sql`update sessions set memory_store_id=${memoryStoreId} where id=${sessionId} and owner_user_id=${userId} and ark_session_id like 'pending:%' and create_attempted_at is null and deletion_state='none'`,
+        );
+      },
+      async finishSubmission(
+        userId: string,
+        id: string,
+        generation: number,
+        input: {
+          status: "queued" | "accepted" | "unknown" | "failed";
+          eventId?: string;
+          errorCode?: string;
+          event?: StoredSessionEventInput;
+          workerId?: string;
+        },
+      ): Promise<boolean> {
+        if (
+          input.status === "accepted" &&
+          (!input.event || input.event.eventId !== input.eventId)
+        )
+          return false;
+        return db.transaction(async (transaction) => {
+          if (input.workerId) {
+            const lease = await first(
+              transaction,
+              sql`select id from background_jobs where id=${id} and status='running' and locked_by=${input.workerId} and lease_generation=${generation} and locked_at > now()-interval '5 minutes' for update`,
+            );
+            if (!lease) return false;
+          }
+          const item = await first<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where id=${id} and owner_user_id=${userId} and status in ('sending','unknown') and lease_generation=${generation} for update`,
+          );
+          if (!item) return false;
+          if (
+            !input.workerId &&
+            (item.status !== "unknown" || input.status !== "accepted")
+          )
+            return false;
+          if (input.event)
+            await createRepositories(transaction).sessionLifecycle.appendEvents(
+              userId,
+              item.sessionId,
+              [input.event],
+            );
+          await transaction.execute(
+            sql`update message_submissions set status=${input.status}, upstream_event_id=coalesce(${input.eventId ?? null},upstream_event_id), last_error_code=${input.errorCode ?? null}, content=case when ${input.status}='accepted' then null else content end,updated_at=now() where id=${id}`,
+          );
+          if (input.status === "accepted" || input.status === "failed")
+            await createRepositories(
+              transaction,
+            ).sessionLifecycle.finishMessage(
+              userId,
+              item.sessionId,
+              input.status === "accepted"
+                ? "accepted_or_unknown"
+                : "definite_failure",
+            );
+          if (input.status === "failed")
+            await releaseUnattemptedDurableCreate(
+              transaction,
+              userId,
+              item.sessionId,
+            );
+          if (input.status === "accepted")
+            await transaction.execute(
+              sql`update sessions set message_unknown_outcome=exists(select 1 from message_submissions where session_id=${item.sessionId} and status='unknown') where id=${item.sessionId}`,
+            );
+          if (input.status === "unknown")
+            await transaction.execute(
+              sql`update sessions set message_unknown_outcome=true where id=${item.sessionId} and owner_user_id=${userId}`,
+            );
+          return true;
+        });
+      },
+      async rememberSubmissionReceipt(
+        userId: string,
+        id: string,
+        generation: number,
+        eventId: string,
+      ): Promise<void> {
+        await db.execute(
+          sql`update message_submissions set upstream_event_id=${eventId} where id=${id} and owner_user_id=${userId} and lease_generation=${generation} and status in ('sending','unknown')`,
+        );
+      },
+      async expireSubmissionBodies(): Promise<void> {
+        await db.transaction(async (transaction) => {
+          // Final-attempt crashes cannot be reclaimed by the generic job queue.
+          // Convert their durable receipts before normal retention maintenance.
+          const stranded = await rows<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where status in ('queued','sending') and exists(select 1 from background_jobs job where job.id=message_submissions.id and (job.status='failed' or (job.status='running' and job.attempts >= job.max_attempts and job.locked_at <= now()-interval '5 minutes'))) for update`,
+          );
+          for (const item of stranded) {
+            await transaction.execute(
+              sql`update message_submissions set status=${item.status === "sending" ? "unknown" : "failed"},last_error_code=${item.status === "sending" ? "DELIVERY_LEASE_LOST" : "DELIVERY_ATTEMPTS_EXHAUSTED"},updated_at=now() where id=${item.id}`,
+            );
+            if (item.status === "sending")
+              await transaction.execute(
+                sql`update sessions set message_unknown_outcome=true where id=${item.sessionId}`,
+              );
+            else {
+              await createRepositories(
+                transaction,
+              ).sessionLifecycle.finishMessage(
+                item.ownerUserId,
+                item.sessionId,
+                "definite_failure",
+              );
+              await releaseUnattemptedDurableCreate(
+                transaction,
+                item.ownerUserId,
+                item.sessionId,
+              );
+            }
+          }
+          const expired = await rows<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection} from message_submissions where content is not null and retain_until < now() for update`,
+          );
+          for (const item of expired) {
+            if (item.status === "queued")
+              await createRepositories(
+                transaction,
+              ).sessionLifecycle.finishMessage(
+                item.ownerUserId,
+                item.sessionId,
+                "definite_failure",
+              );
+            await transaction.execute(
+              sql`update message_submissions set content=null,status=case when status='queued' then 'failed' when status='sending' then 'unknown' else status end,last_error_code=coalesce(last_error_code,'SUBMISSION_BODY_EXPIRED'),updated_at=now() where id=${item.id}`,
+            );
+            if (item.status === "queued")
+              await releaseUnattemptedDurableCreate(
+                transaction,
+                item.ownerUserId,
+                item.sessionId,
+              );
+            if (item.status === "sending")
+              await transaction.execute(
+                sql`update sessions set message_unknown_outcome=true where id=${item.sessionId}`,
+              );
+          }
+          await transaction.execute(
+            sql`update message_submissions set content=null where content is not null and session_id in (select id from sessions where deletion_state <> 'none')`,
+          );
+        });
+      },
+
       async prepareCreate(input: SessionRecordData, uploadIds: string[] = []) {
         const result = await db.transaction(async (transaction) => {
           const user = await first(
@@ -2966,7 +3355,7 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`update sessions
                   set ark_session_id = ${upstream.arkSessionId},
-                      status = ${upstream.status},
+                      status = case when message_in_flight_count > 0 then 'running'::session_status else ${upstream.status}::session_status end,
                       model_id = ${upstream.modelId ?? null},
                       config_snapshot = ${
                         upstream.configSnapshot
@@ -3045,7 +3434,7 @@ export function createRepositories(database: unknown) {
               await transaction.execute(
                 sql`update sessions
                       set ark_session_id = ${upstream.arkSessionId},
-                          status = ${upstream.status},
+                          status = case when message_in_flight_count > 0 then 'running'::session_status else ${upstream.status}::session_status end,
                           model_id = ${upstream.modelId ?? null},
                           config_snapshot =
                             ${JSON.stringify(upstream.configSnapshot)}::jsonb,
@@ -3107,6 +3496,7 @@ export function createRepositories(database: unknown) {
                  and (
                    ark_session_id not like 'pending:%'
                    or deletion_state = 'deletion_failed'
+                   or exists (select 1 from message_submissions ms where ms.session_id=sessions.id)
                  )
                  and deletion_state <> 'deleted'
                  and ${
@@ -3260,6 +3650,7 @@ export function createRepositories(database: unknown) {
                  and (
                    ark_session_id not like 'pending:%'
                    or deletion_state = 'deletion_failed'
+                   or exists (select 1 from message_submissions ms where ms.session_id=sessions.id)
                  )
                  and deletion_state <> 'deleted'
                limit 1`,
@@ -3308,6 +3699,7 @@ export function createRepositories(database: unknown) {
                   and (
                     ark_session_id not like 'pending:%'
                     or deletion_state = 'deletion_failed'
+                   or exists (select 1 from message_submissions ms where ms.session_id=sessions.id)
                   )
                   and deletion_state <> 'deleted'
                  for update`,
@@ -3371,6 +3763,9 @@ export function createRepositories(database: unknown) {
             throw new Error("Session deletion job conflicts with existing job");
           }
 
+          await transaction.execute(
+            sql`update message_submissions set content=null where session_id=${id} and owner_user_id=${userId}`,
+          );
           return requiredFirst<SessionRecord>(
             transaction,
             sql`update sessions
@@ -3393,7 +3788,7 @@ export function createRepositories(database: unknown) {
                order by created_at asc, id asc`,
         );
       },
-      beginMessage(userId: string, id: string) {
+      beginMessage(userId: string, id: string, allowPending = false) {
         return db.transaction(async (transaction) => {
           const user = await first(
             transaction,
@@ -3410,7 +3805,7 @@ export function createRepositories(database: unknown) {
                   from sessions
                  where id = ${id}
                    and owner_user_id = ${userId}
-                   and ark_session_id not like 'pending:%'
+                   and (${allowPending} or ark_session_id not like 'pending:%')
                    and deletion_state <> 'deleted'
                  for update`,
           );
@@ -3722,6 +4117,7 @@ export function createRepositories(database: unknown) {
                             or last_event_at <= ${projection.observedAt}
                           )
                           and ${projection.status !== undefined}
+                          and not (${projection.status === "idle"} and exists(select 1 from message_submissions ms where ms.session_id=sessions.id and ms.status in ('queued','sending','unknown')))
                         then ${projection.status ?? null}::session_status
                         else status
                       end,
@@ -3780,7 +4176,8 @@ export function createRepositories(database: unknown) {
               where id = ${id}
                 and owner_user_id = ${userId}
                 and status in ('running', 'rescheduled')
-                and deletion_state = 'none'`,
+                and deletion_state = 'none'
+                and not (${status === "idle"} and exists(select 1 from message_submissions ms where ms.session_id=sessions.id and ms.status in ('queued','sending','unknown')))`,
         );
       },
       async audit(input: {
@@ -5666,7 +6063,8 @@ export function createRepositories(database: unknown) {
           const updated = await rows(
             transaction,
             sql`update background_jobs
-                  set status = ${final ? "failed" : "pending"}::background_job_status,
+                  set status = ${final && error !== "SUBMISSION_WAITING" ? "failed" : "pending"}::background_job_status,
+                      attempts = case when ${error} = 'SUBMISSION_WAITING' then greatest(attempts-1,0) else attempts end,
                       run_after = ${runAfter},
                       locked_at = null,
                       locked_by = null,

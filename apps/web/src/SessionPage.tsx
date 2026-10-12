@@ -28,7 +28,6 @@ import {
 import { Transcript } from "./components/Transcript.js";
 import {
   SessionComposer,
-  type FirstMessageDelivery,
   type SessionFeedback,
 } from "./components/SessionComposer.js";
 import { useSessionTimeline } from "./timeline/useSessionTimeline.js";
@@ -94,8 +93,7 @@ function sessionErrorFeedback(
 }
 
 interface SessionPageProps {
-  deliveries: Record<string, FirstMessageDelivery>;
-  onRetryFirstMessage: (sessionId: string, content: string) => void;
+  userId?: string;
   onStreamReady: (sessionId: string) => void;
   onSessionChanged: (session: SessionSummary) => void;
   onAuthRequired: () => void;
@@ -119,8 +117,7 @@ export function SessionPage(props: SessionPageProps) {
 }
 
 function SessionPageContent({
-  deliveries,
-  onRetryFirstMessage,
+  userId = "user",
   onStreamReady,
   onSessionChanged,
   onAuthRequired,
@@ -149,7 +146,6 @@ function SessionPageContent({
     setDeleteOpen(false);
     setDeleteConfirmation("");
   }
-  const delivery = deliveries[sessionId];
   const sessionLoaded = session !== null;
 
   useEffect(() => {
@@ -178,6 +174,17 @@ function SessionPageContent({
     };
   }, [onAuthRequired, reloadKey, sessionId]);
 
+  useEffect(() => {
+    if (
+      !session?.submissions?.some((item) =>
+        ["queued", "sending", "unknown"].includes(item.status),
+      )
+    )
+      return;
+    const timer = setInterval(() => setReloadKey((key) => key + 1), 2000);
+    return () => clearInterval(timer);
+  }, [session?.submissions]);
+
   const reportInvalidEvent = useCallback(() => {
     setFeedback({
       kind: "info",
@@ -187,7 +194,7 @@ function SessionPageContent({
 
   const timeline = useSessionTimeline({
     sessionId,
-    enabled: sessionLoaded,
+    enabled: sessionLoaded && session?.upstreamReady !== false,
     onStreamReady,
     onInvalidEvent: reportInvalidEvent,
     onAuthInvalid: onAuthRequired,
@@ -364,12 +371,19 @@ function SessionPageContent({
     onSessionChanged(updated);
   }
 
-  async function sendMessage(content: string): Promise<boolean> {
+  async function sendMessage(
+    content: string,
+    submissionId: string,
+  ): Promise<boolean> {
     if (!session || pendingAction) return false;
     setPendingAction("message");
     setFeedback(null);
     try {
-      const result = await apiClient.sendMessage(sessionId, content);
+      const result = await apiClient.sendMessage(
+        sessionId,
+        content,
+        submissionId,
+      );
       setFeedback({
         kind: "success",
         message:
@@ -377,6 +391,29 @@ function SessionPageContent({
             ? "Message queued."
             : "Message accepted.",
       });
+      // The 202 is the persistence boundary; a slow refresh must not hold the draft.
+      setSession((current) =>
+        current
+          ? {
+              ...current,
+              submissions: [
+                ...(current.submissions ?? []).filter(
+                  (item) => item.submissionId !== submissionId,
+                ),
+                {
+                  submissionId,
+                  status: result.status ?? "queued",
+                  content,
+                  upstreamEventId:
+                    result.delivery === "accepted" ? result.eventId : null,
+                  errorCode: null,
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            }
+          : current,
+      );
+      setReloadKey((key) => key + 1);
       return true;
     } catch (error) {
       if (error instanceof ApiClientError && error.isAuthRequired) {
@@ -504,13 +541,15 @@ function SessionPageContent({
   const messageDisabled =
     session.status === "terminated" || session.deletionState !== "none";
   const connectionLabel =
-    connection === "live"
-      ? "Live"
-      : connection === "reconnecting"
-        ? "Reconnecting…"
-        : connection === "ended"
-          ? "Ended"
-          : "Connecting…";
+    session.upstreamReady === false
+      ? "Delivery pending"
+      : connection === "live"
+        ? "Live"
+        : connection === "reconnecting"
+          ? "Reconnecting…"
+          : connection === "ended"
+            ? "Ended"
+            : "Connecting…";
   const connectionTone: BadgeTone =
     connection === "live"
       ? "success"
@@ -519,8 +558,7 @@ function SessionPageContent({
         : connection === "ended"
           ? "danger"
           : "neutral";
-  const composerError =
-    delivery?.status === "failed" || feedback?.kind === "error";
+  const composerError = feedback?.kind === "error";
 
   return (
     <div className="session-workspace">
@@ -667,17 +705,51 @@ function SessionPageContent({
           ) : null}
 
           <section className="timeline-shell" aria-label="Session timeline">
+            {session.submissions
+              ?.filter(
+                (item) =>
+                  item.status !== "accepted" ||
+                  !item.upstreamEventId ||
+                  !timeline.items.some(
+                    (event) =>
+                      event.kind === "user" &&
+                      event.id === item.upstreamEventId,
+                  ),
+              )
+              .map((item) => (
+                <div key={item.submissionId} className="submission-message">
+                  {(item.content || item.acceptedContent) &&
+                  !timeline.items.some(
+                    (event) =>
+                      event.kind === "user" &&
+                      event.id === item.upstreamEventId,
+                  ) ? (
+                    <p>{item.content ?? item.acceptedContent}</p>
+                  ) : null}
+                  <p role="status">
+                    {item.status === "unknown"
+                      ? "Delivery is being confirmed. Contact an administrator with request "
+                      : item.status === "failed"
+                        ? "Delivery failed. Request "
+                        : item.status === "accepted"
+                          ? "Message accepted. Request "
+                          : "Message queued. Request "}
+                    {item.submissionId}
+                    {item.errorCode ? ` (${item.errorCode})` : ""}
+                  </p>
+                </div>
+              ))}
             <Transcript blocks={blocks} />
           </section>
         </div>
 
         <SessionComposer
+          key={`${userId}:${sessionId}`}
+          draftKey={`${userId}:${sessionId}`}
           disabled={messageDisabled}
           pendingAction={pendingAction}
-          {...(delivery ? { delivery } : {})}
           feedback={feedback}
           onSend={sendMessage}
-          onRetryFirstMessage={onRetryFirstMessage}
         />
 
         <Dialog

@@ -1,3 +1,4 @@
+import { clearSubmissionDrafts } from "./submission-drafts.js";
 import {
   Bot,
   Database,
@@ -38,7 +39,6 @@ import { AdminWorkspace } from "./AdminPage.js";
 import { AgentEditorPage } from "./AgentEditorPage.js";
 import { AgentPage } from "./AgentPage.js";
 import { SessionIntro } from "./components/SessionIntro.js";
-import type { FirstMessageDelivery } from "./components/SessionComposer.js";
 import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { SessionList } from "./components/SessionList.js";
 import { SessionSearch } from "./components/SessionSearch.js";
@@ -76,7 +76,6 @@ type AuthState =
  * reported as failed. Long enough to cover a slow reconnect, short enough that
  * the user is not left staring at "waiting" with no way to act.
  */
-export const FIRST_MESSAGE_STREAM_TIMEOUT_MS = 15_000;
 
 function isAuthError(error: unknown): boolean {
   return error instanceof ApiClientError && error.isAuthRequired;
@@ -284,6 +283,8 @@ function navigationFor(
   ];
 }
 
+const ignoreStreamReady = () => {};
+
 function Workspace({
   user,
   theme,
@@ -295,11 +296,6 @@ function Workspace({
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [firstMessages, setFirstMessages] = useState<
-    Record<string, FirstMessageDelivery>
-  >({});
-  const waitingFirstMessages = useRef(new Map<string, string>());
-  const firstMessageTimers = useRef(new Map<string, number>());
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const themeResolved = theme.resolved;
@@ -414,6 +410,7 @@ function Workspace({
     try {
       await apiClient.logout();
     } finally {
+      clearSubmissionDrafts();
       onSignedOut();
     }
   }
@@ -454,34 +451,8 @@ function Workspace({
     return () => window.removeEventListener("focus", onFocus);
   }, [refreshUsage]);
 
-  const deliverFirstMessage = useCallback(
-    async (sessionId: string, content: string) => {
-      setFirstMessages((current) => ({
-        ...current,
-        [sessionId]: { sessionId, content, status: "sending" },
-      }));
-      try {
-        await apiClient.sendMessage(sessionId, content);
-        setFirstMessages((current) => ({
-          ...current,
-          [sessionId]: { sessionId, content, status: "sent" },
-        }));
-      } catch (error) {
-        if (isAuthError(error)) {
-          onAuthRequired();
-          return;
-        }
-        setFirstMessages((current) => ({
-          ...current,
-          [sessionId]: { sessionId, content, status: "failed" },
-        }));
-      }
-    },
-    [onAuthRequired],
-  );
-
   const handleSessionCreated = useCallback(
-    (session: SessionSummary, content: string) => {
+    (session: SessionSummary) => {
       setData((current) =>
         current
           ? {
@@ -493,62 +464,10 @@ function Workspace({
             }
           : current,
       );
-      // Creating consumes a concurrent slot and the daily quota; the intro
-      // blocker must see the new usage without a full page reload.
       void refreshUsage();
-      setFirstMessages((current) => ({
-        ...current,
-        [session.id]: {
-          sessionId: session.id,
-          content,
-          status: "waiting",
-        },
-      }));
-      waitingFirstMessages.current.set(session.id, content);
-      // Without this the message waits forever if the stream never opens, and
-      // the retry affordance only appears once the delivery has failed.
-      const timer = setTimeout(() => {
-        firstMessageTimers.current.delete(session.id);
-        if (!waitingFirstMessages.current.has(session.id)) return;
-        waitingFirstMessages.current.delete(session.id);
-        setFirstMessages((current) => {
-          const existing = current[session.id];
-          if (!existing || existing.status !== "waiting") return current;
-          return {
-            ...current,
-            [session.id]: { ...existing, status: "failed" },
-          };
-        });
-      }, FIRST_MESSAGE_STREAM_TIMEOUT_MS);
-      firstMessageTimers.current.set(session.id, timer);
       navigate(`/sessions/${session.id}`);
     },
     [navigate, refreshUsage],
-  );
-
-  const handleSessionReady = useCallback(
-    (sessionId: string) => {
-      const timer = firstMessageTimers.current.get(sessionId);
-      if (timer !== undefined) {
-        clearTimeout(timer);
-        firstMessageTimers.current.delete(sessionId);
-      }
-      const content = waitingFirstMessages.current.get(sessionId);
-      if (content === undefined) return;
-      waitingFirstMessages.current.delete(sessionId);
-      void deliverFirstMessage(sessionId, content);
-    },
-    [deliverFirstMessage],
-  );
-
-  useEffect(
-    () => () => {
-      for (const timer of firstMessageTimers.current.values()) {
-        clearTimeout(timer);
-      }
-      firstMessageTimers.current.clear();
-    },
-    [],
   );
 
   // Session changes cover task ends (status transitions mirrored from the
@@ -654,6 +573,7 @@ function Workspace({
           path="/"
           element={
             <SessionIntro
+              draftKey={`${user.userId}:new`}
               agents={data.agents}
               usage={data.usage}
               onAuthRequired={onAuthRequired}
@@ -760,11 +680,8 @@ function Workspace({
           path="/sessions/:sessionId"
           element={
             <SessionPage
-              deliveries={firstMessages}
-              onRetryFirstMessage={(sessionId, content) =>
-                void deliverFirstMessage(sessionId, content)
-              }
-              onStreamReady={handleSessionReady}
+              userId={user.userId}
+              onStreamReady={ignoreStreamReady}
               onSessionChanged={handleSessionChanged}
               onAuthRequired={onAuthRequired}
             />
@@ -886,6 +803,7 @@ export function App() {
   // drops every cached artifact bound to that account, so the next login
   // starts from a clean slate even if a late response is still in flight.
   const leaveAuthenticatedState = useCallback(() => {
+    clearSubmissionDrafts();
     const subject = signedInSubjectRef.current;
     if (subject) clearMemoryCache(subject);
     setAuth({ status: "unauthenticated" });

@@ -155,7 +155,18 @@ export interface MemoryList {
   sessionCount: number;
 }
 
+export interface SubmissionReceipt {
+  submissionId: string;
+  status: "queued" | "sending" | "accepted" | "failed" | "unknown";
+  content: string | null;
+  acceptedContent?: string | null;
+  upstreamEventId: string | null;
+  errorCode: string | null;
+  createdAt: string;
+}
 export interface SessionSummary {
+  upstreamReady?: boolean;
+  submissions?: SubmissionReceipt[];
   id: string;
   title: string;
   status: SessionStatus;
@@ -766,19 +777,28 @@ export const apiClient = {
     agentId: string;
     uploadIds: string[];
     title: string;
+    content: string;
+    submissionId: string;
+    temporary?: boolean;
   }) =>
     request<SessionSummary>("/sessions", {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  sendMessage: (sessionId: string, content: string) =>
-    request<{ eventId: string; delivery: "accepted" | "queued" }>(
-      `/sessions/${sessionId}/messages`,
-      {
-        method: "POST",
-        body: JSON.stringify({ content }),
-      },
-    ),
+  sendMessage: (
+    sessionId: string,
+    content: string,
+    submissionId: string = crypto.randomUUID(),
+  ) =>
+    request<{
+      eventId: string;
+      delivery: "accepted" | "queued";
+      status?: SubmissionReceipt["status"];
+      submissionId?: string;
+    }>(`/sessions/${sessionId}/messages`, {
+      method: "POST",
+      body: JSON.stringify({ content, submissionId }),
+    }),
   interruptSession: (sessionId: string) =>
     request<{ eventId: string; delivery: "accepted" }>(
       `/sessions/${sessionId}/interrupt`,

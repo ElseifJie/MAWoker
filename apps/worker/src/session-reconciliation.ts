@@ -42,6 +42,17 @@ interface ReconciliationJobs {
 }
 
 interface ReconciliationService {
+  deliverSubmission?(
+    id: string,
+    context: {
+      userId: string;
+      requestId: string;
+      workerId: string;
+      leaseGeneration: number;
+      finalAttempt: boolean;
+    },
+  ): PromiseLike<void>;
+  expireSubmissionBodies?(): PromiseLike<void>;
   reconcileCreate(
     id: string,
     context: { userId: string; requestId: string },
@@ -70,6 +81,7 @@ export class SessionReconciliationProcessor {
   ) {}
 
   async runOnce(): Promise<number> {
+    await this.dependencies.service.expireSubmissionBodies?.();
     const jobs = await this.dependencies.jobs.claim({
       workerId: this.dependencies.workerId,
       limit: this.dependencies.batchSize ?? 10,
@@ -89,11 +101,23 @@ export class SessionReconciliationProcessor {
       if (!job.ownerUserId) {
         throw new Error("Session reconciliation requires an owner");
       }
-      const sessionId = parseCreatePayload(job.payload);
-      await this.dependencies.service.reconcileCreate(sessionId, {
-        userId: job.ownerUserId,
-        requestId: `worker:${job.id}:${job.attempts}`,
-      });
+      if (job.payload.operation === "deliver") {
+        if (!this.dependencies.service.deliverSubmission)
+          throw new Error("Delivery unavailable");
+        await this.dependencies.service.deliverSubmission(job.id, {
+          userId: job.ownerUserId,
+          requestId: `worker:${job.id}:${job.attempts}`,
+          workerId: this.dependencies.workerId,
+          leaseGeneration: job.leaseGeneration,
+          finalAttempt: job.attempts >= job.maxAttempts,
+        });
+      } else {
+        const sessionId = parseCreatePayload(job.payload);
+        await this.dependencies.service.reconcileCreate(sessionId, {
+          userId: job.ownerUserId,
+          requestId: `worker:${job.id}:${job.attempts}`,
+        });
+      }
       await this.dependencies.jobs.succeed(
         job.id,
         this.dependencies.workerId,
@@ -103,7 +127,9 @@ export class SessionReconciliationProcessor {
       await this.dependencies.jobs.retry(
         job.id,
         this.dependencies.workerId,
-        error instanceof Error ? error.message : String(error),
+        typeof error === "object" && error !== null && "code" in error
+          ? String(error.code)
+          : "SESSION_JOB_FAILED",
         job.attempts >= job.maxAttempts,
         job.leaseGeneration,
       );

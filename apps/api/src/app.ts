@@ -414,12 +414,21 @@ export interface SkillApiService {
 type SyncOutcome = { synced: true } | { synced: false; errorCode: string };
 
 export interface SessionApiService {
+  reconcileSubmission?(
+    userId: string,
+    sessionId: string,
+    submissionId: string,
+    context: { userId: string; requestId: string },
+  ): PromiseLike<unknown>;
+
   create(
     input: {
       agentId: string;
       title?: string;
       uploadIds?: string[];
       temporary?: boolean;
+      submissionId?: string;
+      content?: string;
     },
     context: { userId: string; requestId: string },
   ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
@@ -443,7 +452,7 @@ export interface SessionApiService {
   requestDelete(id: string, userId: string): PromiseLike<SessionRecord>;
   sendMessage(
     id: string,
-    input: { content: string },
+    input: { content: string; submissionId?: string },
     context: { userId: string; requestId: string },
   ): PromiseLike<{
     eventId: string;
@@ -813,9 +822,17 @@ const createSessionBodySchema = {
   type: "object",
   additionalProperties: false,
   required: ["agentId"],
+  dependencies: { submissionId: ["content"], content: ["submissionId"] },
   properties: {
     agentId: { type: "string", format: "uuid" },
     temporary: { type: "boolean" },
+    submissionId: { type: "string", format: "uuid" },
+    content: {
+      type: "string",
+      minLength: 1,
+      maxLength: 100_000,
+      pattern: "\\S",
+    },
     title: { type: "string", minLength: 1, maxLength: 120, pattern: "\\S" },
     uploadIds: {
       type: "array",
@@ -847,6 +864,7 @@ const sendMessageBodySchema = {
   additionalProperties: false,
   required: ["content"],
   properties: {
+    submissionId: { type: "string", format: "uuid" },
     content: {
       type: "string",
       minLength: 1,
@@ -1443,10 +1461,35 @@ function publicInput(input: SessionInputRecord) {
 }
 
 function publicSession(
-  session: SessionRecord & { inputs?: SessionInputRecord[] },
+  session: SessionRecord & {
+    inputs?: SessionInputRecord[];
+    submissions?: Array<{
+      submissionId: string;
+      status: string;
+      content: string | null;
+      acceptedContent?: string | null;
+      upstreamEventId: string | null;
+      lastErrorCode: string | null;
+      createdAt: Date;
+    }>;
+  },
 ) {
   return {
     id: session.id,
+    ...(session.submissions
+      ? {
+          submissions: session.submissions.map((item) => ({
+            submissionId: item.submissionId,
+            status: item.status,
+            content: item.content,
+            acceptedContent: item.acceptedContent ?? null,
+            upstreamEventId: item.upstreamEventId,
+            errorCode: item.lastErrorCode,
+            createdAt: item.createdAt,
+          })),
+        }
+      : {}),
+    upstreamReady: !session.arkSessionId.startsWith("pending:"),
     title: session.title,
     status: session.status,
     error:
@@ -1748,6 +1791,23 @@ function sendSessionError(
 ) {
   captureArkRequestId(error, request);
   if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "SUBMISSION_CONFLICT"
+  ) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "SUBMISSION_CONFLICT",
+          "Submission ID was used for another request",
+          false,
+        ),
+      );
+  }
+  if (
     hasErrorName(error, "SessionCreateVerificationError") &&
     typeof error === "object" &&
     error !== null &&
@@ -1930,6 +1990,7 @@ const ADMIN_ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
   "/api/v1/admin/users/:id/sessions/revoke": "USER_MANAGE",
   "/api/v1/admin/users/:id/status": "USER_MANAGE",
   "/api/v1/admin/users/:id/usage": "USAGE_VIEW",
+  "/api/v1/admin/users/:id/submissions/:submissionId/reconcile": "USER_MANAGE",
   "/api/v1/admin/audit-logs": "AUDIT_VIEW",
   "/api/v1/admin/quota-policy": "SETTINGS_MANAGE",
   "/api/v1/admin/usage/agents": "USAGE_VIEW",
@@ -2831,6 +2892,8 @@ export function buildApp(options: BuildAppOptions = {}) {
           title?: string;
           uploadIds?: string[];
           temporary?: boolean;
+          submissionId?: string;
+          content?: string;
         };
       }>(
         "/api/v1/sessions",
@@ -2840,6 +2903,12 @@ export function buildApp(options: BuildAppOptions = {}) {
             const created = await sessions.create(
               {
                 agentId: request.body.agentId,
+                ...(request.body.submissionId
+                  ? {
+                      submissionId: request.body.submissionId,
+                      content: request.body.content!,
+                    }
+                  : {}),
                 ...(request.body.temporary !== undefined
                   ? { temporary: request.body.temporary }
                   : {}),
@@ -2852,7 +2921,48 @@ export function buildApp(options: BuildAppOptions = {}) {
               },
               context(request),
             );
-            return reply.code(201).send(publicSession(created));
+            return reply
+              .code(request.body.submissionId ? 202 : 201)
+              .send(publicSession(created));
+          } catch (error) {
+            return sendSessionError(error, request, reply);
+          }
+        },
+      );
+
+      app.post<{
+        Params: { id: string; submissionId: string };
+        Body: { sessionId: string };
+      }>(
+        "/api/v1/admin/users/:id/submissions/:submissionId/reconcile",
+        {
+          schema: {
+            params: {
+              type: "object",
+              required: ["id", "submissionId"],
+              properties: {
+                id: { type: "string", format: "uuid" },
+                submissionId: { type: "string", format: "uuid" },
+              },
+            },
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["sessionId"],
+              properties: { sessionId: { type: "string", format: "uuid" } },
+            },
+          },
+        },
+        async (request, reply) => {
+          try {
+            if (!sessions.reconcileSubmission) return reply.code(404).send();
+            const receipt = await sessions.reconcileSubmission(
+              request.params.id,
+              request.body.sessionId,
+              request.params.submissionId,
+              { userId: request.auth!.userId, requestId: request.id },
+            );
+            return reply.send(receipt);
           } catch (error) {
             return sendSessionError(error, request, reply);
           }
@@ -3174,6 +3284,20 @@ export function buildApp(options: BuildAppOptions = {}) {
               return sendSessionError(error, request, reply);
             }
             if (terminated) return reply;
+            if (opened.session.arkSessionId.startsWith("pending:")) {
+              reply.raw.removeListener("close", close);
+              terminate();
+              return reply
+                .code(409)
+                .send(
+                  applicationError(
+                    request.id,
+                    "SESSION_BUSY",
+                    "Session delivery is pending",
+                    true,
+                  ),
+                );
+            }
             // Snapshot from the record openEvents already loaded. Replayed
             // session.status_* events correct any lag in this state.
             const ready = {
@@ -3229,7 +3353,7 @@ export function buildApp(options: BuildAppOptions = {}) {
 
       app.post<{
         Params: { id: string };
-        Body: { content: string };
+        Body: { content: string; submissionId?: string };
       }>(
         "/api/v1/sessions/:id/messages",
         {
@@ -3242,7 +3366,12 @@ export function buildApp(options: BuildAppOptions = {}) {
           try {
             const accepted = await sessions.sendMessage(
               request.params.id,
-              { content: request.body.content.trim() },
+              {
+                content: request.body.content.trim(),
+                ...(request.body.submissionId
+                  ? { submissionId: request.body.submissionId }
+                  : {}),
+              },
               context(request),
             );
             return reply.code(202).send(accepted);

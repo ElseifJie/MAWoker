@@ -89,7 +89,7 @@ describe("SessionReconciliationProcessor", () => {
     expect(jobs.retry).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000001",
       "worker-1",
-      "Ark unavailable",
+      "SESSION_JOB_FAILED",
       true,
       1,
     );
@@ -123,7 +123,7 @@ describe("SessionReconciliationProcessor", () => {
       expect(jobs.retry).toHaveBeenCalledWith(
         "00000000-0000-4000-8000-000000000001",
         "worker-1",
-        "Ark Session response does not verify the requested configuration",
+        code,
         final,
         1,
       );

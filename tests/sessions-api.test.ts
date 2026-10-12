@@ -1066,3 +1066,134 @@ describe("Session API", () => {
     expect(yieldedBeforeClose).toBeLessThan(eventCount);
   });
 });
+
+describe("durable Session protocol", () => {
+  it("accepts content and submissionId together with 202 and rejects incomplete intents", async () => {
+    const sessions = sessionService();
+    const app = buildApp({ auth: auth(), sessions });
+    const cookies = { [AUTH_COOKIE_NAME]: "user-token" };
+    try {
+      const submitted = await app.inject({
+        method: "POST",
+        url: "/api/v1/sessions",
+        cookies,
+        payload: {
+          agentId,
+          submissionId: sessionId,
+          content: "hello",
+          temporary: true,
+        },
+      });
+      expect(submitted.statusCode).toBe(202);
+      expect(sessions.create).toHaveBeenCalledWith(
+        { agentId, submissionId: sessionId, content: "hello", temporary: true },
+        { userId, requestId: expect.any(String) },
+      );
+      for (const payload of [
+        { agentId, submissionId: sessionId },
+        { agentId, content: "hello" },
+      ])
+        expect(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/api/v1/sessions",
+              cookies,
+              payload,
+            })
+          ).statusCode,
+        ).toBe(400);
+      const followup = await app.inject({
+        method: "POST",
+        url: `/api/v1/sessions/${sessionId}/messages`,
+        cookies,
+        payload: { submissionId: agentId, content: "next" },
+      });
+      expect(followup.statusCode).toBe(202);
+      expect(sessions.sendMessage).toHaveBeenCalledWith(
+        sessionId,
+        { submissionId: agentId, content: "next" },
+        { userId, requestId: expect.any(String) },
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("maps a different request with the same submissionId to a conflict", async () => {
+    const sessions = sessionService();
+    sessions.create.mockRejectedValueOnce(
+      Object.assign(new Error("conflict"), { code: "SUBMISSION_CONFLICT" }),
+    );
+    const app = buildApp({ auth: auth(), sessions });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/v1/sessions",
+        cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+        payload: { agentId, submissionId: sessionId, content: "hello" },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe("SUBMISSION_CONFLICT");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("limits evidence reconciliation to an administrator", async () => {
+    const reconcileSubmission = vi.fn(async () => ({
+      submissionId: agentId,
+      status: "unknown",
+      lastErrorCode: "ARK_UNKNOWN_WRITE_OUTCOME",
+    }));
+    const app = buildApp({
+      auth: auth(),
+      sessions: { ...sessionService(), reconcileSubmission },
+    });
+    try {
+      const url = `/api/v1/admin/users/${userId}/submissions/${agentId}/reconcile`;
+      const denied = await app.inject({
+        method: "POST",
+        url,
+        cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+        payload: { sessionId },
+      });
+      expect(denied.statusCode).toBe(403);
+      expect(reconcileSubmission).not.toHaveBeenCalled();
+      const response = await app.inject({
+        method: "POST",
+        url,
+        cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+        payload: { sessionId },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).not.toHaveProperty("content");
+      expect(response.json().status).toBe("unknown");
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe("pending durable stream protocol", () => {
+  it("does not emit a ready frame for a local session awaiting remote creation", async () => {
+    const sessions = sessionService();
+    sessions.openEvents.mockResolvedValueOnce({
+      session: { ...record, arkSessionId: `pending:${sessionId}` },
+      events: { async *[Symbol.asyncIterator]() {} },
+    });
+    const app = buildApp({ auth: auth(), sessions });
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/sessions/${sessionId}/events`,
+        cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.code).toBe("SESSION_BUSY");
+      expect(response.payload).not.toContain("event: ready");
+    } finally {
+      await app.close();
+    }
+  });
+});
