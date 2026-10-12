@@ -2,8 +2,7 @@ node_modules
 dist
 coverage
 package-lock.json
-specs
-.superpowers
+docs
 .vscode
 packages/db/migrations/*.sql
 

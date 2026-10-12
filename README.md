@@ -183,8 +183,7 @@ step 4 already seeds the administrator and the default quota policy.
 ```text
 apps/       api, web, worker
 packages/   ark-client, auth, config, contracts, db, domain, storage
-docs/       working plans and design specs
-specs/      product requirements, design and task breakdown
+docs/       local archive of past plans and design docs (git-ignored)
 scripts/    operational scripts (admin seed, data reset, healthchecks)
 tests/      unit, integration and end-to-end tests
 ```
