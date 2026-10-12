@@ -111,8 +111,7 @@ export class ApplicationSessionService {
   constructor(options: ApplicationSessionServiceOptions) {
     this.store = options.store;
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60_000;
-    this.absoluteTtlMs =
-      options.absoluteTtlMs ?? 30 * 24 * 60 * 60_000;
+    this.absoluteTtlMs = options.absoluteTtlMs ?? 30 * 24 * 60 * 60_000;
     this.now = options.now ?? (() => new Date());
     this.createToken =
       options.randomToken ??
@@ -217,10 +216,7 @@ export class ApplicationSessionService {
       found.session.createdAt.getTime() + this.absoluteTtlMs,
     );
     const expiresAt = new Date(
-      Math.min(
-        now.getTime() + this.sessionTtlMs,
-        absoluteDeadline.getTime(),
-      ),
+      Math.min(now.getTime() + this.sessionTtlMs, absoluteDeadline.getTime()),
     );
     if (expiresAt.getTime() <= now.getTime()) {
       throw new AuthRequiredError();

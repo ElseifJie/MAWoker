@@ -433,7 +433,10 @@ export class UserAgentService {
       ) {
         return this.update(
           existing.id,
-          { systemPrompt: AUTO_DEFAULT_AGENT_PROMPT, arkVersion: existing.arkVersion },
+          {
+            systemPrompt: AUTO_DEFAULT_AGENT_PROMPT,
+            arkVersion: existing.arkVersion,
+          },
           context,
         );
       }

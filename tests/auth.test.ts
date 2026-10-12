@@ -41,9 +41,7 @@ class MemoryAuthStore implements AuthStore {
     expectedPasswordHash: string;
     session: Omit<AuthSessionRecord, "issuedEpoch">;
   }): Promise<{ session: AuthSessionRecord; user: AuthUser } | undefined> {
-    const user = [...this.users.values()].find(
-      ({ id }) => id === input.userId,
-    );
+    const user = [...this.users.values()].find(({ id }) => id === input.userId);
     if (!user || user.status !== "active") return undefined;
     if (user.passwordHash !== input.expectedPasswordHash) return undefined;
     const session: AuthSessionRecord = {
@@ -317,9 +315,9 @@ describe("credential epochs and absolute expiry", () => {
     const store = new MemoryAuthStore([user]);
     const service = new ApplicationSessionService({ store });
     const issued = await service.login(user.email, password);
-    await expect(
-      service.authenticate(issued.token),
-    ).resolves.toMatchObject({ userId });
+    await expect(service.authenticate(issued.token)).resolves.toMatchObject({
+      userId,
+    });
 
     // An admin-level revocation (password change, disable, role change)
     // bumps the user's epoch: the old session no longer authenticates.
@@ -403,9 +401,7 @@ describe("credential epochs and absolute expiry", () => {
       absoluteTtlMs: 30 * 24 * 60 * 60_000,
     });
     const issued = await service.login(user.email, password);
-    const absoluteDeadline = new Date(
-      start.getTime() + 30 * 24 * 60 * 60_000,
-    );
+    const absoluteDeadline = new Date(start.getTime() + 30 * 24 * 60 * 60_000);
 
     // Keep the idle window alive by renewing every 6 days: each renewal is
     // the full 7-day idle TTL until the absolute deadline starts binding.
@@ -426,6 +422,8 @@ describe("credential epochs and absolute expiry", () => {
     const last = await service.renew(issued.token);
     expect(last.expiresAt.getTime()).toBe(absoluteDeadline.getTime());
     now = new Date(start.getTime() + 31 * 24 * 60 * 60_000);
-    await expect(service.renew(issued.token)).rejects.toThrow(AuthRequiredError);
+    await expect(service.renew(issued.token)).rejects.toThrow(
+      AuthRequiredError,
+    );
   });
 });
