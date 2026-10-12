@@ -1,0 +1,2 @@
+ALTER TABLE "background_jobs" ADD COLUMN "lease_generation" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "quota_interrupt_jobs" ADD COLUMN "lease_generation" integer DEFAULT 0 NOT NULL;

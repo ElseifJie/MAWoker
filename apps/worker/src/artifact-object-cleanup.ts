@@ -19,6 +19,7 @@ export interface ArtifactObjectCleanupJob {
   runAfter: Date;
   lockedAt: Date;
   lockedBy: string;
+  leaseGeneration: number;
   createdAt: Date;
 }
 
@@ -33,22 +34,26 @@ interface ArtifactObjectCleanupJobs {
     id: string,
     workerId: string,
     cleanupGeneration: number,
+    leaseGeneration: number,
   ): PromiseLike<boolean>;
   succeedArtifactCleanup(
     id: string,
     workerId: string,
     cleanupGeneration: number,
+    leaseGeneration: number,
   ): PromiseLike<boolean>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
+    leaseGeneration: number,
   ): PromiseLike<void>;
   retryArtifactCleanup(
     id: string,
     workerId: string,
     cleanupGeneration: number,
+    leaseGeneration: number,
     error: string,
     final: boolean,
   ): PromiseLike<boolean>;
@@ -79,7 +84,13 @@ interface ArtifactObjectCleanupGuards {
     jobId: string,
     ownerUserId: string,
   ): PromiseLike<
-    { generation: number; lockedBy: string | null; type: string } | undefined
+    | {
+        generation: number;
+        lockedBy: string | null;
+        type: string;
+        leaseGeneration: number;
+      }
+    | undefined
   >;
 }
 
@@ -216,6 +227,7 @@ export class ArtifactObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             payload.cleanupGeneration,
+            job.leaseGeneration,
           ),
         );
         return;
@@ -229,6 +241,7 @@ export class ArtifactObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             payload.cleanupGeneration,
+            job.leaseGeneration,
             "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
             true,
           ),
@@ -244,6 +257,7 @@ export class ArtifactObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             payload.cleanupGeneration,
+            job.leaseGeneration,
             "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
             true,
           ),
@@ -262,7 +276,8 @@ export class ArtifactObjectCleanupProcessor {
         !claim ||
         claim.type !== "cleanup_artifact_object" ||
         claim.generation !== payload.cleanupGeneration ||
-        claim.lockedBy !== this.dependencies.workerId
+        claim.lockedBy !== this.dependencies.workerId ||
+        claim.leaseGeneration !== job.leaseGeneration
       ) {
         return;
       }
@@ -275,6 +290,7 @@ export class ArtifactObjectCleanupProcessor {
           job.id,
           this.dependencies.workerId,
           payload.cleanupGeneration,
+          job.leaseGeneration,
         ),
       );
     } catch (error) {
@@ -286,6 +302,7 @@ export class ArtifactObjectCleanupProcessor {
           this.dependencies.workerId,
           code,
           job.attempts >= job.maxAttempts,
+          job.leaseGeneration,
         );
       } else {
         assertArtifactCleanupClaim(
@@ -293,6 +310,7 @@ export class ArtifactObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             cleanupGeneration,
+            job.leaseGeneration,
             code,
             job.attempts >= job.maxAttempts,
           ),

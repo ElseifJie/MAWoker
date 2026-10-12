@@ -53,6 +53,7 @@ export interface SessionDeletionJob {
   runAfter: Date;
   lockedAt: Date;
   lockedBy: string;
+  leaseGeneration: number;
   createdAt: Date;
 }
 
@@ -66,13 +67,19 @@ interface SessionDeletionJobs {
     id: string,
     workerId: string,
     payload: SessionDeletionPayload,
+    leaseGeneration: number,
   ): PromiseLike<void>;
-  succeed(id: string, workerId: string): PromiseLike<void>;
+  succeed(
+    id: string,
+    workerId: string,
+    leaseGeneration: number,
+  ): PromiseLike<void>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
+    leaseGeneration: number,
   ): PromiseLike<void>;
   /** Returns a fence-blocked job to the queue without consuming an attempt:
    * consolidation progresses in this same worker, so waiting is progress.
@@ -81,7 +88,13 @@ interface SessionDeletionJobs {
     id: string,
     workerId: string,
     runAfter: Date,
+    leaseGeneration: number,
   ): PromiseLike<boolean>;
+  /** Extends the lease of still-owned jobs; a miss means takeover. */
+  heartbeat(input: {
+    items: Array<{ id: string; leaseGeneration: number }>;
+    workerId: string;
+  }): PromiseLike<number>;
 }
 
 interface SessionDeletionRepository {
@@ -248,11 +261,13 @@ export class SessionDeletionProcessor {
         await this.dependencies.jobs.succeed(
           job.id,
           this.dependencies.workerId,
+          job.leaseGeneration,
         );
         return;
       }
 
       if (!payload.completed.nonRunningObserved) {
+        if (!(await this.stillOwns(job))) return;
         let upstream;
         try {
           upstream = await this.dependencies.ark.getSession(
@@ -320,6 +335,7 @@ export class SessionDeletionProcessor {
             job.id,
             this.dependencies.workerId,
             new Date(now.getTime() + deferMs),
+            job.leaseGeneration,
           );
           if (!deferred) throw new SessionStillRunningError();
           return;
@@ -329,6 +345,10 @@ export class SessionDeletionProcessor {
       }
 
       if (!payload.completed.arkDeleted) {
+        // The irreversible upstream delete needs a current lease on top of
+        // the settlement gate: a slow executor must not delete after a
+        // takeover re-armed the job.
+        if (!(await this.stillOwns(job))) return;
         // The memory fence re-runs until "clear": the capture edit run it
         // plans is applied by the memory loop in this same worker, so waiting
         // here is bounded by consolidation progress. Waiting defers the job
@@ -349,6 +369,7 @@ export class SessionDeletionProcessor {
             job.id,
             this.dependencies.workerId,
             new Date(now.getTime() + FENCE_DEFER_MS),
+            job.leaseGeneration,
           );
           if (!deferred) throw new SessionStillRunningError();
           return;
@@ -388,7 +409,11 @@ export class SessionDeletionProcessor {
       if (removal === "cleanup_failed") {
         throw new SessionCleanupFailedError();
       }
-      await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
+      await this.dependencies.jobs.succeed(
+        job.id,
+        this.dependencies.workerId,
+        job.leaseGeneration,
+      );
     } catch (error) {
       const final = job.attempts >= job.maxAttempts;
       const errorCode = retryError(error);
@@ -413,6 +438,7 @@ export class SessionDeletionProcessor {
         this.dependencies.workerId,
         errorCode,
         final,
+        job.leaseGeneration,
       );
     }
   }
@@ -425,6 +451,21 @@ export class SessionDeletionProcessor {
       job.id,
       this.dependencies.workerId,
       payload,
+      job.leaseGeneration,
     );
+  }
+
+  /**
+   * Ownership heartbeat before a remote side effect. Deletion steps can be
+   * slow (memory fence, Ark calls); when the lease was taken over, this
+   * execution must stop immediately and leave every state write to the new
+   * owner — including its retry accounting.
+   */
+  private async stillOwns(job: SessionDeletionJob): Promise<boolean> {
+    const extended = await this.dependencies.jobs.heartbeat({
+      items: [{ id: job.id, leaseGeneration: job.leaseGeneration }],
+      workerId: this.dependencies.workerId,
+    });
+    return extended === 1;
   }
 }

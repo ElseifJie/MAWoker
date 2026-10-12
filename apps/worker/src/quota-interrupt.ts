@@ -8,6 +8,7 @@ export interface QuotaInterruptJob {
   monthStart: Date;
   attempts: number;
   maxAttempts: number;
+  leaseGeneration: number;
 }
 
 interface QuotaInterruptJobs {
@@ -15,12 +16,17 @@ interface QuotaInterruptJobs {
     workerId: string;
     limit: number;
   }): PromiseLike<QuotaInterruptJob[]>;
-  succeed(id: string, workerId: string): PromiseLike<void>;
+  succeed(
+    id: string,
+    workerId: string,
+    leaseGeneration: number,
+  ): PromiseLike<void>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
+    leaseGeneration: number,
   ): PromiseLike<void>;
 }
 
@@ -63,13 +69,18 @@ export class QuotaInterruptProcessor {
           },
         );
       }
-      await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
+      await this.dependencies.jobs.succeed(
+        job.id,
+        this.dependencies.workerId,
+        job.leaseGeneration,
+      );
     } catch {
       await this.dependencies.jobs.retry(
         job.id,
         this.dependencies.workerId,
         "QUOTA_INTERRUPT_FAILED",
         job.attempts >= job.maxAttempts,
+        job.leaseGeneration,
       );
     }
   }

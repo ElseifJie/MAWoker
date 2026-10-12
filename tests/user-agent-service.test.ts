@@ -741,7 +741,11 @@ describe("UserAgentService", () => {
       lastErrorCode: null,
     });
     expect(state.reconciliationIntents.has(personalAgentId)).toBe(false);
-    expect(jobs.succeed).toHaveBeenCalledWith(personalAgentId, "worker-1");
+    expect(jobs.succeed).toHaveBeenCalledWith(
+      personalAgentId,
+      "worker-1",
+      undefined,
+    );
     expect(jobs.retry).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(idempotencyKeys).toEqual([operationId, operationId]);

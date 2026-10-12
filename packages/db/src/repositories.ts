@@ -402,6 +402,7 @@ interface JobRecord extends Row {
   runAfter: Date;
   lockedAt: Date;
   lockedBy: string;
+  leaseGeneration: number;
   createdAt: Date;
 }
 
@@ -413,6 +414,7 @@ interface QuotaInterruptJobRecord extends Row {
   monthStart: Date;
   attempts: number;
   maxAttempts: number;
+  leaseGeneration: number;
 }
 
 const JOB_LEASE_DURATION_MS = 5 * 60 * 1_000;
@@ -4206,13 +4208,15 @@ export function createRepositories(database: unknown) {
           lockedBy: string | null;
           lockedAt: Date | null;
           type: string;
+          leaseGeneration: number;
         }>(
           db,
           sql`select coalesce((payload ->> 'cleanupGeneration')::integer, 0)
                     as "generation",
                   locked_by as "lockedBy",
                   locked_at as "lockedAt",
-                  type::text as "type"
+                  type::text as "type",
+                  lease_generation as "leaseGeneration"
                 from background_jobs
                where id = ${jobId}
                  and owner_user_id = ${ownerUserId}
@@ -5153,6 +5157,7 @@ export function createRepositories(database: unknown) {
                 update quota_interrupt_jobs job
                    set status = 'running',
                        attempts = job.attempts + 1,
+                       lease_generation = job.lease_generation + 1,
                        locked_at = ${now},
                        locked_by = ${input.workerId},
                        updated_at = ${now}
@@ -5166,7 +5171,8 @@ export function createRepositories(database: unknown) {
                             as "arkSessionId",
                           job.month_start as "monthStart",
                           job.attempts,
-                          job.max_attempts as "maxAttempts"`,
+                          job.max_attempts as "maxAttempts",
+                          job.lease_generation as "leaseGeneration"`,
           );
           return claimed.map((job) => ({
             ...job,
@@ -5174,7 +5180,7 @@ export function createRepositories(database: unknown) {
           }));
         });
       },
-      async succeed(id: string, workerId: string) {
+      async succeed(id: string, workerId: string, leaseGeneration: number) {
         await db.execute(
           sql`update quota_interrupt_jobs
                 set status = 'succeeded',
@@ -5184,7 +5190,8 @@ export function createRepositories(database: unknown) {
                     updated_at = now()
               where id = ${id}
                 and status = 'running'
-                and locked_by = ${workerId}`,
+                and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}`,
         );
       },
       async retry(
@@ -5192,6 +5199,7 @@ export function createRepositories(database: unknown) {
         workerId: string,
         error: string,
         final: boolean,
+        leaseGeneration: number,
         now = new Date(),
       ) {
         await db.execute(
@@ -5207,7 +5215,8 @@ export function createRepositories(database: unknown) {
                     updated_at = ${now}
               where id = ${id}
                 and status = 'running'
-                and locked_by = ${workerId}`,
+                and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}`,
         );
       },
     },
@@ -5365,6 +5374,7 @@ export function createRepositories(database: unknown) {
                        locked_at = ${now},
                        locked_by = ${input.workerId},
                        attempts = job.attempts + 1,
+                       lease_generation = job.lease_generation + 1,
                        updated_at = ${now}
                   from claimable
                  where job.id = claimable.id
@@ -5379,6 +5389,7 @@ export function createRepositories(database: unknown) {
                           job.run_after as "runAfter",
                           job.locked_at as "lockedAt",
                           job.locked_by as "lockedBy",
+                          job.lease_generation as "leaseGeneration",
                           job.created_at as "createdAt"`,
           );
         });
@@ -5390,7 +5401,7 @@ export function createRepositories(database: unknown) {
             left.id.localeCompare(right.id),
         );
       },
-      async succeed(id: string, workerId: string) {
+      async succeed(id: string, workerId: string, leaseGeneration: number) {
         await db.execute(
           sql`update background_jobs
                 set status = 'succeeded',
@@ -5400,13 +5411,49 @@ export function createRepositories(database: unknown) {
                     updated_at = now()
               where id = ${id}
                 and status = 'running'
-                and locked_by = ${workerId}`,
+                and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}`,
         );
+      },
+      /**
+       * Extends the lease of still-owned running jobs. A count below the
+       * input length means at least one job was taken over (or finished):
+       * the caller must stop that job's further side effects immediately.
+       */
+      async heartbeat(
+        input: {
+          items: Array<{ id: string; leaseGeneration: number }>;
+          workerId: string;
+        },
+        now = new Date(),
+      ) {
+        if (input.items.length === 0) return 0;
+        const extended = await rows<{ id: string }>(
+          db,
+          sql`update background_jobs job
+                 set locked_at = ${now}, updated_at = ${now}
+                from (
+                  values ${sql.join(
+                    input.items.map(
+                      (item) =>
+                        sql`(${item.id}::uuid, ${item.leaseGeneration}::integer)`,
+                    ),
+                    sql`, `,
+                  )}
+                ) as claimed(id, lease_generation)
+               where job.id = claimed.id
+                 and job.status = 'running'
+                 and job.locked_by = ${input.workerId}
+                 and job.lease_generation = claimed.lease_generation
+              returning job.id`,
+        );
+        return extended.length;
       },
       async succeedArtifactCleanup(
         id: string,
         workerId: string,
         cleanupGeneration: number,
+        leaseGeneration: number,
       ) {
         const updated = await rows(
           db,
@@ -5420,6 +5467,7 @@ export function createRepositories(database: unknown) {
                 and type = 'cleanup_artifact_object'
                 and status = 'running'
                 and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}
                 and coalesce(
                       (payload ->> 'cleanupGeneration')::integer,
                       0
@@ -5432,6 +5480,7 @@ export function createRepositories(database: unknown) {
         id: string,
         workerId: string,
         cleanupGeneration: number,
+        leaseGeneration: number,
       ) {
         const updated = await rows(
           db,
@@ -5454,6 +5503,7 @@ export function createRepositories(database: unknown) {
                 and type = 'cleanup_artifact_object'
                 and status = 'running'
                 and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}
                 and coalesce(
                       (payload ->> 'cleanupGeneration')::integer,
                       0
@@ -5468,7 +5518,12 @@ export function createRepositories(database: unknown) {
        * worker, so waiting is progress, not failure. A lost lease reports
        * false and the caller falls back to the retry path.
        */
-      async deferSessionDeletion(id: string, workerId: string, runAfter: Date) {
+      async deferSessionDeletion(
+        id: string,
+        workerId: string,
+        runAfter: Date,
+        leaseGeneration: number,
+      ) {
         const updated = await rows(
           db,
           sql`update background_jobs
@@ -5483,6 +5538,7 @@ export function createRepositories(database: unknown) {
                  and type = 'delete_session'
                  and status = 'running'
                  and locked_by = ${workerId}
+                 and lease_generation = ${leaseGeneration}
                returning id`,
         );
         return updated.length === 1;
@@ -5491,6 +5547,7 @@ export function createRepositories(database: unknown) {
         id: string,
         workerId: string,
         cleanupGeneration: number,
+        leaseGeneration: number,
         error: string,
         final: boolean,
         now = new Date(),
@@ -5504,6 +5561,7 @@ export function createRepositories(database: unknown) {
                    and type = 'cleanup_artifact_object'
                    and status = 'running'
                    and locked_by = ${workerId}
+                   and lease_generation = ${leaseGeneration}
                    and coalesce(
                          (payload ->> 'cleanupGeneration')::integer,
                          0
@@ -5540,6 +5598,7 @@ export function createRepositories(database: unknown) {
         id: string,
         workerId: string,
         cleanupGeneration: number,
+        leaseGeneration: number,
       ) {
         const updated = await rows(
           db,
@@ -5553,6 +5612,7 @@ export function createRepositories(database: unknown) {
                 and type = 'cleanup_drive_object'
                 and status = 'running'
                 and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}
                 and coalesce(
                       (payload ->> 'cleanupGeneration')::integer,
                       0
@@ -5565,6 +5625,7 @@ export function createRepositories(database: unknown) {
         id: string,
         workerId: string,
         cleanupGeneration: number,
+        leaseGeneration: number,
       ) {
         const updated = await rows(
           db,
@@ -5587,6 +5648,7 @@ export function createRepositories(database: unknown) {
                 and type = 'cleanup_drive_object'
                 and status = 'running'
                 and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}
                 and coalesce(
                       (payload ->> 'cleanupGeneration')::integer,
                       0
@@ -5599,6 +5661,7 @@ export function createRepositories(database: unknown) {
         id: string,
         workerId: string,
         cleanupGeneration: number,
+        leaseGeneration: number,
         error: string,
         final: boolean,
         now = new Date(),
@@ -5612,6 +5675,7 @@ export function createRepositories(database: unknown) {
                    and type = 'cleanup_drive_object'
                    and status = 'running'
                    and locked_by = ${workerId}
+                   and lease_generation = ${leaseGeneration}
                    and coalesce(
                          (payload ->> 'cleanupGeneration')::integer,
                          0
@@ -5665,6 +5729,7 @@ export function createRepositories(database: unknown) {
         id: string,
         workerId: string,
         payload: Record<string, unknown>,
+        leaseGeneration: number,
       ) {
         await requiredFirst(
           db,
@@ -5675,6 +5740,7 @@ export function createRepositories(database: unknown) {
                 and type = 'delete_session'
                 and status = 'running'
                 and locked_by = ${workerId}
+                and lease_generation = ${leaseGeneration}
               returning id`,
         );
       },
@@ -5683,6 +5749,7 @@ export function createRepositories(database: unknown) {
         workerId: string,
         error: string,
         final: boolean,
+        leaseGeneration: number,
         now = new Date(),
       ) {
         const artifactError = artifactDeletionErrorCode(error);
@@ -5697,6 +5764,7 @@ export function createRepositories(database: unknown) {
                  where id = ${id}
                    and status = 'running'
                    and locked_by = ${workerId}
+                   and lease_generation = ${leaseGeneration}
                  for update`,
           );
           if (!leased) return;
@@ -5727,6 +5795,7 @@ export function createRepositories(database: unknown) {
                 where id = ${id}
                   and status = 'running'
                   and locked_by = ${workerId}
+                  and lease_generation = ${leaseGeneration}
                 returning id, owner_user_id as "ownerUserId", type`,
           );
           if (updated?.type === "cleanup_drive_object" && final) {

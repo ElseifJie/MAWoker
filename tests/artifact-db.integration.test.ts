@@ -623,6 +623,7 @@ describe("Drive and artifact database integration", () => {
       "drive-worker",
       "provider leaked a secret",
       true,
+      claimed!.leaseGeneration,
       now,
     );
     const drive = await repositories.driveFiles.findOwned(

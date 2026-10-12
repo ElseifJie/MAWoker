@@ -327,7 +327,7 @@ describe("Session deletion and drive cleanup fencing", () => {
 
     // The in-flight worker's completion is now stale and must be refused.
     await expect(
-      repositories.jobs.succeedDriveCleanup(staged, "drive-worker", 0),
+      repositories.jobs.succeedDriveCleanup(staged, "drive-worker", 0, 0),
     ).resolves.toBe(false);
     const drive = await repositories.driveFiles.findOwned(userId, staged);
     expect(drive!.deletionState).toBe("pending");
@@ -372,6 +372,7 @@ describe("Session deletion and drive cleanup fencing", () => {
         artifactJobId,
         "cleanup-worker",
         6,
+        0,
         "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
         true,
         lockedAt,
@@ -382,6 +383,7 @@ describe("Session deletion and drive cleanup fencing", () => {
         driveJobId,
         "cleanup-worker",
         10,
+        0,
         "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
         true,
         lockedAt,
@@ -392,6 +394,7 @@ describe("Session deletion and drive cleanup fencing", () => {
         artifactJobId,
         "cleanup-worker",
         7,
+        0,
         "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
         true,
         lockedAt,
@@ -402,6 +405,7 @@ describe("Session deletion and drive cleanup fencing", () => {
         driveJobId,
         "cleanup-worker",
         11,
+        0,
         "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
         true,
         lockedAt,

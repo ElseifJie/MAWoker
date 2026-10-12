@@ -538,6 +538,7 @@ describe("user Agent database integration", () => {
       "worker-1",
       "temporary",
       false,
+      first!.leaseGeneration,
       firstNow,
     );
     const pending = await database.client.query<{
@@ -561,7 +562,13 @@ describe("user Agent database integration", () => {
       types: ["reconcile_personal_agent"],
     });
     expect(second).toMatchObject({ id: personalId, attempts: 2 });
-    await repositories.jobs.retry(personalId, "worker-2", "permanent", true);
+    await repositories.jobs.retry(
+      personalId,
+      "worker-2",
+      "permanent",
+      true,
+      second!.leaseGeneration,
+    );
     const failed = await database.client.query<{
       status: string;
       last_error: string;

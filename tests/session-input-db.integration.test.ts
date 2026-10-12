@@ -383,6 +383,7 @@ describe("Session input database integration", () => {
       "cleanup-worker",
       "Ark unavailable",
       false,
+      claimed!.leaseGeneration,
       now,
     );
 
@@ -421,6 +422,13 @@ describe("Session input database integration", () => {
       "cleanup-worker",
       "Ark still unavailable",
       true,
+      // The row was re-claimed by the retry path; read the live generation.
+      (
+        await database.client.query<{ lease_generation: number }>(
+          `select lease_generation from background_jobs where id = $1`,
+          [input.id],
+        )
+      ).rows[0]!.lease_generation,
       retryAt,
     );
 

@@ -25,6 +25,7 @@ function job(
     runAfter: timestamp,
     lockedAt: timestamp,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: timestamp,
     ...overrides,
   };
@@ -35,6 +36,7 @@ function guards(
   claim: Record<string, unknown> | undefined = {
     generation: 0,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     type: "cleanup_artifact_object",
   },
 ) {
@@ -75,6 +77,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
       "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
       true,
     );
@@ -121,6 +124,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
       "STORAGE_UNAVAILABLE",
       false,
     );
@@ -128,6 +132,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
     );
     expect(JSON.stringify(jobs.retryArtifactCleanup.mock.calls)).not.toContain(
       objectKey,
@@ -160,6 +165,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       "worker-1",
       "ARTIFACT_CLEANUP_INVALID_JOB",
       false,
+      1,
     );
   });
 
@@ -196,6 +202,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
     );
     expect(jobs.succeedArtifactCleanup).not.toHaveBeenCalled();
   });
@@ -233,6 +240,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
     );
     expect(jobs.retryArtifactCleanup).not.toHaveBeenCalled();
     expect(jobs.succeedArtifactCleanup).not.toHaveBeenCalled();
@@ -272,6 +280,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
       "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
       true,
     );
@@ -311,6 +320,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
     );
   });
 
@@ -345,6 +355,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
       "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
       true,
     );
@@ -374,6 +385,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
         {
           generation: 2,
           lockedBy: "worker-1",
+          leaseGeneration: 1,
           type: "cleanup_artifact_object",
         },
       ),
@@ -516,6 +528,7 @@ describe("ArtifactObjectCleanupProcessor", () => {
       jobId,
       "worker-1",
       0,
+      1,
       "ARTIFACT_CLEANUP_FAILED",
       false,
     );

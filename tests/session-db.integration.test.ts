@@ -433,6 +433,7 @@ describe("Session database integration", () => {
         "session-worker",
         errorCode,
         final,
+        claimed.leaseGeneration,
         new Date("2026-09-06T01:00:01.000Z"),
       );
       const stored = await database.client.query<{
@@ -1072,6 +1073,7 @@ describe("Session database integration", () => {
       "quota-worker-1",
       "QUOTA_INTERRUPT_FAILED",
       false,
+      claimed!.leaseGeneration,
       now,
     );
     const [retried] = await repositories.quotaInterrupts.claim({
@@ -1080,7 +1082,11 @@ describe("Session database integration", () => {
       now: new Date("2026-10-01T00:01:01.000Z"),
     });
     expect(retried).toMatchObject({ id: claimed!.id, attempts: 2 });
-    await repositories.quotaInterrupts.succeed(retried!.id, "quota-worker-2");
+    await repositories.quotaInterrupts.succeed(
+      retried!.id,
+      "quota-worker-2",
+      retried!.leaseGeneration,
+    );
     await expect(
       repositories.quotaInterrupts.claim({
         workerId: "quota-worker-3",
@@ -1177,6 +1183,7 @@ describe("Session database integration", () => {
       "session-worker",
       "Ark unavailable",
       true,
+      claimed.leaseGeneration,
     );
 
     const terminal = await database.client.query<{
@@ -1429,7 +1436,12 @@ describe("Session database integration", () => {
       completed: { nonRunningObserved: true },
     };
 
-    await repositories.jobs.updatePayload(job!.id, "worker-1", payload);
+    await repositories.jobs.updatePayload(
+      job!.id,
+      "worker-1",
+      payload,
+      job!.leaseGeneration,
+    );
     await expect(
       repositories.sessionDeletion.findDeleting(id(), intent.id),
     ).resolves.toBeUndefined();
@@ -2320,12 +2332,14 @@ describe("Session database integration", () => {
       firstAttempt!.id,
       "worker-1",
       payload,
+      firstAttempt!.leaseGeneration,
     );
     await repositories.jobs.retry(
       firstAttempt!.id,
       "worker-1",
       "provider secret",
       false,
+      firstAttempt!.leaseGeneration,
       new Date("2030-09-06T01:00:00.000Z"),
     );
 

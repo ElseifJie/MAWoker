@@ -23,6 +23,7 @@ function job(
     runAfter: timestamp,
     lockedAt: timestamp,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: timestamp,
     ...overrides,
   };
@@ -51,7 +52,7 @@ describe("ArtifactDeletionProcessor", () => {
       types: ["delete_artifact"],
     });
     expect(service.deleteStored).toHaveBeenCalledWith(artifactId, ownerUserId);
-    expect(jobs.succeed).toHaveBeenCalledWith(artifactId, "worker-1");
+    expect(jobs.succeed).toHaveBeenCalledWith(artifactId, "worker-1", 1);
   });
 
   it("retries partial storage/index failures and marks the final attempt", async () => {
@@ -77,6 +78,7 @@ describe("ArtifactDeletionProcessor", () => {
       "worker-1",
       "ARTIFACT_DELETE_FAILED",
       true,
+      1,
     );
     expect(jobs.succeed).not.toHaveBeenCalled();
   });
@@ -108,6 +110,7 @@ describe("ArtifactDeletionProcessor", () => {
       "worker-1",
       "ARTIFACT_DELETE_INVALID_JOB",
       false,
+      1,
     );
     expect(jobs.retry).toHaveBeenNthCalledWith(
       2,
@@ -115,6 +118,7 @@ describe("ArtifactDeletionProcessor", () => {
       "worker-1",
       "ARTIFACT_DELETE_INVALID_JOB",
       false,
+      1,
     );
   });
 
@@ -148,6 +152,7 @@ describe("ArtifactDeletionProcessor", () => {
       "worker-1",
       "STORAGE_UNAVAILABLE",
       false,
+      1,
     );
     expect(JSON.stringify(jobs.retry.mock.calls)).not.toMatch(
       /secret-object-key|provider leaked/,
@@ -184,6 +189,7 @@ describe("ArtifactDeletionProcessor", () => {
         "worker-1",
         "ARTIFACT_DELETE_FAILED",
         false,
+        1,
       );
       expect(JSON.stringify(jobs.retry.mock.calls)).not.toContain(
         String(failure),

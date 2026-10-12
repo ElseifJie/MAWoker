@@ -17,6 +17,7 @@ export interface ArtifactDeletionJob {
   runAfter: Date;
   lockedAt: Date;
   lockedBy: string;
+  leaseGeneration: number;
   createdAt: Date;
 }
 
@@ -26,12 +27,17 @@ interface ArtifactDeletionJobs {
     limit: number;
     types: ["delete_artifact"];
   }): PromiseLike<ArtifactDeletionJob[]>;
-  succeed(id: string, workerId: string): PromiseLike<void>;
+  succeed(
+    id: string,
+    workerId: string,
+    leaseGeneration: number,
+  ): PromiseLike<void>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
+    leaseGeneration: number,
   ): PromiseLike<void>;
 }
 
@@ -109,7 +115,11 @@ export class ArtifactDeletionProcessor {
         parsePayload(job.payload),
         job.ownerUserId,
       );
-      await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
+      await this.dependencies.jobs.succeed(
+        job.id,
+        this.dependencies.workerId,
+        job.leaseGeneration,
+      );
     } catch (error) {
       const final = job.attempts >= job.maxAttempts;
       const errorCode = retryError(error);
@@ -129,6 +139,7 @@ export class ArtifactDeletionProcessor {
         this.dependencies.workerId,
         errorCode,
         final,
+        job.leaseGeneration,
       );
     }
   }

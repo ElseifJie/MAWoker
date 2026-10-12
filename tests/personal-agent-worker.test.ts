@@ -37,6 +37,7 @@ function job(
     runAfter: new Date("2026-09-06T00:00:00Z"),
     lockedAt: new Date("2026-09-06T00:00:00Z"),
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: new Date("2026-09-06T00:00:00Z"),
   };
 }
@@ -78,7 +79,7 @@ describe("PersonalAgentReconciliationProcessor", () => {
       expect(service.reconcileDelete).toHaveBeenCalledTimes(
         operation === "delete" ? 1 : 0,
       );
-      expect(jobs.succeed).toHaveBeenCalledWith(claimed.id, "worker-1");
+      expect(jobs.succeed).toHaveBeenCalledWith(claimed.id, "worker-1", 1);
       expect(jobs.retry).not.toHaveBeenCalled();
     },
   );
@@ -115,6 +116,7 @@ describe("PersonalAgentReconciliationProcessor", () => {
       "worker-1",
       "temporary",
       false,
+      1,
     );
     expect(jobs.retry).toHaveBeenNthCalledWith(
       2,
@@ -122,6 +124,7 @@ describe("PersonalAgentReconciliationProcessor", () => {
       "worker-1",
       "still failing",
       true,
+      1,
     );
     expect(jobs.succeed).not.toHaveBeenCalled();
   });

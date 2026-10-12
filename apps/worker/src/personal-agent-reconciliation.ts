@@ -17,6 +17,7 @@ export interface PersonalAgentReconciliationJob {
   runAfter: Date;
   lockedAt: Date;
   lockedBy: string;
+  leaseGeneration: number;
   createdAt: Date;
 }
 
@@ -26,12 +27,17 @@ interface ReconciliationJobs {
     limit: number;
     types: ["reconcile_personal_agent"];
   }): PromiseLike<PersonalAgentReconciliationJob[]>;
-  succeed(id: string, workerId: string): PromiseLike<void>;
+  succeed(
+    id: string,
+    workerId: string,
+    leaseGeneration: number,
+  ): PromiseLike<void>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
+    leaseGeneration: number,
   ): PromiseLike<void>;
 }
 
@@ -217,13 +223,18 @@ export class PersonalAgentReconciliationProcessor {
           context,
         );
       }
-      await this.dependencies.jobs.succeed(job.id, this.dependencies.workerId);
+      await this.dependencies.jobs.succeed(
+        job.id,
+        this.dependencies.workerId,
+        job.leaseGeneration,
+      );
     } catch (error) {
       await this.dependencies.jobs.retry(
         job.id,
         this.dependencies.workerId,
         error instanceof Error ? error.message : String(error),
         job.attempts >= job.maxAttempts,
+        job.leaseGeneration,
       );
     }
   }

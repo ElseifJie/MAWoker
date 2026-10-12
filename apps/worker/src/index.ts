@@ -92,6 +92,9 @@ const sessionDeletionProcessor = new SessionDeletionProcessor({
   memory,
   settlement: sessionSettlement,
   workerId: `session-deletion-worker:${process.pid}:${randomUUID()}`,
+  // One deletion at a time: its steps can be slow (memory fence, settlement,
+  // Ark calls), and queued claims would burn their lease while waiting.
+  batchSize: 1,
   alert: (event) =>
     logger.error(
       { event: "deletion.terminal", ...event },

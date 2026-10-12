@@ -183,6 +183,13 @@
       "when": 1791804679255,
       "tag": "0025_wandering_shooting_star",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791806732135,
+      "tag": "0026_big_psynapse",
+      "breakpoints": true
     }
   ]
 }

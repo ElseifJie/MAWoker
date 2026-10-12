@@ -23,6 +23,7 @@ function job(
     runAfter: timestamp,
     lockedAt: timestamp,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: timestamp,
     ...overrides,
   };
@@ -43,6 +44,7 @@ function guards(
   claim: Record<string, unknown> | undefined = {
     generation: 0,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     type: "cleanup_drive_object",
   },
 ) {
@@ -89,6 +91,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
     );
   });
 
@@ -126,6 +129,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
       "STORAGE_UNAVAILABLE",
       false,
     );
@@ -133,6 +137,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
     );
     expect(JSON.stringify(lease.retryDriveCleanup.mock.calls)).not.toContain(
       "private/key",
@@ -162,6 +167,7 @@ describe("DriveObjectCleanupProcessor", () => {
       "worker-1",
       "DRIVE_CLEANUP_INVALID_JOB",
       false,
+      1,
     );
   });
 
@@ -184,6 +190,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
     );
     expect(service.deleteStored).not.toHaveBeenCalled();
     expect(lease.succeedDriveCleanup).not.toHaveBeenCalled();
@@ -213,6 +220,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
     );
     expect(lease.retry).not.toHaveBeenCalled();
   });
@@ -241,6 +249,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
     );
     expect(lease.retryDriveCleanup).not.toHaveBeenCalled();
     expect(lease.retry).not.toHaveBeenCalled();
@@ -275,6 +284,7 @@ describe("DriveObjectCleanupProcessor", () => {
         driveFileId,
         "worker-1",
         0,
+        1,
         "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
         true,
       );
@@ -303,6 +313,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
       "DRIVE_CLEANUP_INVALID_JOB",
       false,
     );
@@ -325,6 +336,7 @@ describe("DriveObjectCleanupProcessor", () => {
         {
           generation: 1,
           lockedBy: "worker-1",
+          leaseGeneration: 1,
           type: "cleanup_drive_object",
         },
       ),
@@ -355,6 +367,7 @@ describe("DriveObjectCleanupProcessor", () => {
         {
           generation: 0,
           lockedBy: "worker-2",
+          leaseGeneration: 1,
           type: "cleanup_drive_object",
         },
       ),
@@ -491,6 +504,7 @@ describe("DriveObjectCleanupProcessor", () => {
       driveFileId,
       "worker-1",
       0,
+      1,
       "DRIVE_CLEANUP_FAILED",
       false,
     );

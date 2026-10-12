@@ -204,6 +204,7 @@ describe("quota interrupt worker", () => {
     monthStart: new Date("2026-09-01T00:00:00.000Z"),
     attempts: 1,
     maxAttempts: 10,
+    leaseGeneration: 1,
   };
 
   it.each(["running", "rescheduled"] as const)(
@@ -246,7 +247,7 @@ describe("quota interrupt worker", () => {
             "quota-interrupt:user-1:session-1:2026-09-01T00:00:00.000Z",
         },
       );
-      expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1");
+      expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1", 1);
       expect(jobs.retry).not.toHaveBeenCalled();
     },
   );
@@ -288,9 +289,10 @@ describe("quota interrupt worker", () => {
       "quota-worker-1",
       "QUOTA_INTERRUPT_FAILED",
       false,
+      1,
     );
     expect(ark.submitEvent).not.toHaveBeenCalled();
-    expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1");
+    expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1", 1);
   });
 });
 

@@ -25,6 +25,7 @@ function job(
     runAfter: now,
     lockedAt: now,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: now,
     ...overrides,
   };
@@ -62,6 +63,7 @@ describe("SessionReconciliationProcessor", () => {
     expect(jobs.succeed).toHaveBeenCalledWith(
       "00000000-0000-4000-8000-000000000001",
       "worker-1",
+      1,
     );
     expect(jobs.retry).not.toHaveBeenCalled();
   });
@@ -89,6 +91,7 @@ describe("SessionReconciliationProcessor", () => {
       "worker-1",
       "Ark unavailable",
       true,
+      1,
     );
     expect(jobs.succeed).not.toHaveBeenCalled();
   });
@@ -122,6 +125,7 @@ describe("SessionReconciliationProcessor", () => {
         "worker-1",
         "Ark Session response does not verify the requested configuration",
         final,
+        1,
       );
       expect(jobs.succeed).not.toHaveBeenCalled();
     },

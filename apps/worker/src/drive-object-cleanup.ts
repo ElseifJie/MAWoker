@@ -17,6 +17,7 @@ export interface DriveObjectCleanupJob {
   runAfter: Date;
   lockedAt: Date;
   lockedBy: string;
+  leaseGeneration: number;
   createdAt: Date;
 }
 
@@ -31,22 +32,26 @@ interface DriveObjectCleanupJobs {
     id: string,
     workerId: string,
     cleanupGeneration: number,
+    leaseGeneration: number,
   ): PromiseLike<boolean>;
   succeedDriveCleanup(
     id: string,
     workerId: string,
     cleanupGeneration: number,
+    leaseGeneration: number,
   ): PromiseLike<boolean>;
   retry(
     id: string,
     workerId: string,
     error: string,
     final: boolean,
+    leaseGeneration: number,
   ): PromiseLike<void>;
   retryDriveCleanup(
     id: string,
     workerId: string,
     cleanupGeneration: number,
+    leaseGeneration: number,
     error: string,
     final: boolean,
   ): PromiseLike<boolean>;
@@ -79,7 +84,13 @@ interface DriveObjectCleanupGuards {
     jobId: string,
     ownerUserId: string,
   ): PromiseLike<
-    { generation: number; lockedBy: string | null; type: string } | undefined
+    | {
+        generation: number;
+        lockedBy: string | null;
+        type: string;
+        leaseGeneration: number;
+      }
+    | undefined
   >;
 }
 
@@ -202,6 +213,7 @@ export class DriveObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             payload.cleanupGeneration,
+            job.leaseGeneration,
           ),
         );
         return;
@@ -215,6 +227,7 @@ export class DriveObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             payload.cleanupGeneration,
+            job.leaseGeneration,
             "DRIVE_CLEANUP_OBJECT_UNVERIFIED",
             true,
           ),
@@ -231,6 +244,7 @@ export class DriveObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             payload.cleanupGeneration,
+            job.leaseGeneration,
           ),
         );
         return;
@@ -247,7 +261,8 @@ export class DriveObjectCleanupProcessor {
         !claim ||
         claim.type !== "cleanup_drive_object" ||
         claim.generation !== payload.cleanupGeneration ||
-        claim.lockedBy !== this.dependencies.workerId
+        claim.lockedBy !== this.dependencies.workerId ||
+        claim.leaseGeneration !== job.leaseGeneration
       ) {
         return;
       }
@@ -260,6 +275,7 @@ export class DriveObjectCleanupProcessor {
           job.id,
           this.dependencies.workerId,
           payload.cleanupGeneration,
+          job.leaseGeneration,
         ),
       );
     } catch (error) {
@@ -271,6 +287,7 @@ export class DriveObjectCleanupProcessor {
           this.dependencies.workerId,
           code,
           job.attempts >= job.maxAttempts,
+          job.leaseGeneration,
         );
       } else {
         assertDriveCleanupClaim(
@@ -278,6 +295,7 @@ export class DriveObjectCleanupProcessor {
             job.id,
             this.dependencies.workerId,
             cleanupGeneration,
+            job.leaseGeneration,
             code,
             job.attempts >= job.maxAttempts,
           ),

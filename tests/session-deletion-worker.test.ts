@@ -34,6 +34,7 @@ function job(overrides: Partial<SessionDeletionJob> = {}): SessionDeletionJob {
     runAfter: timestamp,
     lockedAt: timestamp,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: timestamp,
     ...overrides,
   };
@@ -61,6 +62,7 @@ function setup(
     retry: vi.fn(async () => {
       order.push("retry");
     }),
+    heartbeat: vi.fn(async () => 1),
     deferSessionDeletion: vi.fn(async () => {
       order.push("defer");
       return true;
@@ -198,6 +200,7 @@ describe("SessionDeletionProcessor", () => {
       "worker-1",
       "SESSION_DELETE_FAILED",
       false,
+      1,
     );
     expect(state.repository.removeLocal).not.toHaveBeenCalled();
 
@@ -219,7 +222,7 @@ describe("SessionDeletionProcessor", () => {
     expect(state.ark.getSession).not.toHaveBeenCalled();
     expect(state.ark.deleteSession).not.toHaveBeenCalled();
     expect(state.repository.removeLocal).toHaveBeenCalledOnce();
-    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1");
+    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1", 1);
   });
 
   it("waits for an observed non-running state before deleting", async () => {
@@ -243,6 +246,7 @@ describe("SessionDeletionProcessor", () => {
       "worker-1",
       "SESSION_DELETE_WAITING",
       false,
+      1,
     );
 
     state.jobs.claim.mockResolvedValueOnce([
@@ -285,6 +289,7 @@ describe("SessionDeletionProcessor", () => {
       sessionId,
       "worker-1",
       new Date(timestamp.getTime() + 30_000),
+      1,
     );
     expect(state.jobs.retry).not.toHaveBeenCalled();
     expect(state.jobs.succeed).not.toHaveBeenCalled();
@@ -304,7 +309,7 @@ describe("SessionDeletionProcessor", () => {
     expect(fence).toHaveBeenCalledTimes(2);
     expect(state.ark.deleteSession).toHaveBeenCalledOnce();
     expect(state.jobs.deferSessionDeletion).toHaveBeenCalledTimes(1);
-    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1");
+    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1", 1);
   });
 
   it("falls back to the attempt budget after an hour without fence progress", async () => {
@@ -339,6 +344,7 @@ describe("SessionDeletionProcessor", () => {
       "worker-1",
       "SESSION_DELETE_WAITING",
       true,
+      1,
     );
   });
 
@@ -361,6 +367,7 @@ describe("SessionDeletionProcessor", () => {
       "worker-1",
       "SESSION_DELETE_INVALID_JOB",
       false,
+      1,
     );
   });
 
@@ -371,7 +378,7 @@ describe("SessionDeletionProcessor", () => {
     await state.processor.runOnce();
 
     expect(state.repository.orphanDriveFiles).not.toHaveBeenCalled();
-    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1");
+    expect(state.jobs.succeed).toHaveBeenCalledWith(sessionId, "worker-1", 1);
   });
 
   it("fails deletion without removing local records when orphaning is exhausted", async () => {
@@ -411,7 +418,38 @@ describe("SessionDeletionProcessor", () => {
       "worker-1",
       "SESSION_DELETE_FAILED",
       true,
+      1,
     );
+  });
+
+  it("stops before any side effect when the lease was taken over", async () => {
+    const state = setup();
+    // The heartbeat reports the takeover: another worker bumped the lease
+    // generation while this execution was between steps.
+    state.jobs.heartbeat.mockResolvedValue(0);
+
+    await state.processor.runOnce();
+
+    expect(state.ark.getSession).not.toHaveBeenCalled();
+    expect(state.ark.deleteSession).not.toHaveBeenCalled();
+    expect(state.repository.removeLocal).not.toHaveBeenCalled();
+    // The old owner writes nothing at all — no checkpoint, no outcome; the
+    // takeover owner owns the job from here.
+    expect(state.jobs.updatePayload).not.toHaveBeenCalled();
+    expect(state.jobs.succeed).not.toHaveBeenCalled();
+    expect(state.jobs.retry).not.toHaveBeenCalled();
+    expect(state.jobs.deferSessionDeletion).not.toHaveBeenCalled();
+  });
+
+  it("proceeds normally while the heartbeat confirms ownership", async () => {
+    const state = setup();
+    state.jobs.heartbeat.mockResolvedValue(1);
+
+    await state.processor.runOnce();
+
+    expect(state.jobs.heartbeat).toHaveBeenCalled();
+    expect(state.ark.deleteSession).toHaveBeenCalled();
+    expect(state.order).toContain("local");
   });
 
   it("never deletes upstream before settlement is confirmed", async () => {
@@ -531,6 +569,7 @@ describe("SessionDeletionProcessor", () => {
       "worker-1",
       "SESSION_DELETE_FAILED",
       true,
+      1,
     );
     expect(alert).toHaveBeenCalledWith({
       jobType: "delete_session",

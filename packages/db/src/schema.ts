@@ -813,6 +813,12 @@ export const backgroundJobs = pgTable(
       .notNull(),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
     lockedBy: text("locked_by"),
+    /**
+     * Bumped on every claim. State transitions validate (id, locked_by,
+     * lease_generation), so an execution whose lease was taken over cannot
+     * write checkpoints or outcomes even before its row lock expires.
+     */
+    leaseGeneration: integer("lease_generation").default(0).notNull(),
     lastError: text("last_error"),
     ...timestamps,
   },
@@ -846,6 +852,8 @@ export const quotaInterruptJobs = pgTable(
       .notNull(),
     lockedAt: timestamp("locked_at", { withTimezone: true }),
     lockedBy: text("locked_by"),
+    /** Same takeover protocol as background_jobs. */
+    leaseGeneration: integer("lease_generation").default(0).notNull(),
     lastError: text("last_error"),
     ...timestamps,
   },

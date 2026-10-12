@@ -21,6 +21,7 @@ function job(overrides: Partial<UploadCleanupJob> = {}): UploadCleanupJob {
     runAfter: timestamp,
     lockedAt: timestamp,
     lockedBy: "worker-1",
+    leaseGeneration: 1,
     createdAt: timestamp,
     ...overrides,
   };
@@ -52,7 +53,7 @@ describe("UploadCleanupProcessor", () => {
       userId: ownerUserId,
       requestId: `worker:${uploadId}:1`,
     });
-    expect(jobs.succeed).toHaveBeenCalledWith(uploadId, "worker-1");
+    expect(jobs.succeed).toHaveBeenCalledWith(uploadId, "worker-1", 1);
   });
 
   it("retries partial failures and marks the final attempt", async () => {
@@ -78,6 +79,7 @@ describe("UploadCleanupProcessor", () => {
       "worker-1",
       "Ark delete failed",
       true,
+      1,
     );
     expect(jobs.succeed).not.toHaveBeenCalled();
   });
