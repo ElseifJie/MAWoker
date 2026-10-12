@@ -80,6 +80,8 @@ const driveFiles = new DriveFileService({
   repository: repositories.driveFiles,
   storage: artifactStorage,
   createId: randomUUID,
+  enqueueLegacyKeyCleanup: (objectKey, ownerUserId) =>
+    repositories.driveFiles.enqueueRetiredKeyCleanup(objectKey, ownerUserId),
 });
 const sessionSettlement = new SessionSettlementService({
   repository: repositories.sessionLifecycle,

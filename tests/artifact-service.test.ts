@@ -94,11 +94,15 @@ async function setup() {
     nextId += 1;
     return `00000000-0000-4000-8000-${String(nextId).padStart(12, "0")}`;
   };
+  const retiredKeys: Array<{ objectKey: string; ownerUserId: string }> = [];
   const drive = new DriveFileService({
     repository: repositories.driveFiles,
     storage,
     createId,
     now: () => now,
+    enqueueLegacyKeyCleanup: async (objectKey, ownerUserId) => {
+      retiredKeys.push({ objectKey, ownerUserId });
+    },
   });
   let artifacts: ReturnType<typeof exportEntry>[] = [];
   const artifactService = new ArtifactService({
@@ -120,6 +124,7 @@ async function setup() {
     repositories,
     storage,
     drive,
+    retiredKeys,
     artifacts: artifactService,
     setArtifacts(entries: ReturnType<typeof exportEntry>[]) {
       artifacts = entries;
@@ -167,6 +172,167 @@ describe("ArtifactService", () => {
       `select count(*)::text as count from drive_files`,
     );
     expect(driveRows.rows[0]!.count).toBe("1");
+    await state.close();
+  });
+
+  it("refreshes under a fresh key and retires the old one atomically", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const firstBytes = new TextEncoder().encode("version one");
+    state.setArtifacts([
+      exportEntry("ark-file-1", "report.txt", firstBytes.length),
+    ]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      firstBytes,
+      "text/plain",
+    );
+
+    const first = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
+    });
+    const originalKey = first[0]!.tosObjectKey;
+    expect(await collect(await state.storage.openRead(originalKey))).toEqual(
+      firstBytes,
+    );
+
+    // The upstream object changed; the next sync must not overwrite the old
+    // key in place — it copies to a fresh operation-scoped key and switches.
+    const secondBytes = new TextEncoder().encode("version two!");
+    state.setArtifacts([
+      exportEntry("ark-file-1", "report.txt", secondBytes.length),
+    ]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      secondBytes,
+      "text/plain",
+    );
+    const second = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-2",
+    });
+    expect(second[0]!.driveFileId).toBe(first[0]!.driveFileId);
+    expect(second[0]!.tosObjectKey).not.toBe(originalKey);
+    expect(second[0]!.sizeBytes).toBe(secondBytes.length);
+    // Both byte sets remain intact until the retired key is reaped: readers
+    // never see a torn object.
+    expect(await collect(await state.storage.openRead(originalKey))).toEqual(
+      firstBytes,
+    );
+    expect(
+      await collect(await state.storage.openRead(second[0]!.tosObjectKey)),
+    ).toEqual(secondBytes);
+    // The retired key was handed to the legacy key-addressed cleanup.
+    expect(state.retiredKeys).toEqual([
+      { objectKey: originalKey, ownerUserId: tenant.userId },
+    ]);
+    // Repeated refreshes keep moving to fresh keys.
+    const third = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-3",
+    });
+    expect(third[0]!.tosObjectKey).not.toBe(second[0]!.tosObjectKey);
+    expect(state.retiredKeys).toHaveLength(2);
+    await state.close();
+  });
+
+  it("keeps a deleting row on its old key and reclaims the copied bytes", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("about to delete");
+    state.setArtifacts([exportEntry("ark-file-1", "report.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+    const first = await state.artifacts.syncSession(tenant.sessionId, {
+      userId: tenant.userId,
+      requestId: "req-1",
+    });
+    const originalKey = first[0]!.tosObjectKey;
+
+    // The drive row enters deletion (orphaning) before the refresh lands.
+    await state.database.client.query(
+      `update drive_files set orphaned_at = now() where id = $1`,
+      [first[0]!.driveFileId],
+    );
+
+    const refreshed = await state.drive.refreshFromSource(
+      (await state.drive.findOwned(tenant.userId, first[0]!.driveFileId))!,
+      {
+        ...exportLocation("ark-file-1"),
+        mimeType: "text/plain",
+        sizeBytes: bytes.length,
+      },
+      { userId: tenant.userId, requestId: "req-2" },
+    );
+    // The row keeps its old key; the copied bytes are reclaimed.
+    expect(refreshed.tosObjectKey).toBe(originalKey);
+    expect(
+      state.storage
+        .keys()
+        .filter((key) => key !== originalKey && key.startsWith("tenants/")),
+    ).toEqual([]);
+    expect(state.retiredKeys).toEqual([]);
+    await state.close();
+  });
+
+  it("orphans the loser row when a concurrent first sync races the upsert", async () => {
+    const state = await setup();
+    const tenant = await seedTenant(state.database, "a");
+    const bytes = new TextEncoder().encode("raced body");
+    state.setArtifacts([exportEntry("ark-file-1", "report.txt", bytes.length)]);
+    state.storage.putExternal(
+      exportLocation("ark-file-1"),
+      bytes,
+      "text/plain",
+    );
+
+    // Two syncs race: both stage their own drive row before either upsert
+    // lands. The second upsert wins the association; the first row must be
+    // orphaned for the GC instead of leaking committed bytes.
+    const [firstSync, secondSync] = await Promise.all([
+      state.artifacts.syncSession(tenant.sessionId, {
+        userId: tenant.userId,
+        requestId: "req-1",
+      }),
+      state.artifacts.syncSession(tenant.sessionId, {
+        userId: tenant.userId,
+        requestId: "req-2",
+      }),
+    ]);
+    const winner =
+      firstSync[0]!.driveFileId === secondSync[0]!.driveFileId
+        ? firstSync[0]!
+        : secondSync[0]!;
+
+    const rows = await state.database.client.query<{
+      id: string;
+      deletion_state: string;
+      orphaned_at: Date | null;
+    }>(
+      `select id, deletion_state::text, orphaned_at
+         from drive_files where owner_user_id = $1`,
+      [tenant.userId],
+    );
+    expect(rows.rows).toHaveLength(2);
+    for (const row of rows.rows) {
+      if (row.id === winner.driveFileId) {
+        expect(row.orphaned_at).toBeNull();
+      } else {
+        // The loser is committed-but-orphaned: claimable by the GC.
+        expect(row.deletion_state).toBe("none");
+        expect(row.orphaned_at).not.toBeNull();
+      }
+    }
+    const enqueued = await state.repositories.driveFiles.claimOrphans({
+      limit: 10,
+      retentionMs: 0,
+      now: new Date(),
+    });
+    expect(enqueued).toBe(1);
     await state.close();
   });
 

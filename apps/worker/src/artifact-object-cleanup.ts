@@ -112,6 +112,8 @@ function parsePayload(
   objectKey: string;
   cleanupGeneration: number;
   uploadInProgressUntil?: Date;
+  /** Set only by the drive switch path, which knows the key was retired. */
+  retiredBySwitch?: boolean;
 } {
   const objectKey = payload.objectKey;
   if (
@@ -121,13 +123,27 @@ function parsePayload(
     throw new InvalidArtifactObjectCleanupJobError();
   }
   const segments = objectKey.split("/");
+  // Two accepted shapes, both rooted at the caller's tenant prefix: legacy
+  // `tenants/<uid>/sessions/<sid>/artifacts/...` keys, and retired drive
+  // keys (`tenants/<uid>/drive/artifact/...`) whose row was switched to a
+  // fresh key — for those the guard finds no row, which is the "ownerless
+  // bytes" case the legacy processor exists to drain.
+  const legacyShape =
+    segments.length >= 6 &&
+    segments[0] === "tenants" &&
+    segments[1] === ownerUserId &&
+    segments[2] === "sessions" &&
+    segments[3]!.length > 0 &&
+    segments[4] === "artifacts";
+  const retiredDriveShape =
+    segments.length >= 6 &&
+    segments[0] === "tenants" &&
+    segments[1] === ownerUserId &&
+    segments[2] === "drive" &&
+    segments[3] === "artifact" &&
+    segments[4]!.length > 0;
   if (
-    segments.length < 6 ||
-    segments[0] !== "tenants" ||
-    segments[1] !== ownerUserId ||
-    segments[2] !== "sessions" ||
-    segments[3]!.length === 0 ||
-    segments[4] !== "artifacts" ||
+    !(legacyShape || retiredDriveShape) ||
     segments.slice(5).some((segment) => segment.length === 0)
   ) {
     throw new InvalidArtifactObjectCleanupJobError();
@@ -148,12 +164,17 @@ function parsePayload(
   ) {
     throw new InvalidArtifactObjectCleanupJobError();
   }
+  const retiredBySwitch = payload.retiredBySwitch;
+  if (retiredBySwitch !== undefined && typeof retiredBySwitch !== "boolean") {
+    throw new InvalidArtifactObjectCleanupJobError();
+  }
   return {
     objectKey,
     cleanupGeneration,
     ...(uploadInProgressUntil === undefined
       ? {}
       : { uploadInProgressUntil: new Date(uploadInProgressUntil) }),
+    ...(retiredBySwitch === undefined ? {} : { retiredBySwitch }),
   };
 }
 
@@ -232,26 +253,30 @@ export class ArtifactObjectCleanupProcessor {
         );
         return;
       }
-      // A legacy job without a guard row has no durable proof that its write
-      // Lease expiry (or a missing lease) leaves the remote outcome
-      // unknown, so preserve the bytes and finish only this job generation.
+      // A legacy job without a guard row has no durable proof about its
+      // bytes: preserve them and finish only this job generation. The one
+      // exception is a key the drive switch path explicitly retired — that
+      // enqueue happens after the row already points elsewhere, so the
+      // missing row IS the proof the bytes are unreferenced.
       if (!guard) {
-        assertArtifactCleanupClaim(
-          await this.dependencies.jobs.retryArtifactCleanup(
-            job.id,
-            this.dependencies.workerId,
-            payload.cleanupGeneration,
-            job.leaseGeneration,
-            "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
-            true,
-          ),
-        );
-        return;
-      }
-      // A tombstoned row's bytes are safely reaped. `pending` means a staged
-      // write with an unknown remote outcome and `none`/`deletion_failed` mean
-      // the object may be live: finish the fenced job instead of guessing.
-      if (guard.deletionState !== "deleted") {
+        if (!payload.retiredBySwitch) {
+          assertArtifactCleanupClaim(
+            await this.dependencies.jobs.retryArtifactCleanup(
+              job.id,
+              this.dependencies.workerId,
+              payload.cleanupGeneration,
+              job.leaseGeneration,
+              "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+              true,
+            ),
+          );
+          return;
+        }
+      } else if (guard.deletionState !== "deleted") {
+        // A tombstoned row's bytes are safely reaped. `pending` means a
+        // staged write with an unknown remote outcome and
+        // `none`/`deletion_failed` mean the object may be live: finish the
+        // fenced job instead of guessing.
         assertArtifactCleanupClaim(
           await this.dependencies.jobs.retryArtifactCleanup(
             job.id,

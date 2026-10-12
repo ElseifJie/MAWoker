@@ -362,6 +362,117 @@ describe("ArtifactObjectCleanupProcessor", () => {
     expect(jobs.retry).not.toHaveBeenCalled();
   });
 
+  it("reaps a retired drive key whose row was switched away", async () => {
+    const jobs = {
+      claim: vi.fn(async () => [
+        job({
+          payload: {
+            objectKey:
+              "tenants/00000000-0000-4000-8000-000000000002/drive/artifact/00000000-0000-4000-8000-00000000000a/r00000000-0000-4000-8000-00000000000b/report.txt",
+            retiredBySwitch: true,
+          },
+        }),
+      ]),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
+      retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
+    };
+    const service = {
+      cleanupStoredObject: vi.fn(async () => undefined),
+    };
+    const processor = new ArtifactObjectCleanupProcessor({
+      jobs,
+      guards: guards(undefined),
+      service,
+      workerId: "worker-1",
+    });
+
+    await processor.runOnce();
+
+    // A retired drive key has no row behind it: ownerless bytes, safe to
+    // delete through the legacy key-addressed drain.
+    expect(service.cleanupStoredObject).toHaveBeenCalledTimes(1);
+    expect(jobs.succeedArtifactCleanup).toHaveBeenCalled();
+  });
+
+  it("keeps a legacy no-row drive key fenced unless the switch retired it", async () => {
+    const jobs = {
+      claim: vi.fn(async () => [
+        job({
+          payload: {
+            objectKey:
+              "tenants/00000000-0000-4000-8000-000000000002/drive/artifact/00000000-0000-4000-8000-00000000000a/r00000000-0000-4000-8000-00000000000b/report.txt",
+          },
+        }),
+      ]),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
+      retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
+    };
+    const service = {
+      cleanupStoredObject: vi.fn(async () => undefined),
+    };
+    const processor = new ArtifactObjectCleanupProcessor({
+      jobs,
+      guards: guards(undefined),
+      service,
+      workerId: "worker-1",
+    });
+
+    await processor.runOnce();
+
+    // Without the switch's explicit retirement marker, a missing row is an
+    // unverifiable outcome: preserve the bytes (Task 02 fail-closed).
+    expect(service.cleanupStoredObject).not.toHaveBeenCalled();
+    expect(jobs.retryArtifactCleanup).toHaveBeenCalledWith(
+      jobId,
+      "worker-1",
+      0,
+      1,
+      "ARTIFACT_CLEANUP_OBJECT_UNVERIFIED",
+      true,
+    );
+  });
+
+  it("still rejects foreign-tenant and malformed drive keys", async () => {
+    const jobs = {
+      claim: vi.fn(async () => [
+        job({
+          payload: {
+            objectKey:
+              "tenants/00000000-0000-4000-8000-000000000099/drive/artifact/x/report.txt",
+          },
+        }),
+      ]),
+      deferArtifactCleanup: vi.fn(async () => true),
+      succeedArtifactCleanup: vi.fn(async () => true),
+      retry: vi.fn(async () => undefined),
+      retryArtifactCleanup: vi.fn(async () => true),
+    };
+    const service = {
+      cleanupStoredObject: vi.fn(async () => undefined),
+    };
+    const processor = new ArtifactObjectCleanupProcessor({
+      jobs,
+      guards: guards(undefined),
+      service,
+      workerId: "worker-1",
+    });
+
+    await processor.runOnce();
+
+    expect(service.cleanupStoredObject).not.toHaveBeenCalled();
+    expect(jobs.retry).toHaveBeenCalledWith(
+      jobId,
+      "worker-1",
+      "ARTIFACT_CLEANUP_INVALID_JOB",
+      false,
+      1,
+    );
+  });
+
   it("touches no bytes when the claim was re-armed before the delete", async () => {
     const jobs = {
       claim: vi.fn(async () => [job()]),

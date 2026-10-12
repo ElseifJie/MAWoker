@@ -61,6 +61,21 @@ export interface DriveFileRepository {
     ownerUserId: string,
     id: string,
   ): PromiseLike<DriveFileRecord | undefined>;
+  /**
+   * Atomically repoints a live, non-orphaned row at freshly written bytes.
+   * Returns the updated record, or undefined when the row is being deleted
+   * or already orphaned (the caller must then reclaim the new bytes).
+   */
+  switchObjectKey(
+    id: string,
+    ownerUserId: string,
+    input: {
+      objectKey: string;
+      mimeType: string;
+      sizeBytes: number;
+      contentHash?: string;
+    },
+  ): PromiseLike<DriveFileRecord | undefined>;
   /** Marks the bytes unreferenced; the GC reaps them after the retention. */
   orphan(id: string, ownerUserId: string, at: Date): PromiseLike<boolean>;
   /**
@@ -112,6 +127,15 @@ export class DriveFileService {
       repository: DriveFileRepository;
       storage: DriveFileStorage;
       createId: () => string;
+      /**
+       * Enqueues the legacy key-addressed cleanup for a retired object key.
+       * Optional so pure service tests can omit it; production wires it to
+       * the job queue.
+       */
+      enqueueLegacyKeyCleanup?: (
+        objectKey: string,
+        ownerUserId: string,
+      ) => PromiseLike<void>;
       now?: () => Date;
       writeLeaseMs?: number;
       stagingRetentionMs?: number;
@@ -213,23 +237,65 @@ export class DriveFileService {
     }
   }
 
-  /** Re-copies bytes over an already-committed drive object (idempotent sync). */
+  /**
+   * Re-copies an already-committed drive object from its source. The bytes
+   * land under a fresh operation-scoped key and the row is switched
+   * atomically: readers and the cleanup path keep seeing a complete object
+   * under the old key until the switch commits, and a row that entered
+   * deletion or orphaning mid-copy is left untouched (the fresh bytes are
+   * reclaimed instead).
+   */
   async refreshFromSource(
     record: DriveFileRecord,
-    source: { bucket: string; objectKey: string },
+    source: {
+      bucket: string;
+      objectKey: string;
+      mimeType?: string;
+      sizeBytes?: number;
+    },
     context: DriveContext,
   ): Promise<DriveFileRecord> {
+    const operationId = this.dependencies.createId();
+    const nextKey = driveObjectKey({
+      ownerUserId: record.ownerUserId,
+      origin: record.origin,
+      driveFileId: `${record.id}/r${operationId}`,
+      name: record.name,
+    });
+    const mimeType = source.mimeType ?? record.mimeType;
+    const sizeBytes = source.sizeBytes ?? record.sizeBytes;
     const stream = await this.dependencies.storage.readExternal(
       source,
       context.signal,
     );
     await this.dependencies.storage.write(
-      record.tosObjectKey,
+      nextKey,
       stream,
-      { contentType: record.mimeType, contentLength: record.sizeBytes },
+      { contentType: mimeType, contentLength: sizeBytes },
       context.signal,
     );
-    return record;
+    const switched = await this.dependencies.repository.switchObjectKey(
+      record.id,
+      record.ownerUserId,
+      {
+        objectKey: nextKey,
+        mimeType,
+        sizeBytes,
+      },
+    );
+    if (!switched) {
+      // The row is being deleted or was orphaned while we copied: the new
+      // bytes are unreferenced garbage, the old row owns its own lifecycle.
+      await this.dependencies.storage.delete(nextKey);
+      return record;
+    }
+    // The old key lost its only reference with the switch; hand it to the
+    // legacy key-addressed cleanup, whose guard proves it has no row.
+    await this.dependencies.enqueueLegacyKeyCleanup?.(
+      record.tosObjectKey,
+      record.ownerUserId,
+    );
+    return switched;
   }
 
   findOwned(

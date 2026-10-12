@@ -3979,34 +3979,71 @@ export function createRepositories(database: unknown) {
        * deleting, so a late sync can never resurrect deleted state.
        */
       upsertAssociation(input: ArtifactRecord) {
-        return requiredFirst<ArtifactRecord & Row>(
-          db,
-          sql`insert into artifacts
-                (id, owner_user_id, session_id, ark_file_id, drive_file_id,
-                 name, mime_type, size_bytes, generated_at, deletion_state,
-                 last_error_code, created_at, updated_at)
-              select ${input.id}, ${input.ownerUserId}, ${input.sessionId},
-                     ${input.arkFileId}, ${input.driveFileId}, ${input.name},
-                     ${input.mimeType}, ${input.sizeBytes}, ${input.generatedAt},
-                     'none', null, ${input.createdAt}, ${input.updatedAt}
-               where exists (
-                 select 1
-                   from sessions
-                  where sessions.id = ${input.sessionId}
-                    and sessions.owner_user_id = ${input.ownerUserId}
-                    and sessions.deletion_state = 'none'
-               )
-              on conflict (owner_user_id, session_id, ark_file_id) do update
-                set drive_file_id = excluded.drive_file_id,
-                    name = excluded.name,
-                    mime_type = excluded.mime_type,
-                    size_bytes = excluded.size_bytes,
-                    generated_at = excluded.generated_at,
-                    last_error_code = null,
-                    updated_at = excluded.updated_at
-              where artifacts.deletion_state = 'none'
-              returning ${artifactSelection}`,
-        );
+        return db.transaction(async (transaction) => {
+          // A concurrent first sync may have staged its own drive row for the
+          // same source: whichever upsert lands second wins the association,
+          // and the replaced row must not leak — orphan it here (when nothing
+          // else references it) so the GC can reclaim its bytes.
+          const previous = await first<{ driveFileId: string }>(
+            transaction,
+            sql`select drive_file_id as "driveFileId"
+                  from artifacts
+                 where owner_user_id = ${input.ownerUserId}
+                   and session_id = ${input.sessionId}
+                   and ark_file_id = ${input.arkFileId}
+                 for update`,
+          );
+          const association = await requiredFirst<ArtifactRecord & Row>(
+            transaction,
+            sql`insert into artifacts
+                  (id, owner_user_id, session_id, ark_file_id, drive_file_id,
+                   name, mime_type, size_bytes, generated_at, deletion_state,
+                   last_error_code, created_at, updated_at)
+                select ${input.id}, ${input.ownerUserId}, ${input.sessionId},
+                       ${input.arkFileId}, ${input.driveFileId}, ${input.name},
+                       ${input.mimeType}, ${input.sizeBytes}, ${input.generatedAt},
+                       'none', null, ${input.createdAt}, ${input.updatedAt}
+                 where exists (
+                   select 1
+                     from sessions
+                    where sessions.id = ${input.sessionId}
+                      and sessions.owner_user_id = ${input.ownerUserId}
+                      and sessions.deletion_state = 'none'
+                 )
+                on conflict (owner_user_id, session_id, ark_file_id) do update
+                  set drive_file_id = excluded.drive_file_id,
+                      name = excluded.name,
+                      mime_type = excluded.mime_type,
+                      size_bytes = excluded.size_bytes,
+                      generated_at = excluded.generated_at,
+                      last_error_code = null,
+                      updated_at = excluded.updated_at
+                where artifacts.deletion_state = 'none'
+                returning ${artifactSelection}`,
+          );
+          const replaced = previous?.driveFileId;
+          if (
+            replaced &&
+            replaced !== association.driveFileId &&
+            association.driveFileId === input.driveFileId
+          ) {
+            await transaction.execute(
+              sql`update drive_files
+                     set orphaned_at = now(), updated_at = now()
+                   where id = ${replaced}
+                     and owner_user_id = ${input.ownerUserId}
+                     and deletion_state = 'none'
+                     and orphaned_at is null
+                     and not exists (
+                       select 1 from artifacts artifact
+                        where artifact.drive_file_id = ${replaced}
+                          and artifact.owner_user_id = ${input.ownerUserId}
+                          and artifact.deletion_state <> 'deleted'
+                     )`,
+            );
+          }
+          return association;
+        });
       },
       listOwned(userId: string, sessionId?: string) {
         return rows<ArtifactRecord & Row>(
@@ -4177,6 +4214,60 @@ export function createRepositories(database: unknown) {
                 from drive_files
                where id = ${driveFileId}
                limit 1`,
+        );
+      },
+      switchObjectKey(
+        id: string,
+        ownerUserId: string,
+        input: {
+          objectKey: string;
+          mimeType: string;
+          sizeBytes: number;
+          contentHash?: string;
+        },
+      ) {
+        return first<DriveFileRecord & Row>(
+          db,
+          sql`update drive_files
+                 set tos_object_key = ${input.objectKey},
+                     mime_type = ${input.mimeType},
+                     size_bytes = ${input.sizeBytes},
+                     content_hash = ${
+                       input.contentHash === undefined
+                         ? null
+                         : input.contentHash
+                     },
+                     updated_at = now()
+               where id = ${id}
+                 and owner_user_id = ${ownerUserId}
+                 and deletion_state = 'none'
+                 and orphaned_at is null
+               returning ${driveFileSelection}`,
+        );
+      },
+      /**
+       * Enqueues the legacy key-addressed cleanup for a key retired by an
+       * object switch. The payload marks the job as switch-retired so the
+       * processor can delete ownerless bytes without violating the
+       * fail-closed rule for genuine legacy jobs.
+       */
+      async enqueueRetiredKeyCleanup(
+        objectKey: string,
+        ownerUserId: string,
+      ): Promise<void> {
+        await db.execute(
+          sql`insert into background_jobs
+                (id, owner_user_id, type, status, priority, payload,
+                 attempts, run_after)
+              values
+                (${randomUUID()}, ${ownerUserId}, 'cleanup_artifact_object',
+                 'pending', 90,
+                 ${JSON.stringify({
+                   objectKey,
+                   cleanupGeneration: 0,
+                   retiredBySwitch: true,
+                 })}::jsonb,
+                 0, now())`,
         );
       },
       findObjectCleanupGuard(objectKey: string) {

@@ -153,7 +153,11 @@ export class ArtifactService {
         if (current && current.deletionState === "none") {
           drive = await this.dependencies.drive.refreshFromSource(
             current,
-            artifact.tos,
+            {
+              ...artifact.tos,
+              mimeType: artifact.contentType,
+              sizeBytes: artifact.size,
+            },
             context,
           );
         }
