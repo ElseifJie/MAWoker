@@ -17,6 +17,7 @@
     "@jvmr/pptx-to-html": "^1.1.2",
     "@pwa/contracts": "0.1.0",
     "docx-preview": "^0.4.0",
+    "jszip": "^3.10.2",
     "lucide-react": "^1.41.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

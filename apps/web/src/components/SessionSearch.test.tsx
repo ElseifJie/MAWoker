@@ -52,7 +52,7 @@ describe("SessionSearch", () => {
     );
 
     const user = userEvent.setup();
-    const input = screen.getByRole("combobox", { name: "Search tasks" });
+    const input = screen.getByRole("combobox", { name: "搜索任务" });
     expect(input).toHaveFocus();
 
     await user.type(input, "budget");

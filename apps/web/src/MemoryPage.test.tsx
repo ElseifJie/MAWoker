@@ -181,25 +181,27 @@ function open(initial = "/context") {
 }
 async function openDetail() {
   open();
-  fireEvent.click(await screen.findByText("Personal Memory"));
-  await screen.findByText("Files");
+  fireEvent.click(await screen.findByRole("button", { name: "查看记忆" }));
+  await screen.findByText("路径浏览");
 }
 
 describe("MemoryPage", () => {
   it("lists the Memory Store with usage and opens the detail from the row", async () => {
     open();
     expect(
-      await screen.findByRole("heading", { name: "Memory Stores" }),
+      await screen.findByRole("heading", { name: "个人记忆" }),
     ).toBeInTheDocument();
-    expect(await screen.findByText("Personal Memory")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "查看记忆" }),
+    ).toBeInTheDocument();
     expect(screen.getByText(currentStore.id)).toBeInTheDocument();
     expect(screen.getByText("67 B")).toBeInTheDocument();
     expect(screen.getByText("2026-10-10 14:38:27")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Personal Memory"));
-    expect(await screen.findByText("Files")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "查看记忆" }));
+    expect(await screen.findByText("路径浏览")).toBeInTheDocument();
     expect(screen.getByText(currentStore.id)).toBeInTheDocument();
-    expect(screen.getByText(/Memories: 2/)).toBeInTheDocument();
-    expect(screen.getByText(/Sessions: 1/)).toBeInTheDocument();
+    expect(screen.getByText(/记忆条目：2/)).toBeInTheDocument();
+    expect(screen.getByText(/关联任务：1/)).toBeInTheDocument();
   });
   it("renders the path tree and opens a memory for editing", async () => {
     await openDetail();
@@ -210,9 +212,9 @@ describe("MemoryPage", () => {
       screen.getByRole("button", { name: /resources/ }),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "profile.md" }));
-    expect(screen.getByLabelText("Content")).toHaveValue("Profile");
-    expect(screen.getByLabelText("Path")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+    expect(screen.getByLabelText("内容")).toHaveValue("Profile");
+    expect(screen.getByLabelText("路径")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存" })).toBeEnabled();
     expect(
       screen.getByRole("button", { name: "README.md" }),
     ).toBeInTheDocument();
@@ -221,10 +223,10 @@ describe("MemoryPage", () => {
     currentState = queued;
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
-    expect(screen.getByLabelText("Content")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "+ New memory" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(screen.getByLabelText("内容")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "+ 新建记忆" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "取消操作" })).toBeEnabled();
   });
   it("keeps the store readable while consolidation is running", async () => {
     currentState = {
@@ -234,14 +236,14 @@ describe("MemoryPage", () => {
     await openDetail();
     // The files render and an informational banner explains the refresh;
     // only editing stays gated on the run.
-    expect(screen.getByText("Files")).toBeInTheDocument();
+    expect(screen.getByText("路径浏览")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Memory consolidation is running. This is a point-in-time read of the live store and may show changes being applied; the page refreshes and editing unlocks when it finishes.",
+        "自动整理正在运行。当前内容可能包含整理中的变更，完成后会刷新并恢复编辑。",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "+ New memory" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "+ 新建记忆" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "取消操作" })).toBeEnabled();
   });
   it("renders the remembered list immediately when reopening the store", async () => {
     await openDetail();
@@ -252,7 +254,7 @@ describe("MemoryPage", () => {
       releaseMemoryList = resolve;
     });
     open("/context/store");
-    expect(await screen.findByText("Files")).toBeInTheDocument();
+    expect(await screen.findByText("路径浏览")).toBeInTheDocument();
     releaseMemoryList?.();
     holdMemoryList = null;
     await screen.findByRole("button", { name: "profile.md" });
@@ -260,25 +262,25 @@ describe("MemoryPage", () => {
   it("cancels a running operation and unlocks the page", async () => {
     currentState = queued;
     await openDetail();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消操作" }));
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/cancel",
       expect.objectContaining({ method: "POST" }),
     );
-    expect(await screen.findByText("Operation cancelled.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "+ New memory" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(await screen.findByText("操作已取消。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "+ 新建记忆" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "取消操作" })).toBeNull();
   });
   it("queues saves and refreshes the editor after two-second polling", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     vi.useFakeTimers();
-    fireEvent.change(screen.getByLabelText("Content"), {
+    fireEvent.change(screen.getByLabelText("内容"), {
       target: { value: "Updated" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await act(async () => {});
-    expect(screen.getByText(/Save queued.*not saved yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/保存已排队，尚未保存/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/entry",
       expect.objectContaining({
@@ -301,8 +303,8 @@ describe("MemoryPage", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(screen.getByText("Memory saved.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Content")).toHaveValue("Updated");
+    expect(screen.getByText("记忆已保存。")).toBeInTheDocument();
+    expect(screen.getByLabelText("内容")).toHaveValue("Updated");
     const polls = fetchMock.mock.calls.filter(
       ([url]) => url === "/api/v1/memory/status",
     ).length;
@@ -316,9 +318,9 @@ describe("MemoryPage", () => {
   it("creates a new memory and sends protection and settings changes", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
-    fireEvent.click(screen.getByLabelText("Protected"));
+    fireEvent.click(screen.getByLabelText("保护（仅限制后台整理）"));
     await waitFor(() =>
-      expect(screen.getByLabelText("Protected")).toBeChecked(),
+      expect(screen.getByLabelText("保护（仅限制后台整理）")).toBeChecked(),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/protect",
@@ -326,23 +328,23 @@ describe("MemoryPage", () => {
         body: JSON.stringify({ path: "/memories/profile.md", protected: true }),
       }),
     );
-    fireEvent.click(screen.getByLabelText("Auto consolidation"));
+    fireEvent.click(screen.getByLabelText("自动整理"));
     await waitFor(() =>
-      expect(screen.getByLabelText("Auto consolidation")).not.toBeChecked(),
+      expect(screen.getByLabelText("自动整理")).not.toBeChecked(),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/settings",
       expect.objectContaining({ body: JSON.stringify({ autoDream: false }) }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "+ New memory" }));
-    fireEvent.change(screen.getByLabelText("Path"), {
+    fireEvent.click(screen.getByRole("button", { name: "+ 新建记忆" }));
+    fireEvent.change(screen.getByLabelText("路径"), {
       target: { value: "/memories/new.md" },
     });
-    fireEvent.change(screen.getByLabelText("Content"), {
+    fireEvent.change(screen.getByLabelText("内容"), {
       target: { value: "New fact" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByText(/Save queued/i);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/保存已排队/);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/entry",
       expect.objectContaining({
@@ -354,11 +356,9 @@ describe("MemoryPage", () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
     await act(async () => {});
-    expect(
-      screen.getByText(/Delete queued.*not deleted yet/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/删除已排队，尚未删除/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/entry",
       expect.objectContaining({ method: "DELETE" }),
@@ -368,18 +368,18 @@ describe("MemoryPage", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(screen.getByText("Memory deleted.")).toBeInTheDocument();
-    expect(screen.getByText(/Select a file from the tree/)).toBeInTheDocument();
+    expect(screen.getByText("记忆已删除。")).toBeInTheDocument();
+    expect(screen.getByText(/选择记忆条目后查看或编辑/)).toBeInTheDocument();
   });
   it("shows a conflict without claiming that a save was accepted", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     failure = { status: 409, code: "MEMORY_CONFLICT" };
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /changed.*reload/i,
+      /已变更.*重新加载/,
     );
-    expect(screen.queryByText(/Save queued/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/保存已排队/)).not.toBeInTheDocument();
   });
   it("offers repair while memory is stuck and resumes after recovery", async () => {
     currentState = {
@@ -387,7 +387,7 @@ describe("MemoryPage", () => {
       status: "repairing",
       run: {
         kind: "dream",
-        stage: "repairing",
+        stage: "修复中",
         error: "Memory operation failed. Reload or contact support.",
         before: null,
         after: null,
@@ -395,13 +395,11 @@ describe("MemoryPage", () => {
     };
     await openDetail();
     // The stuck store stays readable; only editing is gated on the repair.
-    expect(screen.getByText("Files")).toBeInTheDocument();
-    expect(screen.getByText("repairing")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Repair" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Repair" }));
-    expect(
-      await screen.findByText(/Repair accepted; memory resumes/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText("路径浏览")).toBeInTheDocument();
+    expect(screen.getByText("修复中")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "修复" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "修复" }));
+    expect(await screen.findByText(/已接受修复请求/)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/recover",
       expect.objectContaining({ method: "POST" }),
@@ -411,49 +409,47 @@ describe("MemoryPage", () => {
       ...state,
       run: { ...queued.run, kind: "dream", stage: "completed" },
     };
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新" }));
     expect(
       await screen.findByRole("button", { name: "profile.md" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Repair" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "修复" })).toBeNull();
   });
   it("reports a store that was never provisioned as unavailable", async () => {
     currentState = { ...state, status: "provisioning", run: null };
     failure = { status: 409, code: "MEMORY_BUSY", path: "/api/v1/memory" };
     open("/context/store");
     expect(
-      await screen.findByText(
-        "Memory is busy. Wait for the current operation.",
-      ),
+      await screen.findByText("记忆正在处理中，请等待当前操作完成。"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Memory Store unavailable")).toBeInTheDocument();
+    expect(screen.getByText("个人记忆暂不可用")).toBeInTheDocument();
   });
   it("handles initial auth failures through the existing sign-in flow", async () => {
     failure = { status: 401, code: "AUTH_REQUIRED" };
     open();
     expect(
-      await screen.findByRole("heading", { name: "Sign in to your workspace" }),
+      await screen.findByRole("heading", { name: "登录你的工作区" }),
     ).toBeInTheDocument();
   });
   it("handles polling auth failures and stops exposing the page", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await act(async () => {});
     failure = { status: 401, code: "AUTH_REQUIRED" };
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
     expect(
-      screen.getByRole("heading", { name: "Sign in to your workspace" }),
+      screen.getByRole("heading", { name: "登录你的工作区" }),
     ).toBeInTheDocument();
   });
   it("waits for a delayed completion refresh before reporting saved", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
     vi.useFakeTimers();
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await act(async () => {});
     currentState = { ...state, run: { ...queued.run, stage: "completed" } };
     fetchMock.mockImplementationOnce(async () => Response.json(currentState));
@@ -467,7 +463,7 @@ describe("MemoryPage", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
-    expect(screen.getByText(/not saved yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/尚未保存/)).toBeInTheDocument();
     await act(async () => {
       resolveList(
         Response.json({
@@ -479,19 +475,17 @@ describe("MemoryPage", () => {
         }),
       );
     });
-    expect(screen.getByText("Memory saved.")).toBeInTheDocument();
+    expect(screen.getByText("记忆已保存。")).toBeInTheDocument();
   });
 
   it("blocks an unversioned save and re-reads instead of writing", async () => {
     entries = [{ path: "/memories/profile.md", content: "Profile" }];
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     // No versioned write may leave the browser: the page re-reads instead.
-    expect(
-      await screen.findByText(/read without a version/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/缺少版本信息/)).toBeInTheDocument();
     expect(
       fetchMock.mock.calls.filter(
         ([url, init]) =>
@@ -499,18 +493,16 @@ describe("MemoryPage", () => {
       ),
     ).toHaveLength(0);
     // The re-read keeps the draft and, with the hash restored, saving works.
-    expect(screen.getByLabelText("Content")).toHaveValue("Profile");
+    expect(screen.getByLabelText("内容")).toHaveValue("Profile");
     entries = [
       { path: "/memories/profile.md", content: "Profile", hash: "hash-v2" },
     ];
     // Second save attempt triggers the re-read that restores the base; the
     // draft was byte-identical, so the third attempt writes with a version.
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() =>
-      expect(screen.queryByText(/read without a version/i)).toBeNull(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await screen.findByText(/Save queued/i);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(screen.queryByText(/缺少版本信息/)).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await screen.findByText(/保存已排队/);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/entry",
       expect.objectContaining({
@@ -527,18 +519,18 @@ describe("MemoryPage", () => {
   it("keeps the draft on a version conflict instead of resubmitting", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
-    fireEvent.change(screen.getByLabelText("Content"), {
+    fireEvent.change(screen.getByLabelText("内容"), {
       target: { value: "My concurrent edit" },
     });
     failure = { status: 409, code: "MEMORY_CONFLICT" };
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /changed.*reload/i,
+      /已变更.*重新加载/,
     );
     // The failed save keeps the user's draft verbatim and never retries with
     // a fresh hash behind their back.
-    expect(screen.getByLabelText("Content")).toHaveValue("My concurrent edit");
+    expect(screen.getByLabelText("内容")).toHaveValue("My concurrent edit");
     expect(
       fetchMock.mock.calls.filter(
         ([url, init]) =>
@@ -552,11 +544,11 @@ describe("MemoryPage", () => {
     expect(screen.getByText(currentStore.id)).toBeInTheDocument();
 
     // Account A signs out; the cache entry bound to A must go with it.
-    fireEvent.click(screen.getByRole("button", { name: "Account: a" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: /disconnect/i }));
+    fireEvent.click(screen.getByRole("button", { name: "账号：a" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /退出登录/ }));
     expect(
       await screen.findByRole("heading", {
-        name: "Sign in to your workspace",
+        name: "登录你的工作区",
       }),
     ).toBeInTheDocument();
 
@@ -572,17 +564,17 @@ describe("MemoryPage", () => {
     holdMemoryList = new Promise<void>((resolve) => {
       releaseMemoryList = resolve;
     });
-    fireEvent.change(screen.getByLabelText("Email"), {
+    fireEvent.change(screen.getByLabelText("邮箱"), {
       target: { value: "b@example.com" },
     });
-    fireEvent.change(screen.getByLabelText("Password"), {
+    fireEvent.change(screen.getByLabelText("密码"), {
       target: { value: "password123" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getByRole("button", { name: "登录" }));
 
     // B lands on the store detail; while B's request is pending, nothing from
     // A's account may render — not A's store id, entries, or paths.
-    await screen.findByRole("status", { name: "Loading memory" });
+    await screen.findByRole("status", { name: "正在加载记忆" });
     expect(screen.queryByText("memstore-20261010143827-obuom")).toBeNull();
     expect(screen.queryByText("profile.md")).toBeNull();
     releaseMemoryList?.();

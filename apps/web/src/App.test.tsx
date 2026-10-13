@@ -183,6 +183,7 @@ const sessionsResponse = {
 
 const sessionDetail = {
   ...sessionsResponse.sessions[0],
+  upstreamReady: true,
   inputs: [
     {
       id: uploadId,
@@ -438,32 +439,28 @@ describe("authentication", () => {
     const user = userEvent.setup();
 
     expect(
-      await screen.findByRole("heading", { name: "Sign in to your workspace" }),
+      await screen.findByRole("heading", { name: "登录你的工作区" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Quarterly plan" }),
     ).not.toBeInTheDocument();
 
-    const email = screen.getByLabelText("Email");
-    const password = screen.getByLabelText("Password");
+    const email = screen.getByLabelText("邮箱");
+    const password = screen.getByLabelText("密码");
     await user.type(email, "User@Example.com");
     await user.type(password, "wrong-password");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await user.click(screen.getByRole("button", { name: "登录" }));
 
-    expect(
-      await screen.findByText("Email or password is incorrect."),
-    ).toBeInTheDocument();
-    expect(password).toHaveAccessibleDescription(
-      "Email or password is incorrect.",
-    );
+    expect(await screen.findByText("邮箱或密码不正确。")).toBeInTheDocument();
+    expect(password).toHaveAccessibleDescription("邮箱或密码不正确。");
     expect(password).toHaveAttribute("aria-invalid", "true");
 
     await user.clear(password);
     await user.type(password, "correct-password");
-    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    await user.click(screen.getByRole("button", { name: "登录" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Session" }),
+      await screen.findByRole("heading", { name: "任务" }),
     ).toBeInTheDocument();
     expect(loginAttempts).toBe(2);
   });
@@ -486,12 +483,12 @@ describe("authentication", () => {
     const user = userEvent.setup();
 
     const account = await screen.findByRole("button", {
-      name: "Account: user@example.com",
+      name: "账号：user@example.com",
     });
     await user.click(account);
-    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    await user.click(screen.getByRole("menuitem", { name: "退出登录" }));
     expect(
-      await screen.findByRole("heading", { name: "Sign in to your workspace" }),
+      await screen.findByRole("heading", { name: "登录你的工作区" }),
     ).toBeInTheDocument();
   });
 
@@ -504,7 +501,7 @@ describe("authentication", () => {
 
       expect(
         await screen.findByRole("heading", {
-          name: "Sign in to your workspace",
+          name: "登录你的工作区",
         }),
       ).toBeInTheDocument();
     },
@@ -528,15 +525,15 @@ describe("authentication", () => {
     const user = userEvent.setup();
 
     expect(
-      await screen.findByRole("heading", { name: "Workspace unavailable" }),
+      await screen.findByRole("heading", { name: "工作区暂不可用" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "Sign in to your workspace" }),
+      screen.queryByRole("heading", { name: "登录你的工作区" }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(screen.getByRole("button", { name: "重试" }));
     expect(
-      await screen.findByRole("heading", { name: "New task" }),
+      await screen.findByRole("heading", { name: "新任务" }),
     ).toBeInTheDocument();
   });
 });
@@ -548,48 +545,38 @@ describe("workspace shell", () => {
     const user = userEvent.setup();
 
     expect(
-      await screen.findByRole("heading", { name: "New task" }),
+      await screen.findByRole("heading", { name: "新任务" }),
     ).toBeInTheDocument();
-    const navigation = screen.getByRole("navigation", { name: "Workspace" });
+    const navigation = screen.getByRole("navigation", { name: "工作区" });
     expect(navigation).toHaveClass("ui-app-shell__navigation");
-    for (const name of ["New task", "Agents", "My files", "Settings"]) {
+    for (const name of ["新任务", "历史任务", "我的文件", "设置"]) {
       expect(
         within(navigation).getByRole("link", { name }),
       ).toBeInTheDocument();
     }
 
-    // Reserved capabilities stay visible so the workspace shape is stable, but
-    // they are not links and explain themselves instead of leading to a stub.
     const reserved = Array.from(
       navigation.querySelectorAll<HTMLElement>('[aria-disabled="true"]'),
     );
-    expect(
-      reserved.map((entry) => entry.querySelector("span")?.textContent),
-    ).toEqual(["Context", "Skills", "MCP servers", "Vault"]);
-    expect(reserved.map((entry) => entry.getAttribute("title"))).toEqual([
-      "Memory stores are not available in this release.",
-      "Custom Skills are not available in this release.",
-      "MCP server management is not available in this release.",
-      "Private credential storage is not available in this release.",
-    ]);
+    expect(reserved).toHaveLength(0);
     expect(
       within(navigation).queryByRole("link", {
-        name: /Context|Skills|MCP servers|Vault/,
+        name: /助手配置|记忆|技能|MCP|凭据/,
       }),
     ).toBeNull();
 
     expect(within(navigation).getByText("Quarterly plan")).toBeInTheDocument();
-    expect(within(navigation).getByText("Running")).toBeInTheDocument();
+    expect(within(navigation).getByText("执行中")).toBeInTheDocument();
 
-    const menu = screen.getByRole("button", { name: "Open navigation" });
+    const menu = screen.getByRole("button", { name: "打开导航" });
     const sidebar = screen.getByRole("complementary");
     expect(sidebar).toHaveAttribute("id", menu.getAttribute("aria-controls"));
-    expect(menu).toHaveAttribute("title", "Open navigation");
+    expect(menu).toHaveAttribute("title", "打开导航");
     expect(menu).toHaveAttribute("aria-expanded", "false");
     await user.click(menu);
     expect(menu).toHaveAttribute("aria-expanded", "true");
-    expect(menu).toHaveAttribute("aria-label", "Close navigation");
-    expect(menu).toHaveAttribute("title", "Close navigation");
+    expect(menu).toHaveAttribute("aria-label", "关闭导航");
+    expect(menu).toHaveAttribute("title", "关闭导航");
     await user.keyboard("{Escape}");
     expect(menu).toHaveAttribute("aria-expanded", "false");
   });
@@ -599,17 +586,15 @@ describe("workspace shell", () => {
     renderApp();
     const user = userEvent.setup();
 
-    await screen.findByRole("heading", { name: "New task" });
-    const navigation = screen.getByRole("navigation", { name: "Workspace" });
+    await screen.findByRole("heading", { name: "新任务" });
+    const navigation = screen.getByRole("navigation", { name: "工作区" });
 
     // The placeholder search field is gone from the sidebar.
     expect(within(navigation).queryByRole("searchbox")).not.toBeInTheDocument();
 
-    await user.click(
-      within(navigation).getByRole("button", { name: "Search" }),
-    );
+    await user.click(within(navigation).getByRole("button", { name: "搜索" }));
     const search = await screen.findByRole("combobox", {
-      name: "Search tasks",
+      name: "搜索任务",
     });
     expect(search).toHaveFocus();
 
@@ -622,7 +607,7 @@ describe("workspace shell", () => {
     expect(
       await screen.findByRole("heading", { name: "Quarterly plan" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: "Search tasks" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "搜索任务" })).toBeNull();
   });
 
   it("removes the closed mobile drawer from the accessibility tree and tab order", async () => {
@@ -631,9 +616,9 @@ describe("workspace shell", () => {
     renderApp();
     const user = userEvent.setup();
 
-    await screen.findByRole("heading", { name: "New task" });
+    await screen.findByRole("heading", { name: "新任务" });
     const sidebar = screen.getByRole("complementary", { hidden: true });
-    const menu = screen.getByRole("button", { name: "Open navigation" });
+    const menu = screen.getByRole("button", { name: "打开导航" });
 
     expect(sidebar).toHaveAttribute("aria-hidden", "true");
     expect(sidebar).toHaveAttribute("inert");
@@ -644,7 +629,7 @@ describe("workspace shell", () => {
     expect(sidebar).not.toHaveAttribute("aria-hidden");
     expect(sidebar).not.toHaveAttribute("inert");
     const closeNavigationControls = screen.getAllByRole("button", {
-      name: "Close navigation",
+      name: "关闭导航",
     });
     expect(closeNavigationControls).toHaveLength(2);
     await user.click(closeNavigationControls[1]!);
@@ -654,7 +639,7 @@ describe("workspace shell", () => {
     await user.click(menu);
     (document.activeElement as HTMLElement).blur();
     await user.tab();
-    expect(screen.getByRole("link", { name: "New task" })).toHaveFocus();
+    expect(screen.getByRole("link", { name: "新任务" })).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(sidebar).toHaveAttribute("aria-hidden", "true");
@@ -688,11 +673,9 @@ describe("workspace shell", () => {
     renderApp();
 
     expect(
-      await screen.findByText(
-        "No default Agent is available. Contact an administrator to continue.",
-      ),
+      await screen.findByText("暂无默认助手，请联系管理员配置可用助手。"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send task" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始任务" })).toBeDisabled();
   });
 
   it("blocks task creation when execution quota is exhausted", async () => {
@@ -710,17 +693,15 @@ describe("workspace shell", () => {
     renderApp();
 
     expect(
-      await screen.findByText(
-        "Monthly token quota is exhausted. Existing work remains available.",
-      ),
+      await screen.findByText("本月额度已用完，已有结果仍可查看。"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send task" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "开始任务" })).toBeDisabled();
   });
 
   it("refreshes the quota snapshot on window focus and on returning home", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp();
-    await screen.findByRole("heading", { name: "New task" });
+    await screen.findByRole("heading", { name: "新任务" });
 
     const usageCalls = () =>
       vi
@@ -738,11 +719,11 @@ describe("workspace shell", () => {
 
     // Returning home from another page refetches as well; the initial mount
     // of the workspace does not double-fetch.
-    fireEvent.click(screen.getByRole("link", { name: "Agents" }));
-    await screen.findByRole("heading", { name: "Agents" });
+    fireEvent.click(screen.getByRole("link", { name: "设置" }));
+    await screen.findByRole("heading", { name: "设置" });
     expect(usageCalls()).toBe(2);
-    fireEvent.click(screen.getByRole("link", { name: "New task" }));
-    await screen.findByRole("heading", { name: "New task" });
+    fireEvent.click(screen.getByRole("link", { name: "新任务" }));
+    await screen.findByRole("heading", { name: "新任务" });
     await waitFor(() => expect(usageCalls()).toBe(3));
   });
 });
@@ -754,64 +735,64 @@ describe("Agent management", () => {
     renderApp("/agents");
     const user = userEvent.setup();
 
-    const heading = await screen.findByRole("heading", { name: "Agents" });
+    const heading = await screen.findByRole("heading", { name: "助手配置" });
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(heading.closest("header")).toHaveClass("ui-page-header");
 
     const platformSection = screen.getByRole("region", {
-      name: "Platform provided",
+      name: "平台助手",
     });
     const personalSection = screen.getByRole("region", {
-      name: "My Agents",
+      name: "我的助手",
     });
     expect(
       within(platformSection)
-        .getByRole("heading", { name: "Platform provided" })
+        .getByRole("heading", { name: "平台助手" })
         .closest("header"),
     ).toHaveClass("ui-section-header");
     expect(
       within(personalSection)
-        .getByRole("heading", { name: "My Agents" })
+        .getByRole("heading", { name: "我的助手" })
         .closest("header"),
     ).toHaveClass("ui-section-header");
     expect(
       within(platformSection).getByRole("list", {
-        name: "Platform Agents",
+        name: "平台助手",
       }),
     ).toHaveClass("agent-records");
     expect(
       within(personalSection).getByRole("list", {
-        name: "Personal Agents",
+        name: "个人助手",
       }),
     ).toHaveClass("agent-records");
     expect(
-      within(platformSection).getByText("Platform").closest(".ui-badge"),
+      within(platformSection).getByText("平台").closest(".ui-badge"),
     ).toHaveClass("ui-badge");
     expect(
-      within(personalSection).getByText("Personal").closest(".ui-badge"),
+      within(personalSection).getByText("个人").closest(".ui-badge"),
     ).toHaveClass("ui-badge");
 
     const newAgent = screen.getByRole("button", {
-      name: "New personal Agent",
+      name: "创建个人助手",
     });
     expect(newAgent).toHaveClass("ui-button", "ui-button--primary");
     expect(
       within(personalSection).getByRole("button", {
-        name: "Edit Writing assistant",
+        name: "编辑 Writing assistant",
       }),
     ).toHaveClass("ui-button", "ui-button--secondary");
     expect(
       within(personalSection).getByRole("button", {
-        name: "Delete Writing assistant",
+        name: "删除 Writing assistant",
       }),
     ).toHaveClass("ui-button", "ui-button--text");
 
     await user.click(newAgent);
     const editorHeading = await screen.findByRole("heading", {
-      name: "New personal Agent",
+      name: "创建个人助手",
     });
     expect(editorHeading).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create Agent" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "创建助手" })).toBeDisabled();
   });
 
   it("uses only the server capability allowlist for personal Agent models", async () => {
@@ -827,11 +808,11 @@ describe("Agent management", () => {
     renderApp("/agents");
     const user = userEvent.setup();
     const trigger = await screen.findByRole("button", {
-      name: "New personal Agent",
+      name: "创建个人助手",
     });
     await user.click(trigger);
 
-    const model = screen.getByLabelText("Model");
+    const model = screen.getByLabelText("模型");
     expect(within(model).getAllByRole("option")).toHaveLength(1);
     expect(within(model).getByRole("option", { name: "model-c" })).toHaveValue(
       "model-c",
@@ -902,73 +883,73 @@ describe("Agent management", () => {
     const user = userEvent.setup();
 
     expect(
-      await screen.findByRole("heading", { name: "Platform provided" }),
+      await screen.findByRole("heading", { name: "平台助手" }),
     ).toBeInTheDocument();
     const platformSection = screen.getByRole("region", {
-      name: "Platform provided",
+      name: "平台助手",
     });
     expect(
       within(platformSection).getByText("Research assistant"),
     ).toBeVisible();
     expect(
-      within(platformSection).queryByRole("button", { name: /Edit/ }),
+      within(platformSection).queryByRole("button", { name: /编辑/ }),
     ).not.toBeInTheDocument();
 
     const newAgentTrigger = screen.getByRole("button", {
-      name: "New personal Agent",
+      name: "创建个人助手",
     });
     await user.click(newAgentTrigger);
-    await screen.findByRole("heading", { name: "New personal Agent" });
-    await user.type(screen.getByLabelText("Name"), "Code reviewer");
-    await user.type(screen.getByLabelText("Description"), "Reviews changes");
-    await user.selectOptions(screen.getByLabelText("Model"), "model-a");
-    await user.type(screen.getByLabelText("System"), "Review carefully.");
-    await user.click(screen.getByRole("button", { name: "Create Agent" }));
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "创建个人助手" });
+    await user.type(screen.getByLabelText("名称"), "Code reviewer");
+    await user.type(screen.getByLabelText("描述"), "Reviews changes");
+    await user.selectOptions(screen.getByLabelText("模型"), "model-a");
+    await user.type(screen.getByLabelText("系统提示词"), "Review carefully.");
+    await user.click(screen.getByRole("button", { name: "创建助手" }));
+    await screen.findByRole("heading", { name: "助手配置" });
     expect(await screen.findByText("Code reviewer")).toBeInTheDocument();
 
     await user.click(
-      screen.getByRole("button", { name: "Edit Writing assistant" }),
+      screen.getByRole("button", { name: "编辑 Writing assistant" }),
     );
-    const name = await screen.findByLabelText("Name");
+    const name = await screen.findByLabelText("名称");
     await user.clear(name);
     await user.type(name, "Editorial assistant");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByRole("heading", { name: "Agents" });
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    await screen.findByRole("heading", { name: "助手配置" });
     expect(await screen.findByText("Editorial assistant")).toBeInTheDocument();
 
     const deleteAgentTrigger = screen.getByRole("button", {
-      name: "Delete Editorial assistant",
+      name: "删除 Editorial assistant",
     });
     await user.click(deleteAgentTrigger);
     const dialog = screen.getByRole("dialog", {
-      name: "Delete personal Agent?",
+      name: "删除个人助手？",
     });
     await waitFor(() => {
       expect(
-        within(dialog).getByRole("button", { name: "Cancel" }),
+        within(dialog).getByRole("button", { name: "取消" }),
       ).toHaveFocus();
     });
     await user.tab({ shift: true });
     expect(
-      within(dialog).getByRole("button", { name: "Delete Agent" }),
+      within(dialog).getByRole("button", { name: "删除助手" }),
     ).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(deleteAgentTrigger).toHaveFocus();
     await user.click(deleteAgentTrigger);
     const reopenedDeleteDialog = screen.getByRole("dialog", {
-      name: "Delete personal Agent?",
+      name: "删除个人助手？",
     });
     await user.click(
       within(reopenedDeleteDialog).getByRole("button", {
-        name: "Delete Agent",
+        name: "删除助手",
       }),
     );
     await waitFor(() => {
       expect(screen.queryByText("Editorial assistant")).not.toBeInTheDocument();
     });
-    expect(screen.getByRole("heading", { name: "Agents" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "助手配置" })).toHaveFocus();
 
     expect(
       JSON.parse(
@@ -1012,19 +993,17 @@ describe("Agent management", () => {
     renderApp("/agents");
     const user = userEvent.setup();
     await user.click(
-      await screen.findByRole("button", { name: "Edit Writing assistant" }),
+      await screen.findByRole("button", { name: "编辑 Writing assistant" }),
     );
-    await user.click(
-      await screen.findByRole("button", { name: "Save changes" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "保存修改" }));
 
     expect(
       await screen.findByText(
-        "This Agent changed elsewhere. Go back and reopen the editor, then try again.",
+        "助手配置已在其他位置变更，请返回并重新打开编辑页。",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Edit Agent" }),
+      screen.getByRole("heading", { name: "编辑助手" }),
     ).toBeInTheDocument();
   });
 });
@@ -1044,43 +1023,44 @@ describe("Session page", () => {
 
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(
-      within(sessionMeta).getByText("Running").closest(".ui-badge"),
+      within(sessionMeta).getByText("执行中").closest(".ui-badge"),
     ).toHaveClass("ui-badge", "ui-badge--success");
-    expect(
-      within(sessionMeta).getByText("Connecting…").closest(".ui-badge"),
-    ).toHaveClass("ui-badge", "ui-badge--neutral");
+    expect(within(sessionMeta).getByText("连接中")).toHaveClass(
+      "session-connection",
+    );
 
     const interrupt = screen.getByRole("button", {
-      name: "Interrupt Session",
+      name: "停止任务",
     });
     expect(interrupt).toHaveClass(
       "ui-button",
       "ui-button--secondary",
       "ui-button--compact",
     );
-    expect(screen.getByLabelText("Message")).toHaveClass("ui-textarea");
-    expect(screen.getByRole("button", { name: "Send message" })).toHaveClass(
+    expect(screen.getByLabelText("补充要求")).toHaveClass("ui-textarea");
+    expect(screen.getByRole("button", { name: "发送消息" })).toHaveClass(
       "ui-icon-button",
       "ui-icon-button--small",
       "send-button",
     );
 
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
     const source = MockEventSource.instances[0]!;
     act(() => source.emitOpen());
-    expect(
-      within(sessionMeta).getByText("Live").closest(".ui-badge"),
-    ).toHaveClass("ui-badge", "ui-badge--success");
+    expect(within(sessionMeta).getByText("已连接")).toHaveClass(
+      "session-connection--success",
+    );
 
-    const actions = screen.getByRole("button", { name: "Session actions" });
+    const actions = screen.getByRole("button", { name: "任务操作" });
     expect(actions).toHaveClass("ui-icon-button", "ui-icon-button--default");
     await user.click(actions);
-    expect(screen.getByRole("button", { name: "Archive Session" })).toHaveClass(
+    expect(screen.getByRole("button", { name: "归档任务" })).toHaveClass(
       "ui-button",
       "ui-button--text",
       "ui-button--compact",
     );
     const deleteAction = screen.getByRole("button", {
-      name: "Delete Session permanently",
+      name: "永久删除任务",
     });
     expect(deleteAction).toHaveClass(
       "ui-button",
@@ -1090,35 +1070,33 @@ describe("Session page", () => {
 
     await user.click(deleteAction);
     const dialog = screen.getByRole("dialog", {
-      name: "Delete Session permanently?",
+      name: "永久删除任务？",
     });
     expect(dialog).toHaveClass("ui-dialog");
     expect(
       within(dialog).getByRole("button", {
-        name: "Close deletion confirmation",
+        name: "关闭删除确认",
       }),
     ).toHaveClass("ui-icon-button", "ui-icon-button--small");
-    expect(within(dialog).getByLabelText("Type DELETE to confirm")).toHaveClass(
+    expect(within(dialog).getByLabelText("输入 DELETE 确认")).toHaveClass(
       "ui-input",
     );
-    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveClass(
+    expect(within(dialog).getByRole("button", { name: "取消" })).toHaveClass(
       "ui-button",
       "ui-button--secondary",
     );
     expect(
-      within(dialog).getByRole("button", { name: "Delete permanently" }),
+      within(dialog).getByRole("button", { name: "永久删除" }),
     ).toHaveClass("ui-button", "ui-button--danger");
 
     const [transcriptRule] = findStyleRules(".transcript");
     const [composerRule] = findStyleRules(".session-composer");
-    const [connectionRule] = findStyleRules(".session-connection-badge");
     expect(transcriptRule?.style.width).toBe("100%");
     expect(transcriptRule?.style.maxWidth).toBe(
       "var(--ui-transcript-max-width)",
     );
     expect(transcriptRule?.style.marginInline).toBe("auto");
     expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
-    expect(connectionRule?.style.minWidth).toBe("7.5rem");
   });
 
   it("resizes the side panel by drag and by keyboard", async () => {
@@ -1149,7 +1127,9 @@ describe("Session page", () => {
 
   it("shows composer focus on the card instead of a clipped textarea outline", () => {
     for (const card of [".composer", ".session-composer"]) {
-      const [focusRule] = findStyleRules(`${card}:focus-within`);
+      const [focusRule] = findStyleRules(
+        `${card}:has(.ui-textarea:focus-visible)`,
+      );
       expect(focusRule?.style.borderColor, card).toBe("var(--ui-color-accent)");
       expect(focusRule?.style.boxShadow, card).toBe(
         "0 0 0 1px var(--ui-color-accent)",
@@ -1180,33 +1160,25 @@ describe("Session page", () => {
     renderApp(`/sessions/${sessionId}`);
     const user = userEvent.setup();
     const interrupt = await screen.findByRole("button", {
-      name: "Interrupt Session",
+      name: "停止任务",
     });
     await user.click(interrupt);
 
     const pendingInterrupt = screen.getByRole("button", {
-      name: "Interrupt Session",
+      name: "停止任务",
     });
     expect(pendingInterrupt).toBeDisabled();
     expect(pendingInterrupt).toHaveAttribute("aria-busy", "true");
-    expect(within(pendingInterrupt).getByText("Interrupt")).toBeVisible();
+    expect(within(pendingInterrupt).getByText("停止")).toBeVisible();
     expect(
       within(pendingInterrupt).getByRole("status", { hidden: true }),
     ).toHaveClass("ui-spinner");
   });
 
   it.each([
-    [
-      "SESSION_BUSY",
-      409,
-      "The Session is busy. Your message was not accepted; try again.",
-    ],
-    [
-      "SESSION_TERMINATED",
-      409,
-      "This Session is terminated and cannot accept new messages.",
-    ],
-    ["ARK_UNAVAILABLE", 503, "The message could not be completed. Try again."],
+    ["SESSION_BUSY", 409, "任务正忙，本条消息未被接受，请稍后重试。"],
+    ["SESSION_TERMINATED", 409, "此任务已结束，无法继续发送消息。"],
+    ["ARK_UNAVAILABLE", 503, "发送消息未完成，请重试。"],
   ])(
     "renders %s message failures as danger alerts",
     async (code, status, expectedMessage) => {
@@ -1224,8 +1196,8 @@ describe("Session page", () => {
       renderApp(`/sessions/${sessionId}`);
       const user = userEvent.setup();
       await screen.findByRole("heading", { name: "Quarterly plan" });
-      await user.type(screen.getByLabelText("Message"), "Add risks");
-      await user.click(screen.getByRole("button", { name: "Send message" }));
+      await user.type(screen.getByLabelText("补充要求"), "Add risks");
+      await user.click(screen.getByRole("button", { name: "发送消息" }));
 
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent(expectedMessage);
@@ -1251,50 +1223,36 @@ describe("Session page", () => {
     renderApp(`/sessions/${sessionId}`);
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Quarterly plan" });
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(
-      screen.getByRole("button", { name: "Delete Session permanently" }),
-    );
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "永久删除任务" }));
     const dialog = screen.getByRole("dialog", {
-      name: "Delete Session permanently?",
+      name: "永久删除任务？",
     });
     await user.type(
-      within(dialog).getByLabelText("Type DELETE to confirm"),
+      within(dialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete permanently" }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: "永久删除" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(
-      "Permanent deletion failed and will be retried in the background.",
-    );
+    expect(alert).toHaveTextContent("永久删除失败，后台将继续重试。");
     expect(alert).toHaveClass("ui-alert--danger");
   });
 
-  it("gives failed composer feedback a growing mobile layout contract", () => {
-    const [pageRule] = findStyleRules(
-      ".session-page.session-page--composer-error",
-    );
-    const [composerRule] = findStyleRules(
-      ".session-page--composer-error .session-composer",
-    );
-    const [footerRule] = findStyleRules(
-      ".session-page--composer-error .session-composer-footer",
-    );
-    const [feedbackRule] = findStyleRules(
-      ".session-page--composer-error .session-composer-feedback",
-    );
+  it("gives composer feedback a growing layout at every width", () => {
+    const [pageRule] = findStyleRules(".session-page");
+    const [composerRule] = findStyleRules(".session-composer");
+    const [footerRule] = findStyleRules(".session-composer-footer");
+    const [feedbackRule] = findStyleRules(".session-composer-feedback");
 
     expect(pageRule?.style.gridTemplateRows).toBe(
-      "auto minmax(180px, 1fr) auto",
+      "auto minmax(8rem, 1fr) auto",
     );
-    expect(composerRule?.style.gridTemplateRows).toBe("70px auto");
-    expect(composerRule?.style.overflow).toBe("visible");
-    expect(footerRule?.style.display).toBe("grid");
-    expect(feedbackRule?.style.gridColumn).toBe("1 / -1");
-    expect(feedbackRule?.style.overflow).toBe("visible");
+    expect(composerRule?.style.gridTemplateRows).toBe(
+      "minmax(4.5rem, auto) auto",
+    );
+    expect(footerRule?.style.flexWrap).toBe("wrap");
+    expect(feedbackRule?.style.overflowWrap).toBe("anywhere");
   });
 
   it("keeps a fixed icon slot in the permanent-delete button while loading", async () => {
@@ -1313,19 +1271,17 @@ describe("Session page", () => {
     renderApp(`/sessions/${sessionId}`);
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Quarterly plan" });
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(
-      screen.getByRole("button", { name: "Delete Session permanently" }),
-    );
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "永久删除任务" }));
     const dialog = screen.getByRole("dialog", {
-      name: "Delete Session permanently?",
+      name: "永久删除任务？",
     });
     await user.type(
-      within(dialog).getByLabelText("Type DELETE to confirm"),
+      within(dialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
     const deleteButton = within(dialog).getByRole("button", {
-      name: "Delete permanently",
+      name: "永久删除",
     });
     const idleSlot = deleteButton.querySelector(".session-delete-button__icon");
     expect(idleSlot).toBeInTheDocument();
@@ -1334,7 +1290,7 @@ describe("Session page", () => {
     await user.click(deleteButton);
 
     const pendingButton = within(dialog).getByRole("button", {
-      name: "Delete permanently",
+      name: "永久删除",
     });
     expect(pendingButton).toHaveAttribute("aria-busy", "true");
     expect(
@@ -1399,8 +1355,8 @@ describe("Session page", () => {
         payload: { content: "Old Session response" },
       });
     });
-    await user.type(screen.getByLabelText("Message"), "Pending old action");
-    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.type(screen.getByLabelText("补充要求"), "Pending old action");
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
 
     await user.click(screen.getByRole("link", { name: /Second Session/ }));
 
@@ -1408,7 +1364,7 @@ describe("Session page", () => {
       screen.queryByRole("heading", { name: "Quarterly plan" }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Old Session response")).not.toBeInTheDocument();
-    expect(screen.getByText("Loading Session…")).toBeInTheDocument();
+    expect(screen.getByText("正在加载任务...")).toBeInTheDocument();
     expect(source.closed).toBe(true);
 
     resolveNextSession(
@@ -1422,8 +1378,8 @@ describe("Session page", () => {
     expect(
       await screen.findByRole("heading", { name: "Second Session" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Message")).toBeEnabled();
-    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(screen.getByLabelText("补充要求")).toBeEnabled();
+    expect(screen.getByLabelText("补充要求")).toHaveValue("");
   });
 
   it("lists archived Sessions from the archived API and restores them", async () => {
@@ -1447,19 +1403,19 @@ describe("Session page", () => {
     renderApp();
     const user = userEvent.setup();
     const sidebar = await screen.findByRole("navigation", {
-      name: "Workspace",
+      name: "工作区",
     });
     expect(calls).toContain("GET /api/v1/sessions?archived=true");
 
     // Archived Sessions stay collapsed until they are asked for.
     const archivedRegion = within(sidebar).getByRole("region", {
-      name: "Archived sessions",
+      name: "已归档任务",
     });
     expect(
       within(archivedRegion).queryByRole("link", { name: /Archived research/ }),
     ).not.toBeInTheDocument();
     await user.click(
-      within(archivedRegion).getByRole("button", { name: /Archived/ }),
+      within(archivedRegion).getByRole("button", { name: /已归档/ }),
     );
     const archivedLink = within(archivedRegion).getByRole("link", {
       name: /Archived research/,
@@ -1467,16 +1423,12 @@ describe("Session page", () => {
     expect(archivedLink).toBeInTheDocument();
 
     await user.click(archivedLink);
-    await user.click(
-      await screen.findByRole("button", { name: "Restore Session" }),
-    );
+    await user.click(await screen.findByRole("button", { name: "恢复任务" }));
 
     expect(
       within(sidebar).getByRole("link", { name: /Archived research/ }),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("region", { name: "Archived sessions" }),
-    ).toBeNull();
+    expect(screen.queryByRole("region", { name: "已归档任务" })).toBeNull();
   });
 
   it("renders ordered deduplicated events without exposing reasoning text and closes SSE", async () => {
@@ -1487,7 +1439,7 @@ describe("Session page", () => {
       await screen.findByRole("heading", { name: "Quarterly plan" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Research assistant")).toBeInTheDocument();
-    expect(screen.getByText("Version 4")).toBeInTheDocument();
+    expect(screen.getByText("助手版本 4")).toBeInTheDocument();
     expect(screen.getByText("brief.txt")).toBeInTheDocument();
 
     const source = MockEventSource.instances[0]!;
@@ -1559,7 +1511,7 @@ describe("Session page", () => {
     });
 
     act(() => source.emitError());
-    expect(screen.getByText("Reconnecting…")).toBeInTheDocument();
+    expect(screen.getByText("连接重试中")).toBeInTheDocument();
     act(() => {
       source.emitOpen();
       source.emit("session.error", {
@@ -1575,7 +1527,7 @@ describe("Session page", () => {
       });
     });
 
-    const timeline = screen.getByLabelText("Session timeline");
+    const timeline = screen.getByLabelText("任务消息");
     // The tool result folds into its call, so it has no row of its own.
     expect(
       Array.from(timeline.querySelectorAll("[data-event-id]")).map((item) =>
@@ -1601,20 +1553,21 @@ describe("Session page", () => {
     expect(
       timeline.querySelector(".transcript__answer .lucide-bot"),
     ).not.toBeNull();
-    expect(screen.getByText("Thinking…")).toBeInTheDocument();
+    expect(screen.getByText("思考中…")).toBeInTheDocument();
     expect(
       screen.queryByText("private chain of thought"),
     ).not.toBeInTheDocument();
     const toolRow = timeline.querySelector('[data-event-id="call_search_1"]')!;
-    expect(toolRow.textContent).toContain("Searched the web for");
+    expect(toolRow.textContent).toContain("已搜索网页");
     expect(toolRow.textContent).toContain("doubao pricing");
     expect(toolRow.textContent).toContain("1.0s");
     expect(screen.getByText("3 results")).toBeInTheDocument();
-    expect(screen.getByText("Recoverable error")).toBeInTheDocument();
-    expect(screen.getByText("Execution stopped")).toBeInTheDocument();
-    expect(screen.getAllByText("Terminated")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
-    expect(screen.getByText("Ended")).toBeInTheDocument();
+    expect(screen.getByText("可恢复的异常")).toBeInTheDocument();
+    expect(screen.getByText("任务已停止")).toBeInTheDocument();
+    expect(screen.getByText("任务已结束")).toBeInTheDocument();
+    expect(screen.getByText("已结束")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "发送消息" })).toBeDisabled();
+    expect(screen.getByText("连接已结束")).toBeInTheDocument();
     expect(source.closed).toBe(true);
     rendered.unmount();
     expect(source.closed).toBe(true);
@@ -1666,29 +1619,33 @@ describe("Session page", () => {
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Quarterly plan" });
 
-    await user.type(screen.getByLabelText("Message"), "Add risks");
-    await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(await screen.findByText("Message queued.")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Interrupt Session" }));
-    expect(await screen.findByText("Interrupt requested.")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(screen.getByRole("button", { name: "Archive Session" }));
+    await user.type(screen.getByLabelText("补充要求"), "Add risks");
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
     expect(
-      await screen.findByRole("button", { name: "Restore Session" }),
+      await screen.findByText("消息已排队，后台将继续发送。"),
     ).toBeInTheDocument();
-    const sidebar = screen.getByRole("navigation", { name: "Workspace" });
+    await user.click(screen.getByRole("button", { name: "停止任务" }));
+    expect(
+      await screen.findByText("已请求停止，等待任务状态确认。"),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "归档任务" }));
+    expect(
+      await screen.findByRole("button", { name: "恢复任务" }),
+    ).toBeInTheDocument();
+    const sidebar = screen.getByRole("navigation", { name: "工作区" });
     const archivedRegion = within(sidebar).getByRole("region", {
-      name: "Archived sessions",
+      name: "已归档任务",
     });
     await user.click(
-      within(archivedRegion).getByRole("button", { name: /Archived/ }),
+      within(archivedRegion).getByRole("button", { name: /已归档/ }),
     );
     expect(
       within(archivedRegion).getByRole("link", { name: /Quarterly plan/ }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Restore Session" }));
+    await user.click(screen.getByRole("button", { name: "恢复任务" }));
     expect(
       within(sidebar).getByRole("link", { name: /Quarterly plan/ }),
     ).toBeInTheDocument();
@@ -1696,64 +1653,54 @@ describe("Session page", () => {
       within(archivedRegion).queryByRole("link", { name: /Quarterly plan/ }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(
-      screen.getByRole("button", { name: "Delete Session permanently" }),
-    );
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "永久删除任务" }));
     const firstDialog = screen.getByRole("dialog", {
-      name: "Delete Session permanently?",
+      name: "永久删除任务？",
     });
     await waitFor(() => {
       expect(
-        within(firstDialog).getByLabelText("Type DELETE to confirm"),
+        within(firstDialog).getByLabelText("输入 DELETE 确认"),
       ).toHaveFocus();
     });
     await user.type(
-      within(firstDialog).getByLabelText("Type DELETE to confirm"),
+      within(firstDialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
     expect(
-      within(firstDialog).getByRole("button", { name: "Delete permanently" }),
+      within(firstDialog).getByRole("button", { name: "永久删除" }),
     ).toBeEnabled();
-    within(firstDialog)
-      .getByRole("button", { name: "Close deletion confirmation" })
-      .focus();
+    within(firstDialog).getByRole("button", { name: "关闭删除确认" }).focus();
     await user.tab({ shift: true });
     expect(
-      within(firstDialog).getByRole("button", { name: "Delete permanently" }),
+      within(firstDialog).getByRole("button", { name: "永久删除" }),
     ).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Session actions" }),
-    ).toHaveFocus();
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(
-      screen.getByRole("button", { name: "Delete Session permanently" }),
-    );
+    expect(screen.getByRole("button", { name: "任务操作" })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "永久删除任务" }));
     const reopenedDialog = screen.getByRole("dialog", {
-      name: "Delete Session permanently?",
+      name: "永久删除任务？",
     });
     const confirmDelete = within(reopenedDialog).getByRole("button", {
-      name: "Delete permanently",
+      name: "永久删除",
     });
     expect(confirmDelete).toBeDisabled();
     await user.type(
-      within(reopenedDialog).getByLabelText("Type DELETE to confirm"),
+      within(reopenedDialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
     await user.click(confirmDelete);
 
-    expect(
-      await screen.findByText("Permanent deletion pending"),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("正在永久删除")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Quarterly plan" }),
     ).toHaveFocus();
     expect(screen.getByLabelText("Current location")).toHaveTextContent(
       `/sessions/${sessionId}`,
     );
-    expect(screen.getByLabelText("Message")).toBeDisabled();
+    expect(screen.getByLabelText("补充要求")).toBeDisabled();
     expect(
       calls.filter((call) => call.path.endsWith("/messages")),
     ).toHaveLength(1);
@@ -1789,51 +1736,45 @@ describe("Session page", () => {
     await screen.findByRole("heading", { name: "Quarterly plan" });
 
     const openDeletionDialog = async () => {
-      await user.click(screen.getByRole("button", { name: "Session actions" }));
-      await user.click(
-        screen.getByRole("button", { name: "Delete Session permanently" }),
-      );
+      await user.click(screen.getByRole("button", { name: "任务操作" }));
+      await user.click(screen.getByRole("button", { name: "永久删除任务" }));
       return screen.getByRole("dialog", {
-        name: "Delete Session permanently?",
+        name: "永久删除任务？",
       });
     };
     const expectFreshConfirmation = (dialog: HTMLElement) => {
+      expect(within(dialog).getByLabelText("输入 DELETE 确认")).toHaveValue("");
       expect(
-        within(dialog).getByLabelText("Type DELETE to confirm"),
-      ).toHaveValue("");
-      expect(
-        within(dialog).getByRole("button", { name: "Delete permanently" }),
+        within(dialog).getByRole("button", { name: "永久删除" }),
       ).toBeDisabled();
     };
 
     let dialog = await openDeletionDialog();
     await user.type(
-      within(dialog).getByLabelText("Type DELETE to confirm"),
+      within(dialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
     await user.click(
       within(dialog).getByRole("button", {
-        name: "Close deletion confirmation",
+        name: "关闭删除确认",
       }),
     );
 
     dialog = await openDeletionDialog();
     expectFreshConfirmation(dialog);
     await user.type(
-      within(dialog).getByLabelText("Type DELETE to confirm"),
+      within(dialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
 
     dialog = await openDeletionDialog();
     expectFreshConfirmation(dialog);
     await user.type(
-      within(dialog).getByLabelText("Type DELETE to confirm"),
+      within(dialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete permanently" }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: "永久删除" }));
     await waitFor(() => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
@@ -1856,10 +1797,8 @@ describe("Session page", () => {
 
     renderApp(`/sessions/${sessionId}`);
 
-    expect(
-      await screen.findByText("Permanent deletion failed"),
-    ).toBeInTheDocument();
-    expect(screen.getByLabelText("Message")).toBeDisabled();
+    expect(await screen.findByText("永久删除失败")).toBeInTheDocument();
+    expect(screen.getByLabelText("补充要求")).toBeDisabled();
   });
 });
 
@@ -1870,29 +1809,27 @@ describe("artifact management", () => {
     renderApp("/files");
     const user = userEvent.setup();
 
-    const heading = await screen.findByRole("heading", { name: "My files" });
+    const heading = await screen.findByRole("heading", { name: "我的文件" });
     expect(await screen.findByText("quarterly-plan.pdf")).toBeInTheDocument();
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(heading.closest("header")).toHaveClass("ui-page-header");
-    expect(screen.getByLabelText("Session")).toHaveClass("ui-select");
+    expect(screen.getByLabelText("来源任务")).toHaveClass("ui-select");
+    expect(screen.getByText("删除失败").closest(".ui-badge")).toHaveClass(
+      "ui-badge",
+      "ui-badge--danger",
+    );
     expect(
-      screen.getByText("Deletion failed").closest(".ui-badge"),
-    ).toHaveClass("ui-badge", "ui-badge--danger");
-    expect(
-      screen.getByRole("link", { name: "Download quarterly-plan.pdf" }),
+      screen.getByRole("link", { name: "下载 quarterly-plan.pdf" }),
     ).toHaveClass("ui-icon-button", "ui-icon-button--small");
     const deleteArtifact = screen.getByRole("button", {
-      name: "Delete quarterly-plan.pdf",
+      name: "删除 quarterly-plan.pdf",
     });
     expect(deleteArtifact).toHaveClass(
       "ui-icon-button",
       "ui-icon-button--small",
     );
     const mimeType = screen.getByText(longDocumentMimeType);
-    expect(mimeType.parentElement).toHaveClass("artifact-record__metadata");
-    expect(pageStyles).toMatch(
-      /@media \(max-width: 760px\)[\s\S]*?\.artifact-record__metadata\s*\{[\s\S]*?display:\s*grid/,
-    );
+    expect(mimeType.parentElement).toHaveClass("artifact-record__details");
     const [metadataRule] = findStyleRules(".artifact-record__metadata");
     const [metadataItemRule] = findStyleRules(
       ".artifact-record__metadata > span",
@@ -1902,11 +1839,11 @@ describe("artifact management", () => {
     expect(metadataItemRule?.style.overflowWrap).toBe("anywhere");
 
     await user.click(deleteArtifact);
-    const dialog = screen.getByRole("dialog", { name: "Delete artifact?" });
+    const dialog = screen.getByRole("dialog", { name: "删除文件？" });
     expect(dialog).toHaveClass("ui-dialog");
     expect(
       within(dialog).getByRole("button", {
-        name: "Close artifact deletion",
+        name: "关闭文件删除确认",
       }),
     ).toBeInTheDocument();
   });
@@ -1927,9 +1864,9 @@ describe("artifact management", () => {
     renderApp("/files");
     const user = userEvent.setup();
 
-    const error = await screen.findByText("Artifacts could not be loaded.");
+    const error = await screen.findByText("文件无法加载。");
     expect(error.closest(".ui-empty-state")).toBeInTheDocument();
-    const retry = screen.getByRole("button", { name: "Retry" });
+    const retry = screen.getByRole("button", { name: "重试" });
     expect(retry).toHaveClass("ui-button", "ui-button--secondary");
     await user.click(retry);
 
@@ -1960,22 +1897,22 @@ describe("artifact management", () => {
     const user = userEvent.setup();
 
     expect(
-      await screen.findByRole("heading", { name: "My files" }),
+      await screen.findByRole("heading", { name: "我的文件" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("quarterly-plan.pdf")).toBeInTheDocument();
     expect(screen.getByText("1.5 KB")).toBeInTheDocument();
-    expect(screen.getByText("Deletion failed")).toBeInTheDocument();
+    expect(screen.getByText("删除失败")).toBeInTheDocument();
     expect(screen.queryByText("brief.txt")).not.toBeInTheDocument();
     expect(
       screen
-        .getByLabelText("Session")
+        .getByLabelText("来源任务")
         .querySelector(`option[value="${createdSessionId}"]`),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "Download quarterly-plan.pdf" }),
+      screen.getByRole("link", { name: "下载 quarterly-plan.pdf" }),
     ).toHaveAttribute("href", `/api/v1/artifacts/${artifactId}/download`);
 
-    await user.selectOptions(screen.getByLabelText("Session"), sessionId);
+    await user.selectOptions(screen.getByLabelText("来源任务"), sessionId);
     await waitFor(() => {
       expect(
         calls.some(
@@ -1985,54 +1922,51 @@ describe("artifact management", () => {
     });
 
     const deleteArtifactTrigger = screen.getByRole("button", {
-      name: "Delete quarterly-plan.pdf",
+      name: "删除 quarterly-plan.pdf",
     });
     await user.click(deleteArtifactTrigger);
     const firstDialog = screen.getByRole("dialog", {
-      name: "Delete artifact?",
+      name: "删除文件？",
     });
     await waitFor(() => {
       expect(
-        within(firstDialog).getByRole("button", { name: "Cancel" }),
+        within(firstDialog).getByRole("button", { name: "取消" }),
       ).toHaveFocus();
     });
     within(firstDialog)
-      .getByRole("button", { name: "Close artifact deletion" })
+      .getByRole("button", { name: "关闭文件删除确认" })
       .focus();
     await user.tab({ shift: true });
     expect(
-      within(firstDialog).getByRole("button", { name: "Delete artifact" }),
+      within(firstDialog).getByRole("button", { name: "删除文件" }),
     ).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(deleteArtifactTrigger).toHaveFocus();
     await user.click(deleteArtifactTrigger);
-    const dialog = screen.getByRole("dialog", { name: "Delete artifact?" });
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete artifact" }),
-    );
-    expect(await screen.findByText("Deletion pending")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "My files" })).toHaveFocus();
+    const dialog = screen.getByRole("dialog", { name: "删除文件？" });
+    await user.click(within(dialog).getByRole("button", { name: "删除文件" }));
+    expect(await screen.findByText("删除中")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "我的文件" })).toHaveFocus();
   });
 });
 
 describe("unavailable capabilities", () => {
-  it("reports reserved capabilities as statements, not controls", async () => {
+  it("hides unavailable capabilities and keeps assistant setup under settings", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/settings");
 
-    await screen.findByRole("heading", { name: "Settings" });
+    await screen.findByRole("heading", { name: "设置" });
     const section = screen
-      .getByRole("heading", { name: "Workspace capabilities" })
+      .getByRole("heading", { name: "工作区能力" })
       .closest("section")!;
 
-    for (const label of ["Context", "Skills", "MCP servers", "Vault"]) {
-      expect(within(section).getByText(label)).toBeInTheDocument();
+    for (const label of ["记忆", "技能", "MCP 服务", "凭据"]) {
+      expect(within(section).queryByText(label)).not.toBeInTheDocument();
     }
     expect(
-      within(section).getAllByText("Not available in this release"),
-    ).toHaveLength(4);
-    expect(within(section).queryByRole("link")).toBeNull();
+      within(section).getByRole("link", { name: "助手配置" }),
+    ).toHaveAttribute("href", "/settings/agents");
     expect(within(section).queryByRole("button")).toBeNull();
     expect(within(section).queryByRole("textbox")).toBeNull();
     expect(within(section).queryByRole("combobox")).toBeNull();
@@ -2043,7 +1977,7 @@ describe("unavailable capabilities", () => {
     renderApp("/settings/vault");
 
     expect(
-      await screen.findByRole("heading", { name: "New task" }),
+      await screen.findByRole("heading", { name: "新任务" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Not available yet")).not.toBeInTheDocument();
   });
@@ -2053,8 +1987,8 @@ describe("unavailable capabilities", () => {
     renderApp("/settings");
     const user = userEvent.setup();
 
-    await screen.findByRole("heading", { name: "Settings" });
-    const theme = screen.getByLabelText("Theme");
+    await screen.findByRole("heading", { name: "设置" });
+    const theme = screen.getByLabelText("主题");
     expect(theme).toHaveValue("system");
     expect(document.documentElement.dataset.theme).toBe("light");
 
@@ -2073,14 +2007,14 @@ describe("command palette", () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "助手配置" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     const search = await screen.findByRole("combobox", {
-      name: "Search commands",
+      name: "搜索操作",
     });
     expect(
-      screen.getByRole("dialog", { name: "Command palette" }),
+      screen.getByRole("dialog", { name: "快捷操作" }),
     ).toBeInTheDocument();
     expect(search).toHaveFocus();
     expect(screen.getAllByRole("option").length).toBeGreaterThan(4);
@@ -2103,11 +2037,11 @@ describe("command palette", () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "助手配置" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     const search = await screen.findByRole("combobox", {
-      name: "Search commands",
+      name: "搜索操作",
     });
     const options = screen.getAllByRole("option");
     expect(search).toHaveAttribute("aria-activedescendant", options[0]!.id);
@@ -2127,15 +2061,15 @@ describe("command palette", () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "助手配置" });
 
     await user.keyboard("{Meta>}k{/Meta}");
-    await screen.findByRole("combobox", { name: "Search commands" });
+    await screen.findByRole("combobox", { name: "搜索操作" });
     await user.keyboard("{Escape}");
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Current location").textContent).toBe(
-      "/agents",
+      "/settings/agents",
     );
   });
 
@@ -2143,16 +2077,16 @@ describe("command palette", () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "助手配置" });
 
     await user.keyboard("{Meta>}k{/Meta}");
     const search = await screen.findByRole("combobox", {
-      name: "Search commands",
+      name: "搜索操作",
     });
     await user.type(search, "zzzz-no-such-command");
 
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
-    expect(screen.getByText("No matching commands.")).toBeInTheDocument();
+    expect(screen.getByText("没有匹配的操作")).toBeInTheDocument();
     expect(search).toHaveAttribute("aria-expanded", "false");
   });
 
@@ -2160,14 +2094,14 @@ describe("command palette", () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp("/agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "助手配置" });
     expect(document.documentElement.dataset.theme).toBe("light");
 
     await user.keyboard("{Meta>}k{/Meta}");
     const search = await screen.findByRole("combobox", {
-      name: "Search commands",
+      name: "搜索操作",
     });
-    await user.type(search, "dark theme");
+    await user.type(search, "深色主题");
     await user.keyboard("{Enter}");
 
     expect(document.documentElement.dataset.theme).toBe("dark");
@@ -2179,11 +2113,11 @@ describe("command palette", () => {
 });
 
 describe("migrated CSS contracts", () => {
-  it("keeps radii at twelve pixels or below and typography viewport-independent", () => {
-    // docs/ui-design.md radius scale: 6 controls, 8 cards, 12 panels/dialogs.
+  it("keeps the approved radius range and typography viewport-independent", () => {
+    // Approved redesign permits a 16px composer, with smaller controls/panels.
     const oversizedRadii = Array.from(
       migratedCss.matchAll(/border-radius\s*:\s*(\d+(?:\.\d+)?)px/g),
-    ).filter((match) => Number(match[1]) > 12);
+    ).filter((match) => Number(match[1]) > 16);
 
     expect(oversizedRadii).toEqual([]);
     expect(migratedCss).not.toMatch(/font-size\s*:[^;]*(?:vw|vh|vmin|vmax)/i);
@@ -2225,12 +2159,11 @@ describe("migrated CSS contracts", () => {
     expect(missing).toEqual([]);
   });
 
-  it("keeps the composer row fixed so loading events cannot shift it", () => {
+  it("keeps the transcript flexible while allowing composer content to grow", () => {
     const [rule] = findStyleRules(".session-page");
     const rows = rule?.style.gridTemplateRows ?? "";
 
-    // header auto · transcript flexible · composer a fixed length
-    expect(rows).toMatch(/^auto\s+minmax\([^)]*\)\s+\d+(\.\d+)?px$/);
+    expect(rows).toMatch(/^auto\s+minmax\([^)]*\)\s+auto$/);
   });
 
   it("meets WCAG AA contrast for text pairs in both palettes", () => {
@@ -2315,25 +2248,25 @@ describe("new task composer", () => {
 
     renderApp();
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "New task" });
+    await screen.findByRole("heading", { name: "新任务" });
 
-    const composer = screen.getByLabelText("Task message").closest("form");
-    const attach = screen.getByRole("button", { name: "Attach files" });
+    const composer = screen.getByLabelText("任务要求").closest("form");
+    const attach = screen.getByRole("button", { name: "添加材料" });
     expect(composer).toHaveClass("composer");
     expect(attach).toHaveClass(
       "attachment-button",
-      "ui-icon-button",
-      "ui-icon-button--small",
+      "ui-button",
+      "ui-button--compact",
     );
     expect(composer?.querySelector(".composer-controls")).not.toBeNull();
-    expect(screen.getByRole("combobox", { name: "Agent" })).toHaveClass(
+    expect(screen.getByRole("combobox", { name: "助手" })).toHaveClass(
       "agent-picker",
     );
 
     const file = new File(["hello"], "brief.txt", { type: "text/plain" });
-    await user.upload(screen.getByLabelText("File picker"), file);
+    await user.upload(screen.getByLabelText("材料文件"), file);
     const remove = await screen.findByRole("button", {
-      name: "Remove brief.txt",
+      name: "移除 brief.txt",
     });
     expect(remove).toHaveClass(
       "small-control",
@@ -2346,9 +2279,9 @@ describe("new task composer", () => {
     const [sendRule] = findStyleRules(".send-button");
     expect(smallControlRule?.style.width).toBe("");
     expect(smallControlRule?.style.height).toBe("");
-    expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
-    expect(sendRule?.style.width).toBe("28px");
-    expect(sendRule?.style.height).toBe("28px");
+    expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-composer)");
+    expect(sendRule?.style.width).toBe("var(--ui-control-height-default)");
+    expect(sendRule?.style.minHeight).toBe("var(--ui-control-height-default)");
     expect(findStyleRules(".ui-app-shell__main > .page")).toHaveLength(1);
   });
 
@@ -2383,12 +2316,12 @@ describe("new task composer", () => {
     });
     renderApp();
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "New task" });
-    await user.type(screen.getByLabelText("Task message"), "Prepare the plan");
-    await user.click(screen.getByRole("button", { name: "Send task" }));
+    await screen.findByRole("heading", { name: "新任务" });
+    await user.type(screen.getByLabelText("任务要求"), "Prepare the plan");
+    await user.click(screen.getByRole("button", { name: "开始任务" }));
     expect(
       await within(
-        await screen.findByRole("region", { name: "Session timeline" }),
+        await screen.findByRole("region", { name: "任务消息" }),
       ).findByText("Prepare the plan"),
     ).toBeInTheDocument();
     const createCall = calls.find(
@@ -2400,6 +2333,7 @@ describe("new task composer", () => {
       title: "Prepare the plan",
       content: "Prepare the plan",
       submissionId: expect.any(String),
+      temporary: false,
     });
     expect(
       calls.filter((call) => call.path.endsWith("/messages")),
@@ -2410,7 +2344,7 @@ describe("new task composer", () => {
       ),
     ).toHaveLength(0);
     expect(
-      screen.queryByRole("button", { name: "Interrupt Session" }),
+      screen.queryByRole("button", { name: "停止任务" }),
     ).not.toBeInTheDocument();
   });
 
@@ -2432,9 +2366,9 @@ describe("new task composer", () => {
     });
     renderApp(`/sessions/${sessionId}`);
     const user = userEvent.setup();
-    const input = await screen.findByLabelText("Message");
+    const input = await screen.findByLabelText("补充要求");
     await user.type(input, "Persist this followup");
-    await user.click(screen.getByRole("button", { name: "Send message" }));
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
     await waitFor(() => expect(input).toHaveValue(""));
     expect(screen.getByText("Persist this followup")).toBeInTheDocument();
   });
@@ -2464,7 +2398,7 @@ describe("new task composer", () => {
     expect(
       await screen.findByText("Saved before disconnect"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/Delivery is being confirmed/)).toHaveTextContent(
+    expect(screen.getByText(/发送结果确认中/)).toHaveTextContent(
       "00000000-0000-4000-8000-000000000099",
     );
     expect(
@@ -2554,7 +2488,7 @@ describe("artifact chips in replies", () => {
       "event-chip-1",
       "搞定啦！文件在 /mnt/session/outputs/report.html。",
     );
-    const timeline = screen.getByLabelText("Session timeline");
+    const timeline = screen.getByLabelText("任务消息");
     await userEvent
       .setup()
       .click(within(timeline).getByRole("button", { name: "report.html" }));
@@ -2564,7 +2498,7 @@ describe("artifact chips in replies", () => {
     ).toBeInTheDocument();
   });
 
-  it("syncs artifacts once after a turn settles and not on mount or later ticks", async () => {
+  it("leaves automatic artifact synchronization to the worker after a turn settles", async () => {
     vi.useFakeTimers();
     try {
       const calls: FetchCall[] = [];
@@ -2617,14 +2551,11 @@ describe("artifact chips in replies", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(1);
       });
-      expect(syncCount()).toBe(1);
-      const syncCall = calls.find((call) => call.path === syncPath);
-      expect(syncCall?.method).toBe("POST");
-      expect(JSON.parse(String(syncCall?.body))).toEqual({});
+      expect(syncCount()).toBe(0);
       await act(async () => {
         await vi.advanceTimersByTimeAsync(10000);
       });
-      expect(syncCount()).toBe(1);
+      expect(syncCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -2649,15 +2580,13 @@ describe("artifact chips in replies", () => {
       "event-chip-2",
       "Done: /mnt/session/outputs/later.html",
     );
-    const timeline = screen.getByLabelText("Session timeline");
+    const timeline = screen.getByLabelText("任务消息");
     await userEvent
       .setup()
       .click(within(timeline).getByRole("button", { name: "later.html" }));
 
     expect(
-      await screen.findByText(
-        "That file isn't available in this Session's outputs yet.",
-      ),
+      await screen.findByText("该文件尚未出现在此任务的成果中。"),
     ).toBeInTheDocument();
     expect(
       calls.some((call) => call.path === syncPath && call.method === "POST"),

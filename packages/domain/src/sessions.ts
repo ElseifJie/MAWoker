@@ -90,6 +90,9 @@ export interface StoredSessionEvent {
   type: string;
   occurredAt: Date;
   payload: Record<string, unknown>;
+  /** Local persistence cursor; never a business-order comparison. */
+  localSequence?: string;
+  historyPosition?: number;
 }
 
 interface SessionAuditEntry {
@@ -235,9 +238,33 @@ export interface SessionRepository {
     userId: string,
     id: string,
     events: StoredSessionEvent[],
+    scanGeneration?: number,
+    signal?: AbortSignal,
   ): PromiseLike<void>;
   historyBackfilled?(userId: string, id: string): PromiseLike<boolean>;
-  markHistoryBackfilled?(userId: string, id: string): PromiseLike<void>;
+  beginHistoryScan?(
+    userId: string,
+    id: string,
+    signal?: AbortSignal,
+  ): PromiseLike<number>;
+  invalidateHistory?(
+    userId: string,
+    id: string,
+    scanGeneration?: number,
+  ): PromiseLike<void>;
+  historyState?(userId: string, id: string): PromiseLike<SessionHistoryState>;
+  listEventsAfter?(
+    userId: string,
+    id: string,
+    after: string,
+    limit: number,
+  ): PromiseLike<StoredSessionEvent[]>;
+  markHistoryBackfilled?(
+    userId: string,
+    id: string,
+    generation?: number,
+    signal?: AbortSignal,
+  ): PromiseLike<boolean | void>;
   beginDelete(
     userId: string,
     id: string,
@@ -267,6 +294,7 @@ export interface SessionRepository {
     userId: string,
     id: string,
     projection: ArkEventProjection,
+    history?: { scanGeneration?: number; signal?: AbortSignal },
   ): PromiseLike<boolean>;
   listRunningForQuota?(userId: string): PromiseLike<SessionRecord[]>;
   syncQuotaStatus?(
@@ -281,6 +309,23 @@ export interface SessionRepository {
 interface SessionContext {
   userId: string;
   requestId: string;
+}
+
+export interface SessionHistoryState {
+  complete: boolean;
+  repairRequired: boolean;
+  scannedAt: Date | null;
+  persistedSequence: string;
+  scanGeneration: number;
+}
+export class SessionHistoryRepairPendingError extends Error {
+  readonly code = "EVENT_HISTORY_REPAIR_PENDING";
+  constructor() {
+    super(
+      "Event history is still being repaired; retry export after synchronization",
+    );
+    this.name = "SessionHistoryRepairPendingError";
+  }
 }
 
 export class SessionTerminatedError extends Error {
@@ -406,6 +451,7 @@ class BoundedAsyncQueue<T> {
 }
 
 export class SessionService {
+  private readonly dirtyHistories = new Set<string>();
   constructor(
     private readonly dependencies: {
       repository: SessionRepository;
@@ -424,6 +470,7 @@ export class SessionService {
         | "streamEvents"
       >;
       environmentId: string;
+      submissionAdmissionEnabled?: boolean;
       memory?: {
         ensure(userId: string): Promise<string>;
         gate(userId: string): Promise<void>;
@@ -466,6 +513,16 @@ export class SessionService {
         return this.get(context.userId, existing.sessionId);
       }
     }
+    if (
+      input.submissionId &&
+      this.dependencies.submissionAdmissionEnabled === false
+    )
+      throw Object.assign(
+        new Error(
+          "New durable submissions are temporarily paused; retry later",
+        ),
+        { code: "SUBMISSION_ADMISSION_PAUSED" },
+      );
     const agent = await this.dependencies.agentResolver.resolveForNewSession(
       context.userId,
       input.agentId,
@@ -599,6 +656,7 @@ export class SessionService {
     SessionRecord & {
       inputs: SessionInputRecord[];
       submissions?: MessageSubmission[];
+      historyState?: SessionHistoryState;
     }
   > {
     const session = await this.requireOwned(userId, id);
@@ -608,6 +666,15 @@ export class SessionService {
     return {
       ...session,
       inputs,
+      ...(session.deletionState === "none" &&
+      this.dependencies.repository.historyState
+        ? {
+            historyState: await this.dependencies.repository.historyState(
+              userId,
+              id,
+            ),
+          }
+        : {}),
       ...(this.dependencies.repository.listSubmissions
         ? {
             submissions: await this.dependencies.repository.listSubmissions(
@@ -829,15 +896,28 @@ export class SessionService {
     if (session.arkSessionId.startsWith("pending:")) {
       return { session, events: { async *[Symbol.asyncIterator]() {} } };
     }
-    const stored = repository.listEvents
-      ? await repository.listEvents(context.userId, id)
-      : [];
+    let stored: StoredSessionEvent[] = [];
+    let backfilled = false;
+    let scanGeneration: number | undefined;
+    let scanStarted = !repository.beginHistoryScan;
+    try {
+      stored = repository.listEvents
+        ? await repository.listEvents(context.userId, id)
+        : [];
+      backfilled =
+        !this.dirtyHistories.has(id) && repository.historyBackfilled
+          ? await repository.historyBackfilled(context.userId, id)
+          : false;
+      if (!backfilled && repository.beginHistoryScan) {
+        scanGeneration = await repository.beginHistoryScan(context.userId, id);
+        scanStarted = true;
+      }
+    } catch {
+      await this.requireHistoryRepair(context.userId, id);
+    }
     // The local log may only stand in for the upstream history once the whole
     // history has been copied in. Otherwise this open would silently show a
     // truncated Session.
-    const backfilled = repository.historyBackfilled
-      ? await repository.historyBackfilled(context.userId, id)
-      : false;
 
     const upstreamController = new AbortController();
     const abortUpstream = () => upstreamController.abort();
@@ -856,6 +936,8 @@ export class SessionService {
         signal: upstreamController.signal,
       });
     } catch (error) {
+      await this.requireHistoryRepair(context.userId, id);
+      upstreamController.abort();
       downstreamSignal?.removeEventListener("abort", abortUpstream);
       throw error;
     }
@@ -892,12 +974,24 @@ export class SessionService {
     // be lost while the stored history is being written out.
     const history = backfilled
       ? null
-      : this.dependencies.ark.listEvents(session.arkSessionId, {
-          correlationId: context.requestId,
-          signal: upstreamController.signal,
-        });
-    const projectEvent = (source: ArkEvent) =>
-      this.projectEvent(session, source, context.userId);
+      : this.dependencies.ark
+          .listEvents(session.arkSessionId, {
+            correlationId: context.requestId,
+            signal: upstreamController.signal,
+          })
+          .catch(async () => {
+            await this.requireHistoryRepair(context.userId, id, scanGeneration);
+            return null;
+          });
+    const projectEvent = (source: ArkEvent, historyBatch = false) =>
+      this.projectEvent(
+        session,
+        source,
+        context.userId,
+        historyBatch && scanGeneration !== undefined
+          ? { scanGeneration, signal: upstreamController.signal }
+          : undefined,
+      );
     // The iterator below is a standalone generator object: capture what it
     // needs here, `this` does not reach inside.
     const memoryHooks = this.dependencies.memory;
@@ -905,26 +999,57 @@ export class SessionService {
     const memorySessionStoreId = session.memoryStoreId;
     const toStoredEvent = (item: StoredSessionEvent) =>
       this.storedToUiEvent(item);
-    const writeBatch = async (events: UiEvent[]) => {
-      await this.appendStoredEvents(context.userId, id, events);
+    const writeBatch = async (
+      events: Array<UiEvent & { historyPosition?: number }>,
+      historyBatch: boolean,
+    ) => {
+      return this.appendStoredEvents(
+        context.userId,
+        id,
+        events,
+        historyBatch ? scanGeneration : undefined,
+        historyBatch ? upstreamController.signal : undefined,
+      );
     };
     const markBackfilled = async () => {
-      await this.markHistoryComplete(context.userId, id);
+      return this.markHistoryComplete(
+        context.userId,
+        id,
+        scanGeneration,
+        upstreamController.signal,
+      );
     };
+    const repair = () => this.requireHistoryRepair(context.userId, id);
+    const repairHistory = () =>
+      this.requireHistoryRepair(context.userId, id, scanGeneration);
 
     return {
       session,
       events: {
         async *[Symbol.asyncIterator]() {
           const seen = new Set<string>();
-          const pending: UiEvent[] = [];
+          const pending: Array<UiEvent & { historyPosition?: number }> = [];
+          let historyPersisted = scanStarted;
           // Persisting before yielding keeps the promise that anything the
           // browser has seen is already in the log, so it survives a reload.
-          const drain = async (): Promise<UiEvent[]> => {
+          const drain = async (historyBatch: boolean): Promise<UiEvent[]> => {
             if (pending.length === 0) return [];
             const batch = pending.splice(0, pending.length);
-            await writeBatch(batch);
-            return batch;
+            historyPersisted =
+              (await writeBatch(batch, historyBatch)) && historyPersisted;
+            return batch.flatMap((event) => {
+              if (seen.has(event.id)) return [];
+              seen.add(event.id);
+              return [
+                {
+                  id: event.id,
+                  sourceType: event.sourceType,
+                  type: event.type,
+                  createdAt: event.createdAt,
+                  payload: event.payload,
+                },
+              ];
+            });
           };
           try {
             for (const item of stored) {
@@ -934,24 +1059,33 @@ export class SessionService {
             }
 
             if (history) {
-              for (const source of await history) {
+              const sources = await history;
+              if (!sources) historyPersisted = false;
+              for (const [position, source] of (sources ?? [])
+                .sort(
+                  (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
+                )
+                .entries()) {
                 if (upstreamController.signal.aborted) return;
-                if (seen.has(source.id)) continue;
-                seen.add(source.id);
-                const projected = await projectEvent(source);
+                try {
+                  await projectEvent(source, true);
+                } catch {
+                  historyPersisted = false;
+                  await repairHistory();
+                }
                 if (isPublicSessionEvent(source.type)) {
-                  pending.push(normalizeArkEvent(source));
+                  pending.push({
+                    ...normalizeArkEvent(source),
+                    historyPosition: position,
+                  });
                   if (pending.length >= storedEventBatchSize) {
-                    for (const event of await drain()) yield event;
+                    for (const event of await drain(true)) yield event;
                   }
                 }
-                if (projected.status === "terminated") {
-                  for (const event of await drain()) yield event;
-                  return;
-                }
               }
-              for (const event of await drain()) yield event;
-              await markBackfilled();
+              for (const event of await drain(true)) yield event;
+              if (historyPersisted && !upstreamController.signal.aborted)
+                await markBackfilled();
             }
 
             while (true) {
@@ -959,8 +1093,12 @@ export class SessionService {
               if (next.done) return;
               const source = next.value;
               if (seen.has(source.id)) continue;
-              seen.add(source.id);
-              const projected = await projectEvent(source);
+              let projected = projectArkEvent(source);
+              try {
+                projected = await projectEvent(source);
+              } catch {
+                await repair();
+              }
               // Turn boundary reached while the user is watching: expedite
               // memory consolidation fire-and-forget, never blocking the
               // stream. Absent viewers fall back to the monitor interval.
@@ -971,10 +1109,13 @@ export class SessionService {
               }
               if (isPublicSessionEvent(source.type)) {
                 pending.push(normalizeArkEvent(source));
-                for (const event of await drain()) yield event;
+                for (const event of await drain(false)) yield event;
               }
               if (projected.status === "terminated") return;
             }
+          } catch (error) {
+            await repair();
+            throw error;
           } finally {
             upstreamController.abort();
             buffered.close();
@@ -998,9 +1139,31 @@ export class SessionService {
     return createHash("sha256").update(JSON.stringify(input)).digest("hex");
   }
 
-  private enqueue(
+  private async enqueue(
     input: Parameters<NonNullable<SessionRepository["enqueueSubmission"]>>[0],
   ) {
+    if (this.dependencies.submissionAdmissionEnabled === false) {
+      const existing = await this.dependencies.repository.findSubmission?.(
+        input.ownerUserId,
+        input.submissionId,
+      );
+      if (!existing)
+        throw Object.assign(
+          new Error(
+            "New durable submissions are temporarily paused; retry later",
+          ),
+          { code: "SUBMISSION_ADMISSION_PAUSED" },
+        );
+      if (
+        existing.sessionId !== input.sessionId ||
+        existing.requestHash !== input.requestHash
+      )
+        throw Object.assign(
+          new Error("Submission ID was used for another request"),
+          { code: "SUBMISSION_CONFLICT" },
+        );
+      return existing;
+    }
     const enqueue = this.dependencies.repository.enqueueSubmission;
     if (!enqueue) throw new Error("Durable submissions unavailable");
     return enqueue.call(this.dependencies.repository, input);
@@ -1344,18 +1507,36 @@ export class SessionService {
     return session;
   }
 
-  /**
-   * The log is a cache: failing to extend it must not interrupt a live Session,
-   * and a missed bookkeeping write only costs a redundant replay next time.
-   */
+  /** A cache failure preserves live display and invalidates the successful scan. */
+  private async requireHistoryRepair(
+    userId: string,
+    id: string,
+    generation?: number,
+  ): Promise<void> {
+    this.dirtyHistories.add(id);
+    try {
+      await this.dependencies.repository.invalidateHistory?.(
+        userId,
+        id,
+        generation,
+      );
+    } catch {
+      // Periodic scans revisit all sessions even if this hint cannot be saved.
+    }
+  }
+
   private async appendStoredEvents(
     userId: string,
     id: string,
-    events: UiEvent[],
-  ): Promise<void> {
+    events: Array<UiEvent & { historyPosition?: number }>,
+    scanGeneration?: number,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const append = this.dependencies.repository.appendEvents;
-    if (events.length === 0 || !append) return;
+    if (events.length === 0) return true;
+    if (!append) return false;
     try {
+      signal?.throwIfAborted();
       await append.call(
         this.dependencies.repository,
         userId,
@@ -1366,20 +1547,131 @@ export class SessionService {
           type: event.type,
           occurredAt: new Date(event.createdAt),
           payload: event.payload,
+          ...(event.historyPosition === undefined
+            ? {}
+            : { historyPosition: event.historyPosition }),
         })),
+        scanGeneration,
+        ...(signal ? [signal] : []),
       );
+      signal?.throwIfAborted();
+      return true;
     } catch {
-      // Ignored on purpose: see the doc comment.
+      await this.requireHistoryRepair(userId, id, scanGeneration);
+      return false;
     }
   }
 
-  private async markHistoryComplete(userId: string, id: string): Promise<void> {
+  private async markHistoryComplete(
+    userId: string,
+    id: string,
+    generation?: number,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
     const mark = this.dependencies.repository.markHistoryBackfilled;
-    if (!mark) return;
+    if (!mark) return false;
     try {
-      await mark.call(this.dependencies.repository, userId, id);
+      signal?.throwIfAborted();
+      const marked = await mark.call(
+        this.dependencies.repository,
+        userId,
+        id,
+        generation,
+        ...(signal ? [signal] : []),
+      );
+      signal?.throwIfAborted();
+      if (marked === false) return false;
+      this.dirtyHistories.delete(id);
+      return true;
     } catch {
-      // Ignored on purpose: see the doc comment on `appendStoredEvents`.
+      await this.requireHistoryRepair(userId, id, generation);
+      return false;
+    }
+  }
+
+  /** Persist a fresh upstream snapshot, including every batch, before reporting completion. */
+  async reconcileHistory(
+    id: string,
+    context: SessionContext,
+    signal?: AbortSignal,
+  ): Promise<ArkEvent[]> {
+    const session = await this.requireOwned(context.userId, id);
+    if (session.arkSessionId.startsWith("pending:"))
+      throw new SessionHistoryRepairPendingError();
+    let generation: number | undefined;
+    try {
+      signal?.throwIfAborted();
+      generation = await this.dependencies.repository.beginHistoryScan?.(
+        context.userId,
+        id,
+        signal,
+      );
+      signal?.throwIfAborted();
+      const sources = await this.dependencies.ark.listEvents(
+        session.arkSessionId,
+        {
+          correlationId: context.requestId,
+          ...(signal ? { signal } : {}),
+        },
+      );
+      // Stable timestamp sort preserves upstream order for ties. IDs are opaque.
+      sources.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      let pending: Array<UiEvent & { historyPosition?: number }> = [];
+      for (const [position, source] of sources.entries()) {
+        signal?.throwIfAborted();
+        await this.projectEvent(session, source, context.userId, {
+          ...(generation === undefined ? {} : { scanGeneration: generation }),
+          ...(signal ? { signal } : {}),
+        });
+        signal?.throwIfAborted();
+        if (isPublicSessionEvent(source.type))
+          pending.push({
+            ...normalizeArkEvent(source),
+            historyPosition: position,
+          });
+        if (pending.length >= storedEventBatchSize) {
+          if (
+            !(await this.appendStoredEvents(
+              context.userId,
+              id,
+              pending,
+              generation,
+              signal,
+            ))
+          )
+            throw new SessionHistoryRepairPendingError();
+          pending = [];
+        }
+      }
+      signal?.throwIfAborted();
+      if (
+        !(await this.appendStoredEvents(
+          context.userId,
+          id,
+          pending,
+          generation,
+          signal,
+        ))
+      )
+        throw new SessionHistoryRepairPendingError();
+      signal?.throwIfAborted();
+      if (
+        !(await this.markHistoryComplete(
+          context.userId,
+          id,
+          generation,
+          signal,
+        ))
+      )
+        throw new SessionHistoryRepairPendingError();
+      return sources;
+    } catch {
+      if (
+        generation !== undefined ||
+        !this.dependencies.repository.beginHistoryScan
+      )
+        await this.requireHistoryRepair(context.userId, id, generation);
+      throw new SessionHistoryRepairPendingError();
     }
   }
 
@@ -1403,37 +1695,14 @@ export class SessionService {
     context: SessionContext,
     signal?: AbortSignal,
   ): Promise<UiEvent[]> {
-    const session = await this.requireOwned(context.userId, id);
+    await this.requireOwned(context.userId, id);
     const repository = this.dependencies.repository;
     const list = repository.listEvents;
     if (!list) throw new Error("Session transcripts are not supported");
 
-    const complete = repository.historyBackfilled
-      ? await repository.historyBackfilled(context.userId, id)
-      : true;
-    if (!complete && !session.arkSessionId.startsWith("pending:")) {
-      const sources = await this.dependencies.ark.listEvents(
-        session.arkSessionId,
-        {
-          correlationId: context.requestId,
-          ...(signal ? { signal } : {}),
-        },
-      );
-      sources.sort(
-        (left, right) =>
-          Date.parse(left.createdAt) - Date.parse(right.createdAt) ||
-          left.id.localeCompare(right.id),
-      );
-      const projected: UiEvent[] = [];
-      for (const source of sources) {
-        await this.projectEvent(session, source, context.userId);
-        if (isPublicSessionEvent(source.type)) {
-          projected.push(normalizeArkEvent(source));
-        }
-      }
-      await this.appendStoredEvents(context.userId, id, projected);
-      await this.markHistoryComplete(context.userId, id);
-    }
+    // Export covers a freshly fetched upstream snapshot. A stale "complete"
+    // flag cannot hide events lost while no browser (or no database) was online.
+    await this.reconcileHistory(id, context, signal);
 
     const stored = await list.call(repository, context.userId, id);
     return stored.map((item) => this.storedToUiEvent(item));
@@ -1598,12 +1867,14 @@ export class SessionService {
     session: SessionRecord,
     event: ArkEvent,
     userId: string,
+    history?: { scanGeneration?: number; signal?: AbortSignal },
   ) {
     const projection = projectArkEvent(event);
     await this.dependencies.repository.projectEvent(
       userId,
       session.id,
       projection,
+      ...(history ? [history] : []),
     );
     return projection;
   }

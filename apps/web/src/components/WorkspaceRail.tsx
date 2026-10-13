@@ -8,6 +8,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -22,6 +23,33 @@ export const RAIL_MIN_WIDTH = 280;
 export const RAIL_MAX_WIDTH = 720;
 export const RAIL_DEFAULT_WIDTH = 340;
 const RAIL_KEYBOARD_STEP = 24;
+
+function availableRailWidth(aside: HTMLElement) {
+  const container = aside.parentElement;
+  const containerWidth = container?.getBoundingClientRect().width ?? 0;
+  // Hidden or not yet laid out: retain nominal bounds until measurable.
+  if (!container || containerWidth <= 0) return RAIL_MAX_WIDTH;
+  const style = window.getComputedStyle(container);
+  const pixels = (value: string) => Number.parseFloat(value) || 0;
+  const contentWidth = Math.max(
+    0,
+    containerWidth -
+      pixels(style.paddingLeft) -
+      pixels(style.paddingRight) -
+      pixels(style.borderLeftWidth) -
+      pixels(style.borderRightWidth),
+  );
+  if (window.getComputedStyle(aside).position === "fixed") {
+    return Math.min(RAIL_MAX_WIDTH, contentWidth, window.innerWidth);
+  }
+  const rootSize =
+    pixels(window.getComputedStyle(document.documentElement).fontSize) || 16;
+  const remaining = Math.max(0, contentWidth - pixels(style.columnGap));
+  return Math.min(
+    RAIL_MAX_WIDTH,
+    remaining - Math.min(24 * rootSize, remaining / 2),
+  );
+}
 
 const todoIcons = {
   pending: Circle,
@@ -46,7 +74,7 @@ export interface WorkspaceRailProps {
   onSelectArtifact: (artifactId: string | null) => void;
   closeLabel?: string;
   onClose?: () => void;
-  /** Panel width in pixels; clamped to the exported min/max while dragging. */
+  /** Preferred width; rendering and resizing also respect available space. */
   width?: number;
   onWidthChange?: (width: number) => void;
 }
@@ -76,23 +104,43 @@ export function WorkspaceRail({
   const selected =
     artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
   const asideRef = useRef<HTMLElement>(null);
-  const dragWidthRef = useRef(0);
+  const [maxWidth, setMaxWidth] = useState(RAIL_MAX_WIDTH);
   const [dragging, setDragging] = useState(false);
   const resizable = Boolean(onWidthChange);
+  const minWidth = Math.min(RAIL_MIN_WIDTH, maxWidth);
 
   const clampWidth = (value: number) =>
-    Math.min(RAIL_MAX_WIDTH, Math.max(RAIL_MIN_WIDTH, value));
+    Math.min(maxWidth, Math.max(minWidth, value));
+  const effectiveWidth = clampWidth(
+    width !== undefined && Number.isFinite(width) ? width : RAIL_DEFAULT_WIDTH,
+  );
+
+  useLayoutEffect(() => {
+    const aside = asideRef.current;
+    const container = aside?.parentElement;
+    if (!aside || !container) return;
+    const updateBounds = () => setMaxWidth(availableRailWidth(aside));
+    updateBounds();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(updateBounds);
+    observer?.observe(container);
+    window.addEventListener("resize", updateBounds);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateBounds);
+    };
+  }, []);
 
   function widthFromPointer(event: ReactPointerEvent<HTMLDivElement>) {
-    // The panel is anchored right, so its width is the gap from the pointer to
-    // the viewport's right edge.
-    return clampWidth(window.innerWidth - event.clientX);
+    const right = asideRef.current?.getBoundingClientRect().right ?? 0;
+    return clampWidth(right - event.clientX);
   }
 
   function startResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (!resizable) return;
     event.preventDefault();
-    dragWidthRef.current = asideRef.current?.offsetWidth ?? RAIL_MIN_WIDTH;
     event.currentTarget.setPointerCapture(event.pointerId);
     setDragging(true);
   }
@@ -100,7 +148,6 @@ export function WorkspaceRail({
   function onResizeMove(event: ReactPointerEvent<HTMLDivElement>) {
     if (!dragging) return;
     const next = widthFromPointer(event);
-    dragWidthRef.current = next;
     onWidthChange?.(next);
   }
 
@@ -114,15 +161,12 @@ export function WorkspaceRail({
 
   function onResizeKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (!resizable) return;
-    const current = dragWidthRef.current || width || RAIL_MIN_WIDTH;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      dragWidthRef.current = clampWidth(current + RAIL_KEYBOARD_STEP);
-      onWidthChange?.(dragWidthRef.current);
+      onWidthChange?.(clampWidth(effectiveWidth + RAIL_KEYBOARD_STEP));
     } else if (event.key === "ArrowRight") {
       event.preventDefault();
-      dragWidthRef.current = clampWidth(current - RAIL_KEYBOARD_STEP);
-      onWidthChange?.(dragWidthRef.current);
+      onWidthChange?.(clampWidth(effectiveWidth - RAIL_KEYBOARD_STEP));
     }
   }
 
@@ -131,7 +175,7 @@ export function WorkspaceRail({
       ref={asideRef}
       className="workspace-rail"
       aria-label="Session side panel"
-      {...(width ? { style: { width: `${width}px` } } : {})}
+      style={{ width: `${effectiveWidth}px` }}
     >
       {resizable ? (
         <div
@@ -139,9 +183,9 @@ export function WorkspaceRail({
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize side panel"
-          aria-valuemin={RAIL_MIN_WIDTH}
-          aria-valuemax={RAIL_MAX_WIDTH}
-          aria-valuenow={width ?? RAIL_MIN_WIDTH}
+          aria-valuemin={minWidth}
+          aria-valuemax={maxWidth}
+          aria-valuenow={effectiveWidth}
           tabIndex={0}
           onPointerDown={startResize}
           onPointerMove={onResizeMove}

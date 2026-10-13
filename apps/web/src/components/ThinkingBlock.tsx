@@ -16,7 +16,7 @@ export function ThinkingBlock({
   return (
     <div className="thinking-block" role="status" data-event-id={eventId}>
       <span className="thinking-block__pulse" aria-hidden="true" />
-      <span>{count > 1 ? `Thinking… ${count} steps` : "Thinking…"}</span>
+      <span>{count > 1 ? `思考中… ${count} 步` : "思考中…"}</span>
     </div>
   );
 }

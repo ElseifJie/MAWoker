@@ -1,6 +1,6 @@
 import { clearDraft, readDraft, writeDraft } from "../submission-drafts.js";
-import { Send } from "lucide-react";
-import { useState, type SyntheticEvent } from "react";
+import { Paperclip, Send } from "lucide-react";
+import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { Alert, IconButton, Spinner, Textarea } from "../ui/index.js";
 
 export type SessionFeedback = {
@@ -16,6 +16,7 @@ export interface SessionComposerProps {
   feedback: SessionFeedback | null;
   /** Resolves true when the message was accepted, so the draft can be cleared. */
   onSend: (content: string, submissionId: string) => Promise<boolean>;
+  onAttach?: () => void;
 }
 
 /**
@@ -30,42 +31,77 @@ export function SessionComposer({
   pendingAction,
   feedback,
   onSend,
+  onAttach,
 }: SessionComposerProps) {
   const [draft] = useState(() => readDraft(draftKey));
   const [submissionId, setSubmissionId] = useState(draft.submissionId);
   const [message, setMessage] = useState(draft.content);
   const busy = pendingAction !== null;
+  const composing = useRef(false);
+  const sending = useRef(false);
+  const mounted = useRef(true);
+  const currentSubmissionId = useRef(submissionId);
+  currentSubmissionId.current = submissionId;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   async function submit(event: SyntheticEvent<HTMLFormElement, SubmitEvent>) {
     event.preventDefault();
     const content = message.trim();
-    if (content.length === 0 || disabled || busy) return;
-    if (await onSend(content, submissionId)) {
-      setMessage("");
-      setSubmissionId(crypto.randomUUID());
-      clearDraft(draftKey);
+    if (
+      content.length === 0 ||
+      disabled ||
+      busy ||
+      composing.current ||
+      sending.current
+    )
+      return;
+    const submittedId = submissionId;
+    sending.current = true;
+    try {
+      if (await onSend(content, submittedId)) {
+        if (readDraft(draftKey).submissionId === submittedId)
+          clearDraft(draftKey);
+        if (mounted.current && currentSubmissionId.current === submittedId) {
+          const nextId = crypto.randomUUID();
+          currentSubmissionId.current = nextId;
+          setMessage("");
+          setSubmissionId(nextId);
+        }
+      }
+    } finally {
+      sending.current = false;
     }
   }
 
   return (
     <form className="session-composer" onSubmit={submit}>
       <label className="sr-only" htmlFor="session-message">
-        Message
+        补充要求
       </label>
       <Textarea
         id="session-message"
         rows={2}
         value={message}
+        onCompositionStart={() => {
+          composing.current = true;
+        }}
+        onCompositionEnd={() => {
+          composing.current = false;
+        }}
         onChange={(event) => {
           const id = crypto.randomUUID();
+          currentSubmissionId.current = id;
           setSubmissionId(id);
           setMessage(event.target.value);
           writeDraft(draftKey, event.target.value, id);
         }}
         placeholder={
-          disabled
-            ? "This Session cannot accept messages."
-            : "Continue this Session…"
+          disabled ? "此任务无法继续发送消息。" : "继续补充任务要求..."
         }
         disabled={disabled || busy}
       />
@@ -77,20 +113,31 @@ export function SessionComposer({
             <span className="muted">{feedback?.message ?? ""}</span>
           )}
         </div>
-        <IconButton
-          label="Send message"
-          type="submit"
-          className="send-button"
-          size="small"
-          aria-busy={pendingAction === "message" ? true : undefined}
-          disabled={disabled || busy || message.trim().length === 0}
-        >
-          {pendingAction === "message" ? (
-            <Spinner size={15} aria-hidden="true" />
-          ) : (
-            <Send size={15} aria-hidden="true" />
-          )}
-        </IconButton>
+        <div className="session-header-actions">
+          {onAttach ? (
+            <IconButton
+              label="添加材料，创建后续任务"
+              disabled={disabled || busy}
+              onClick={onAttach}
+            >
+              <Paperclip size={15} aria-hidden="true" />
+            </IconButton>
+          ) : null}
+          <IconButton
+            label="发送消息"
+            type="submit"
+            className="send-button"
+            size="small"
+            aria-busy={pendingAction === "message" ? true : undefined}
+            disabled={disabled || busy || message.trim().length === 0}
+          >
+            {pendingAction === "message" ? (
+              <Spinner size={15} aria-hidden="true" />
+            ) : (
+              <Send size={15} aria-hidden="true" />
+            )}
+          </IconButton>
+        </div>
       </div>
     </form>
   );

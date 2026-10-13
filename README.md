@@ -26,6 +26,162 @@ quotas.
 Sessions and events are authoritative on Ark; MAWork keeps a local projection for fast reads and stores
 only what it must (identifiers, ownership, status, quotas, audit).
 
+## Stage A reliability
+
+The browser submits the first message with session creation (`submissionId`, `content`,
+`uploadIds`, and optional `temporary`) and receives a durable `202` receipt. Follow-up messages
+use the same submission ID protocol. The Worker creates the remote session and delivers the
+accepted local intent; opening an SSE connection is not required to start work. Unknown upstream
+outcomes remain fenced for reconciliation and are never automatically resent.
+
+The Worker also repairs persisted history and records completed turns, copies available results
+to the user's Drive, and creates deduplicated task notifications. Text results become available
+after a short visibility grace period; undeclared late files are checked through the retry window.
+Known but unavailable files remain pending, then show a recoverable synchronization failure.
+The task page includes a recovery action, and the sidebar shows unread task notifications.
+
+Apply migrations before deploying the updated API and Worker:
+
+```bash
+npm run build
+npm run db:check
+npm run db:migrate
+```
+
+Migrations `0028` and `0029` add history checkpoints, scan generations and stable local event
+sequences; legacy events are marked for verification. Migration `0030` adds `session_turns`,
+`user_notifications` and delivery scheduling. These are additive changes; do not remove the
+tables to roll back. Migration `0028` also backfills persisted sequence maxima: if an earlier
+unreleased version of it has already been applied, coordinate a corrective migration instead
+of editing the applied migration in place.
+
+Start with an isolated test deployment and a small batch:
+
+| Setting                                                      | Default  | Effect                                        |
+| ------------------------------------------------------------ | -------- | --------------------------------------------- |
+| `SESSION_SUBMISSION_ADMISSION_ENABLED`                       | `true`   | Admit new durable task/message submissions    |
+| `FILE_REUSE_ADMISSION_ENABLED`                               | `true`   | Admit new existing-file material preparations |
+| `SESSION_HISTORY_ENABLED`                                    | `true`   | Periodic background event repair              |
+| `SESSION_DELIVERY_ENABLED`                                   | `true`   | Background turn discovery and result copying  |
+| `SESSION_HISTORY_BATCH_SIZE` / `SESSION_DELIVERY_BATCH_SIZE` | `2`      | Sessions selected per poll                    |
+| `SESSION_HISTORY_COOLDOWN_MS`                                | `60000`  | Base history retry delay                      |
+| `SESSION_HISTORY_TIMEOUT_MS` / `SESSION_DELIVERY_TIMEOUT_MS` | `30000`  | External work budget                          |
+| `SESSION_ARTIFACT_RETRY_WINDOW_MS`                           | `300000` | Automatic late-file reconciliation window     |
+| `SESSION_ARTIFACT_EMPTY_GRACE_MS`                            | `30000`  | Grace before text-only completion             |
+
+These are independent deployment switches. Admission gates only reject new requests:
+paused durable intake returns retryable `503 SUBMISSION_ADMISSION_PAUSED`, while exact known
+submission IDs still replay their existing receipt (changed content still conflicts). Paused
+reuse returns retryable `503 FILE_REUSE_ADMISSION_PAUSED` before reserving or reading bytes.
+Existing file reads/deletes and already accepted submission reconciliation continue. Legacy
+requests without submission IDs retain their existing behavior; close their ingress route too
+if an operational rollback must stop all task/message intake. API configuration changes need
+an API restart/redeploy; keep the current Worker running to drain accepted durable jobs.
+
+Initial gray rollout uses an isolated deployment restricted to named test users through
+existing ingress/auth provisioning; application per-user allowlists are not required.
+
+1. Provision a separate test deployment and dedicated storage/database resources. Record the
+   named test users; configure existing ingress access rules and auth provisioning so only
+   those accounts can enter. Verify a non-test account cannot access it before enabling intake.
+2. Apply additive migrations once and record the version. Begin with both admission gates
+   disabled. Check health and retained receipt/history/file reads for the named accounts.
+3. Enable `SESSION_SUBMISSION_ADMISSION_ENABLED` for stage A, keeping B reuse disabled.
+   Verify new-task/follow-up acceptance, exact replay, offline history and a delivered round.
+4. Enable `FILE_REUSE_ADMISSION_ENABLED` for stage B. Verify own-file reuse, source deletion
+   with another task still referencing its bytes, cancellation, and delayed copy cleanup.
+5. For rollback, disable the affected admission gate and redeploy the API first. Keep Worker
+   delivery/reconciliation active to drain accepted jobs. If result copying must pause, disable
+   `SESSION_DELIVERY_ENABLED`; to freeze both history/result discovery also disable
+   `SESSION_HISTORY_ENABLED`. Preserve receipts, reservations and migrations. Record remaining
+   queued/unknown receipts and resolve unknown outcomes with upstream evidence, without resend.
+6. Record request/submission IDs, migration/deployment version and acceptance results before
+   expanding ingress access beyond named testers. Real-cloud Ark receipt visibility/idempotency,
+   offline reconciliation, TOS/reference cleanup and UI acceptance are **pending**; local tests
+   do not establish those acceptance results.
+
+Turning delivery off freezes retry
+attempt consumption; resuming extends the file retry deadline. Turning history off disables
+its periodic processor, while enabled delivery discovery and explicit exports can still
+reconcile history. To freeze both background paths, set both switches to `false`. An export
+whose fresh history could not be persisted returns `409 EVENT_HISTORY_REPAIR_PENDING`;
+retry after repair rather than treating the existing partial data as complete.
+
+For an unknown message outcome, an administrator with `USER_MANAGE` can request a read-only
+upstream evidence check through
+`POST /api/v1/admin/users/:userId/submissions/:submissionId/reconcile`, with JSON body
+`{"sessionId":"<local-session-uuid>"}`. Use the request/submission identifiers shown on the task.
+This action only accepts a recorded matching upstream receipt; it cannot force acceptance or
+trigger a resend. Preserve unresolved receipts and quota reservations when evidence is absent.
+When reverting to an older submission implementation, stop accepting new submissions first
+and drain or freeze pending delivery jobs; never run browser and Worker first-message delivery
+for the same task simultaneously.
+
+Local regression fixtures do not prove upstream idempotency or real cloud file visibility.
+File attribution uses creation timestamps, session input exclusions and the next observed
+user-message boundary. Past turns do not refresh files that may have been edited later;
+Ark's current inventory cannot recover an overwritten historical version. Files with no
+reachable TOS location remain recoverable failures. The next stages still cover pagination,
+full notification/usage UX, resource limits and visual refinements.
+
+PostgreSQL contention tests create and remove their own schemas. Point them at a disposable
+database, then run `TEST_POSTGRES_URL=<test-url> npm test`. UI verification here uses component
+interactions and build checks; real cloud and browser layout acceptance are separate.
+
+## Stage B workspace and file reuse
+
+The personal workspace now opens with 新任务, 历史任务 and 我的文件. Assistant and memory
+configuration remain under Settings, and existing assistant links redirect to their new location.
+Task execution and connection status are separate; an ordinary idle observation does not imply
+completion. Reading older messages preserves the scroll position and offers a latest-message action.
+
+Materials retain their original display names while upstream filenames and mount paths use safe
+names. Each task accepts at most 20 materials, 20 MiB per material and 100 MiB in total. Browser
+uploads use at most three concurrent requests and support cancellation. Server checks remain
+authoritative; user-wide storage, bandwidth and aggregate concurrency controls belong to Stage C.
+
+An existing result can be selected as a new task's material. The server checks ownership, pins the
+Drive/object version in a durable input reference, reads private bytes and uploads a separate Ark
+input. Deleting the source task does not remove a surviving reference. Retired object versions
+remain protected until references end, then their cleanup jobs resume. Failed preparation leaves
+durable cleanup accounting. Interrupted create responses can replay the same submission and actual
+input IDs after reload; editing an attempted request allocates a new submission ID.
+
+Apply additive migration `0031_bumpy_lady_vermin.sql` before running the updated API/Worker:
+
+```bash
+npm run build
+npm run db:check
+npm run db:migrate
+```
+
+It adds `session_inputs.reused_object_key` and indexes for Drive/key references. Keep these fields
+and the cleanup jobs when reverting application code. Migration validation uses disposable
+databases; applying the migration to a deployment is a separate operator step.
+
+The “使用个人记忆” switch maps to `temporary`; disabling it skips personal memory mounts and
+subsequent extraction sources while keeping the conversation. Memory settings show categories
+and explicit sources, distinguish automatic organization from assistant-native reads/writes,
+and retain revision checks and maintenance locks. “保护” limits background organization only.
+
+HTML and converted Office previews use `/preview-frame`, a blank document with its own CSP.
+The sandbox omits scripts, external resources and forms; inline preview styles do not loosen the
+main application's CSP. Keep `/preview-frame` routed to the API when deploying behind a proxy.
+The Vite development proxy already includes that route.
+
+XLSX preview is read-only and bounded to 200 ZIP entries, 10 MiB expanded data, 10 worksheets,
+200 rows and 50 columns per worksheet, 10,000 cells overall and 1,000,000 text characters.
+Formula cells display a placeholder and external workbook relationships are not loaded.
+Unsupported or oversized documents remain downloadable. Preview reads enforce actual byte
+limits, abort on close and revoke object URLs. Office parser work already in progress may finish
+after close; it cannot update the closed viewer.
+
+Running-task attachments use the approved “摘要与材料创建后续任务” flow. The user confirms
+the summary and selected material before sending; it does not copy the full remote environment.
+Interactive HTML is not enabled without a separate environment free of main-site credentials.
+Real cloud attachment behavior, browser CSP rendering and visual layout/zoom acceptance still
+require isolated cloud or user verification. This stage uses non-visual automated checks.
+
 ## Requirements
 
 - **Node.js >= 22.12** (the repo uses npm workspaces)

@@ -97,7 +97,7 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
         <button
           type="button"
           className="ui-password__toggle"
-          aria-label={visible ? "Hide password" : "Show password"}
+          aria-label={visible ? "隐藏密码" : "显示密码"}
           aria-pressed={visible}
           onClick={() => setVisible((current) => !current)}
         >

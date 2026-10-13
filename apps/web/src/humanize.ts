@@ -27,57 +27,57 @@ interface ToolLine {
  */
 const TOOL_LINES: Record<string, ToolLine> = {
   bash: {
-    running: "Running",
-    done: "Ran a command",
-    failed: "A command failed",
+    running: "正在执行",
+    done: "已执行命令",
+    failed: "命令执行失败",
     shape: "text",
   },
   read: {
-    running: "Reading",
-    done: "Read",
-    failed: "Could not read",
+    running: "正在读取",
+    done: "已读取",
+    failed: "读取失败",
     shape: "path",
   },
   write: {
-    running: "Writing",
-    done: "Wrote",
-    failed: "Could not write",
+    running: "正在写入",
+    done: "已写入",
+    failed: "写入失败",
     shape: "path",
   },
   edit: {
-    running: "Editing",
-    done: "Edited",
-    failed: "Could not edit",
+    running: "正在编辑",
+    done: "已编辑",
+    failed: "编辑失败",
     shape: "path",
   },
   glob: {
-    running: "Looking for files matching",
-    done: "Found files matching",
-    failed: "File search failed for",
+    running: "正在查找文件",
+    done: "已查找文件",
+    failed: "文件查找失败",
     shape: "text",
   },
   grep: {
-    running: "Searching for",
-    done: "Searched for",
-    failed: "Search failed for",
+    running: "正在搜索",
+    done: "已搜索",
+    failed: "搜索失败",
     shape: "text",
   },
   web_fetch: {
-    running: "Fetching",
-    done: "Fetched",
-    failed: "Could not fetch",
+    running: "正在获取",
+    done: "已获取",
+    failed: "获取失败",
     shape: "url",
   },
   web_search: {
-    running: "Searching the web for",
-    done: "Searched the web for",
-    failed: "Web search failed for",
+    running: "正在搜索网页",
+    done: "已搜索网页",
+    failed: "网页搜索失败",
     shape: "text",
   },
   todo_write: {
-    running: "Updating the task list",
-    done: "Updated the task list",
-    failed: "Could not update the task list",
+    running: "正在更新任务清单",
+    done: "已更新任务清单",
+    failed: "任务清单更新失败",
     shape: "none",
   },
 };
@@ -105,8 +105,8 @@ function todoSummary(todos: ToolItem["todos"]): string | undefined {
   if (!todos || todos.length === 0) return undefined;
   const done = todos.filter((todo) => todo.status === "completed").length;
   const active = todos.find((todo) => todo.status === "in_progress");
-  if (active) return `${done}/${todos.length} done · ${active.content}`;
-  return `${done}/${todos.length} done`;
+  if (active) return `已完成 ${done}/${todos.length} · ${active.content}`;
+  return `已完成 ${done}/${todos.length}`;
 }
 
 /**
@@ -117,7 +117,7 @@ function todoSummary(todos: ToolItem["todos"]): string | undefined {
 export function humanizeTool(item: ToolItem): HumanizedLine {
   const name = item.name;
   if (name === undefined) {
-    return { pre: item.status === "running" ? "Working" : "Worked" };
+    return { pre: item.status === "running" ? "正在处理" : "已处理" };
   }
 
   const line = TOOL_LINES[name];
@@ -126,10 +126,10 @@ export function humanizeTool(item: ToolItem): HumanizedLine {
     // a verb that implies we know what the tool does.
     const verb =
       item.status === "running"
-        ? "Using"
+        ? "正在使用"
         : item.status === "failed"
-          ? "Failed using"
-          : "Used";
+          ? "工具执行失败"
+          : "已使用";
     return {
       pre: verb,
       ...(name ? { obj: name } : {}),
@@ -158,7 +158,7 @@ export function humanizeTool(item: ToolItem): HumanizedLine {
     return {
       pre,
       ...(first ? { obj: first } : {}),
-      ...(rest.length > 0 ? { post: `+${rest.length} more` } : {}),
+      ...(rest.length > 0 ? { post: `另 ${rest.length} 项` } : {}),
     };
   }
 

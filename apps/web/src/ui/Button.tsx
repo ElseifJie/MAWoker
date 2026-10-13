@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes } from "react";
+import type { ButtonHTMLAttributes, Ref } from "react";
 
 export type ButtonVariant = "primary" | "secondary" | "text" | "danger";
 export type ButtonSize = "default" | "compact";
@@ -12,6 +12,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   label: string;
   size?: "default" | "small";
+  ref?: Ref<HTMLButtonElement>;
 }
 
 function classNames(...values: Array<string | undefined>) {

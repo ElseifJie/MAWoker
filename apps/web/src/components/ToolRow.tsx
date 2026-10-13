@@ -56,25 +56,25 @@ export function ToolRow({ item }: { item: ToolItem }) {
       <dl className="tool-row__raw">
         {item.name ? (
           <div>
-            <dt>Tool</dt>
+            <dt>工具</dt>
             <dd>{item.name}</dd>
           </div>
         ) : null}
         {item.argsSummary ? (
           <div>
-            <dt>Arguments</dt>
+            <dt>参数</dt>
             <dd>{item.argsSummary}</dd>
           </div>
         ) : null}
         {item.preview ? (
           <div>
-            <dt>Result</dt>
+            <dt>结果</dt>
             <dd>{item.preview}</dd>
           </div>
         ) : null}
         {item.errorMessage ? (
           <div>
-            <dt>Error</dt>
+            <dt>错误</dt>
             <dd>{item.errorMessage}</dd>
           </div>
         ) : null}

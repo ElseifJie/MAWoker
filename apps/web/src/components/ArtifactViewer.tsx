@@ -7,9 +7,14 @@ import {
   canPreview,
   parseCsv,
   type ArtifactKind,
+  PREVIEW_MAX_BYTES,
+  DOCUMENT_PREVIEW_MAX_BYTES,
 } from "../artifacts.js";
+import { readPreviewResponse } from "../preview-read.js";
+import type { SheetPreview } from "../xlsx-preview.js";
 import { Button, IconButton, Spinner } from "../ui/index.js";
 import { Markdown } from "./Markdown.js";
+import { buildStaticPreview } from "../static-preview.js";
 
 type LoadState =
   | { status: "loading" }
@@ -48,6 +53,97 @@ function CsvTable({ text }: { text: string }) {
   );
 }
 
+function SpreadsheetDocument({ data }: { data: ArrayBuffer }) {
+  const [sheets, setSheets] = useState<SheetPreview[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void import("../xlsx-preview.js")
+      .then((module) => module.parseXlsxPreview(data))
+      .then((result) => {
+        if (active) setSheets(result);
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [data]);
+  if (failed)
+    return (
+      <p className="artifact-viewer__note">
+        表格超过安全预览范围或无法读取，请下载原文件。
+      </p>
+    );
+  if (!sheets) return <p className="artifact-viewer__note">正在读取表格…</p>;
+  return (
+    <div className="artifact-viewer__scroll">
+      {sheets.map((sheet, index) => (
+        <section key={index}>
+          <h3>{sheet.name}</h3>
+          <p className="muted">只读预览，公式未执行，外部链接未加载。</p>
+          <table className="artifact-table">
+            <tbody>
+              {sheet.rows.map((row, i) => (
+                <tr key={i}>
+                  {row.map((cell, j) => (
+                    <td key={j}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function StaticFrame({
+  html,
+  title,
+  className,
+}: {
+  html: string;
+  title: string;
+  className: string;
+}) {
+  const frame = useRef<HTMLIFrameElement>(null);
+  const render = () => {
+    const document = frame.current?.contentDocument;
+    if (!document?.head || !document.body) return;
+    const safe = new DOMParser().parseFromString(
+      buildStaticPreview(html),
+      "text/html",
+    );
+    document.head.replaceChildren(
+      ...Array.from(safe.head.childNodes, (node) =>
+        document.importNode(node, true),
+      ),
+    );
+    document.body.replaceChildren(
+      ...Array.from(safe.body.childNodes, (node) =>
+        document.importNode(node, true),
+      ),
+    );
+  };
+  useEffect(() => {
+    if (frame.current?.contentDocument?.URL.endsWith("/preview-frame"))
+      render();
+  }, [html]);
+  return (
+    <iframe
+      ref={frame}
+      src="/preview-frame"
+      sandbox="allow-same-origin"
+      title={title}
+      className={className}
+      onLoad={render}
+    />
+  );
+}
+
 /** Slides are laid out for this width until the real panel width is measured. */
 const FALLBACK_DOC_WIDTH = 720;
 const MIN_DOC_WIDTH = 240;
@@ -61,7 +157,7 @@ const SCROLLBAR_ALLOWANCE = 16;
 
 /**
  * Word and PowerPoint are converted to HTML and shown in a sandboxed iframe.
- * The frame keeps `allow-same-origin` (so blob images resolve) but deliberately
+ * The frame uses a separate static document policy and deliberately
  * omits `allow-scripts`, so markup derived from the file can never execute. The
  * heavy parsers are imported on demand, keeping them out of the initial bundle.
  *
@@ -140,10 +236,9 @@ function OfficeDocument({
           Rendering document…
         </p>
       ) : (
-        <iframe
+        <StaticFrame
           className="artifact-viewer__frame artifact-viewer__frame--document"
-          sandbox="allow-same-origin"
-          srcDoc={html}
+          html={html}
           title={title}
         />
       )}
@@ -227,6 +322,8 @@ function previewOf(
       <OfficeDocument kind={kind} data={state.data} title={artifact.name} />
     );
   }
+  if (kind === "spreadsheet" && state.status === "buffer")
+    return <SpreadsheetDocument data={state.data} />;
   if (state.status !== "text") return null;
   if (kind === "markdown") {
     return (
@@ -238,10 +335,9 @@ function previewOf(
   if (kind === "csv") return <CsvTable text={state.text} />;
   if (kind === "html") {
     return (
-      <iframe
+      <StaticFrame
         className="artifact-viewer__frame"
-        sandbox="allow-scripts"
-        srcDoc={state.text}
+        html={state.text}
         title={artifact.name}
       />
     );
@@ -254,19 +350,22 @@ function previewOf(
  * session cookie and held only in memory; object URLs are revoked on close, so
  * no long-lived public URL is ever produced.
  *
- * Rendered HTML goes into an iframe sandboxed with `allow-scripts` and
- * deliberately *not* `allow-same-origin` — that combination would give the frame
- * our origin and let it remove its own sandbox.
+ * Rendered HTML uses the same script-free static frame as Office documents.
+ * Main application CSP stays strict; external resources are not loaded.
  */
 export function ArtifactViewer({
   artifact,
   onClose,
+  hideHeader = false,
 }: {
   artifact: ArtifactSummary;
   onClose: () => void;
+  /** A labelled modal host can provide the filename and close control. */
+  hideHeader?: boolean;
 }) {
   const kind = artifactKind(artifact);
   const previewable = canPreview(artifact);
+  const embeddedPreview = ["pdf", "html", "word", "slides"].includes(kind);
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [copied, setCopied] = useState(false);
   const artifactId = artifact.id;
@@ -274,26 +373,44 @@ export function ArtifactViewer({
   useEffect(() => {
     if (!previewable) return;
     let active = true;
+    const controller = new AbortController();
     let objectUrl: string | undefined;
     setState({ status: "loading" });
 
     const asBlob = kind === "image" || kind === "pdf";
-    const asBuffer = kind === "word" || kind === "slides";
+    const asBuffer =
+      kind === "word" || kind === "slides" || kind === "spreadsheet";
 
-    void fetch(artifactDownloadUrl(artifactId), { credentials: "include" })
+    void fetch(artifactDownloadUrl(artifactId), {
+      credentials: "include",
+      signal: controller.signal,
+    })
       .then(async (response) => {
         if (!response.ok) throw new Error(String(response.status));
+        const bytes = await readPreviewResponse(
+          response,
+          asBuffer || kind === "pdf"
+            ? DOCUMENT_PREVIEW_MAX_BYTES
+            : PREVIEW_MAX_BYTES,
+          controller.signal,
+        );
         if (asBlob) {
-          objectUrl = URL.createObjectURL(await response.blob());
+          if (!active) return;
+          objectUrl = URL.createObjectURL(
+            new Blob([bytes], { type: artifact.mimeType }),
+          );
           if (active) setState({ status: "blob", url: objectUrl });
           return;
         }
         if (asBuffer) {
-          const data = await response.arrayBuffer();
+          const data = bytes.buffer.slice(
+            bytes.byteOffset,
+            bytes.byteOffset + bytes.byteLength,
+          ) as ArrayBuffer;
           if (active) setState({ status: "buffer", data });
           return;
         }
-        const text = await response.text();
+        const text = new TextDecoder().decode(bytes);
         if (active) setState({ status: "text", text });
       })
       .catch(() => {
@@ -302,6 +419,7 @@ export function ArtifactViewer({
 
     return () => {
       active = false;
+      controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [artifactId, kind, previewable]);
@@ -318,17 +436,19 @@ export function ArtifactViewer({
 
   return (
     <section
-      className="artifact-viewer"
+      className={`artifact-viewer${hideHeader ? " artifact-viewer--hosted" : ""}`}
       aria-label={`Preview of ${artifact.name}`}
     >
-      <header className="artifact-viewer__header">
-        <span className="artifact-viewer__name" title={artifact.name}>
-          {artifact.name}
-        </span>
-        <IconButton label="Close preview" size="small" onClick={onClose}>
-          <X size={15} aria-hidden="true" />
-        </IconButton>
-      </header>
+      {hideHeader ? null : (
+        <header className="artifact-viewer__header">
+          <span className="artifact-viewer__name" title={artifact.name}>
+            {artifact.name}
+          </span>
+          <IconButton label="Close preview" size="small" onClick={onClose}>
+            <X size={15} aria-hidden="true" />
+          </IconButton>
+        </header>
+      )}
 
       <div className="artifact-viewer__actions">
         <a
@@ -364,6 +484,14 @@ export function ArtifactViewer({
         ) : null}
       </div>
 
+      {hideHeader && embeddedPreview && previewable ? (
+        <p className="artifact-viewer__note">
+          文档后可使用“返回预览操作”。
+          {kind === "pdf"
+            ? "PDF 阅读器的快捷键由浏览器处理；也可下载原文件阅读。"
+            : "文档内可按 Escape 关闭预览。"}
+        </p>
+      ) : null}
       {!previewable ? (
         <p className="artifact-viewer__note">
           Preview unavailable. Download to open.
@@ -380,6 +508,20 @@ export function ArtifactViewer({
       ) : (
         previewOf(kind, state, artifact)
       )}
+      {hideHeader && embeddedPreview && previewable ? (
+        <Button
+          variant="secondary"
+          size="compact"
+          onClick={(event) => {
+            event.currentTarget
+              .closest('[role="dialog"]')
+              ?.querySelector<HTMLElement>("button:not([disabled]), a[href]")
+              ?.focus();
+          }}
+        >
+          返回预览操作
+        </Button>
+      ) : null}
     </section>
   );
 }

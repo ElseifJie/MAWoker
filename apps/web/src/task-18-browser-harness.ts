@@ -562,6 +562,9 @@ export function createTask18BrowserBackend() {
     if (path === `/api/v1/sessions/${sessionId}` && method === "GET") {
       return session ? json(session) : apiError("RESOURCE_NOT_FOUND", 404);
     }
+    if (path.endsWith("/turns") && method === "GET") return json({ turns: [] });
+    if (path === "/api/v1/notifications" && method === "GET")
+      return json({ notifications: [] });
     if (path.endsWith("/messages") && method === "POST") {
       if (session) session.status = "running";
       return json(

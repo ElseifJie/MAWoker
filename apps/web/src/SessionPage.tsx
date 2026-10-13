@@ -1,3 +1,4 @@
+import { hasSavedTurnAnswer } from "./turn-answer.js";
 import {
   Archive,
   MoreHorizontal,
@@ -16,16 +17,24 @@ import {
   useState,
   type MouseEvent,
 } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiClientError,
   apiClient,
   type ArtifactSummary,
   type SessionDetail,
-  type SessionStatus,
   type SessionSummary,
+  type SessionTurn,
 } from "./api.js";
 import { Transcript } from "./components/Transcript.js";
+import { NewMessages } from "./components/NewMessages.js";
+import { TurnStatus } from "./components/TurnStatus.js";
+import { canStopTask, taskStatus } from "./task-status.js";
+import {
+  downloadMarkdown,
+  transcriptFilename,
+  transcriptMarkdown,
+} from "./exportTranscript.js";
 import {
   SessionComposer,
   type SessionFeedback,
@@ -47,26 +56,6 @@ import {
   Spinner,
 } from "./ui/index.js";
 
-const statusLabels: Record<SessionStatus, string> = {
-  idle: "Idle",
-  running: "Running",
-  rescheduled: "Rescheduled",
-  initializing: "Initializing",
-  upgrading: "Upgrading",
-  failed: "Failed",
-  terminated: "Terminated",
-};
-
-const statusTones: Record<SessionStatus, BadgeTone> = {
-  idle: "neutral",
-  running: "success",
-  rescheduled: "warning",
-  initializing: "neutral",
-  upgrading: "warning",
-  failed: "danger",
-  terminated: "danger",
-};
-
 function sessionErrorFeedback(
   error: unknown,
   operation: string,
@@ -74,20 +63,18 @@ function sessionErrorFeedback(
   let message: string;
   if (error instanceof ApiClientError) {
     if (error.code === "SESSION_TERMINATED") {
-      message = "This Session is terminated and cannot accept new messages.";
+      message = "此任务已结束，无法继续发送消息。";
     } else if (error.code === "SESSION_BUSY") {
-      message =
-        "The Session is busy. Your message was not accepted; try again.";
+      message = "任务正忙，本条消息未被接受，请稍后重试。";
     } else if (error.code === "DELETION_FAILED") {
-      message =
-        "Permanent deletion failed and will be retried in the background.";
+      message = "永久删除失败，后台将继续重试。";
     } else if (error.retryable) {
-      message = `${operation} could not be completed. Try again.`;
+      message = `${operation}未完成，请重试。`;
     } else {
-      message = `${operation} could not be completed.`;
+      message = `${operation}未完成。`;
     }
   } else {
-    message = `${operation} could not be completed.`;
+    message = `${operation}未完成。`;
   }
   return { kind: "error", message };
 }
@@ -130,6 +117,9 @@ function SessionPageContent({
   onRailWidthChange: (width: number) => void;
 }) {
   const [session, setSession] = useState<SessionDetail | null>(null);
+  const navigate = useNavigate();
+  const createFollowUp = () =>
+    navigate(`/?sourceSessionId=${encodeURIComponent(sessionId)}`);
   const [feedback, setFeedback] = useState<SessionFeedback | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -138,6 +128,8 @@ function SessionPageContent({
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
   const [railOpen, setRailOpen] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [turns, setTurns] = useState<SessionTurn[]>([]);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
   const actionTriggerRef = useRef<HTMLButtonElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
@@ -147,6 +139,58 @@ function SessionPageContent({
     setDeleteConfirmation("");
   }
   const sessionLoaded = session !== null;
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void apiClient
+        .listSessionTurns(sessionId)
+        .then((result) => {
+          if (active) setTurns(result.turns ?? []);
+        })
+        .catch((error) => {
+          if (active && error instanceof ApiClientError && error.isAuthRequired)
+            onAuthRequired();
+        });
+    };
+    refresh();
+    const timer = setInterval(refresh, 10_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [sessionId, onAuthRequired, reloadKey]);
+
+  const latestTurn = turns[0];
+  const currentTurn =
+    latestTurn &&
+    session?.status !== "running" &&
+    !session?.submissions?.some(
+      (item) =>
+        item.status !== "failed" &&
+        Date.parse(item.createdAt) > Date.parse(latestTurn.endedAt),
+    )
+      ? latestTurn
+      : undefined;
+  const recoverTurn = async () => {
+    if (!latestTurn) return;
+    setPendingAction("turn");
+    try {
+      await apiClient.retrySessionTurn(sessionId, latestTurn.id);
+      setFeedback({ kind: "info", message: "已安排后台恢复结果同步。" });
+      setReloadKey((key) => key + 1);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.isAuthRequired)
+        onAuthRequired();
+      else
+        setFeedback({
+          kind: "error",
+          message: "无法恢复结果同步，请刷新任务状态后再试。",
+        });
+    } finally {
+      setPendingAction(null);
+    }
+  };
 
   useEffect(() => {
     actionTriggerRef.current =
@@ -185,10 +229,16 @@ function SessionPageContent({
     return () => clearInterval(timer);
   }, [session?.submissions]);
 
+  useEffect(() => {
+    if (!session?.historyState || session.deletionState !== "none") return;
+    const timer = setInterval(() => setReloadKey((key) => key + 1), 10_000);
+    return () => clearInterval(timer);
+  }, [session?.historyState, session?.deletionState]);
+
   const reportInvalidEvent = useCallback(() => {
     setFeedback({
       kind: "info",
-      message: "An invalid Session event was ignored.",
+      message: "已忽略一条无效任务事件。",
     });
   }, []);
 
@@ -280,8 +330,7 @@ function SessionPageContent({
     [setSearchParams],
   );
 
-  // One in-flight sync shared by the turn-end refresh and link clicks, so a
-  // click during the post-turn sync awaits it instead of starting a second one.
+  // Manual refresh and artifact links share one in-flight synchronization.
   const syncInFlightRef = useRef<Promise<ArtifactSummary[] | null> | null>(
     null,
   );
@@ -314,21 +363,6 @@ function SessionPageContent({
     return syncInFlightRef.current;
   }, [onAuthRequired, sessionId]);
 
-  const prevStatusRef = useRef(timelineStatus);
-  useEffect(() => {
-    const previous = prevStatusRef.current;
-    prevStatusRef.current = timelineStatus;
-    const wasInFlight = previous === "running" || previous === "rescheduled";
-    const ended = timelineStatus === "idle" || timelineStatus === "terminated";
-    if (!wasInFlight || !ended) return;
-    // Files can land on the Agent side slightly after the final event, so the
-    // sync waits a beat once the turn settles.
-    const timer = setTimeout(() => {
-      void syncArtifactsNow();
-    }, 1500);
-    return () => clearTimeout(timer);
-  }, [timelineStatus, syncArtifactsNow]);
-
   const openArtifactByPath = useCallback(
     (path: string) => {
       const name = path.slice(path.lastIndexOf("/") + 1);
@@ -350,7 +384,7 @@ function SessionPageContent({
         } else {
           setFeedback({
             kind: "info",
-            message: "That file isn't available in this Session's outputs yet.",
+            message: "该文件尚未出现在此任务的成果中。",
           });
         }
       });
@@ -388,8 +422,8 @@ function SessionPageContent({
         kind: "success",
         message:
           result.delivery === "queued"
-            ? "Message queued."
-            : "Message accepted.",
+            ? "消息已排队，后台将继续发送。"
+            : "消息已接受。",
       });
       // The 202 is the persistence boundary; a slow refresh must not hold the draft.
       setSession((current) =>
@@ -419,7 +453,7 @@ function SessionPageContent({
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
       } else {
-        setFeedback(sessionErrorFeedback(error, "The message"));
+        setFeedback(sessionErrorFeedback(error, "发送消息"));
       }
       return false;
     } finally {
@@ -428,17 +462,48 @@ function SessionPageContent({
   }
 
   async function interrupt() {
-    if (!sessionId || pendingAction) return;
+    if (!session || !canStopTask(session) || pendingAction) return;
     setPendingAction("interrupt");
     setFeedback(null);
     try {
       await apiClient.interruptSession(sessionId);
-      setFeedback({ kind: "success", message: "Interrupt requested." });
+      setFeedback({
+        kind: "success",
+        message: "已请求停止，等待任务状态确认。",
+      });
+      setReloadKey((key) => key + 1);
     } catch (error) {
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
       } else {
-        setFeedback(sessionErrorFeedback(error, "The interrupt"));
+        setFeedback(sessionErrorFeedback(error, "请求停止"));
+      }
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  async function retryHistoryExport() {
+    if (!session || pendingAction) return;
+    setPendingAction("history");
+    setHistoryError(null);
+    try {
+      const { events } = await apiClient.getSessionTranscript(sessionId);
+      downloadMarkdown(
+        transcriptFilename(session.title),
+        transcriptMarkdown(session.title, events),
+      );
+      setReloadKey((key) => key + 1);
+    } catch (error) {
+      if (error instanceof ApiClientError && error.isAuthRequired) {
+        onAuthRequired();
+      } else {
+        setHistoryError(
+          error instanceof ApiClientError &&
+            error.code === "EVENT_HISTORY_REPAIR_PENDING"
+            ? error.message
+            : "历史同步或导出失败，请稍后重试。",
+        );
       }
     } finally {
       setPendingAction(null);
@@ -457,13 +522,13 @@ function SessionPageContent({
       setActionsOpen(false);
       setFeedback({
         kind: "success",
-        message: updated.archivedAt ? "Session archived." : "Session restored.",
+        message: updated.archivedAt ? "任务已归档。" : "任务已恢复。",
       });
     } catch (error) {
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
       } else {
-        setFeedback(sessionErrorFeedback(error, "The archive change"));
+        setFeedback(sessionErrorFeedback(error, "归档操作"));
       }
     } finally {
       setPendingAction(null);
@@ -488,7 +553,7 @@ function SessionPageContent({
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
       } else {
-        setFeedback(sessionErrorFeedback(error, "Permanent deletion"));
+        setFeedback(sessionErrorFeedback(error, "永久删除"));
         closeDeleteDialog();
       }
     } finally {
@@ -500,15 +565,15 @@ function SessionPageContent({
     return (
       <div className="page">
         <div className="page-heading">
-          <p className="eyebrow">Session</p>
-          <h1>Session</h1>
-          <p className="muted">This Session could not be loaded.</p>
+          <p className="eyebrow">任务</p>
+          <h1>任务</h1>
+          <p className="muted">无法加载此任务。</p>
         </div>
         <Button
           variant="secondary"
           onClick={() => setReloadKey((key) => key + 1)}
         >
-          Retry
+          重试
         </Button>
       </div>
     );
@@ -519,7 +584,7 @@ function SessionPageContent({
       <div className="session-page" aria-busy="true">
         <div className="session-header skeleton-header">
           <Spinner size={18} aria-hidden="true" />
-          <span>Loading Session…</span>
+          <span>正在加载任务...</span>
         </div>
         <div className="timeline-shell" />
         <div className="session-composer placeholder-composer" />
@@ -528,13 +593,16 @@ function SessionPageContent({
   }
 
   const { blocks, connection } = timeline;
+  const visibleTurn =
+    currentTurn &&
+    !timeline.items.some(
+      (item) => Date.parse(item.ts) > Date.parse(currentTurn.endedAt),
+    )
+      ? currentTurn
+      : undefined;
   const panelSummary = [
-    artifacts.length > 0
-      ? `${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}`
-      : "",
-    timeline.todos.length > 0
-      ? `${timeline.todos.length} task${timeline.todos.length === 1 ? "" : "s"}`
-      : "",
+    artifacts.length > 0 ? `${artifacts.length} 个成果` : "",
+    timeline.todos.length > 0 ? `${timeline.todos.length} 个步骤` : "",
   ]
     .filter((part) => part.length > 0)
     .join(", ");
@@ -542,14 +610,14 @@ function SessionPageContent({
     session.status === "terminated" || session.deletionState !== "none";
   const connectionLabel =
     session.upstreamReady === false
-      ? "Delivery pending"
+      ? "等待发送"
       : connection === "live"
-        ? "Live"
+        ? "已连接"
         : connection === "reconnecting"
-          ? "Reconnecting…"
+          ? "连接重试中"
           : connection === "ended"
-            ? "Ended"
-            : "Connecting…";
+            ? "连接已结束"
+            : "连接中";
   const connectionTone: BadgeTone =
     connection === "live"
       ? "success"
@@ -559,6 +627,8 @@ function SessionPageContent({
           ? "danger"
           : "neutral";
   const composerError = feedback?.kind === "error";
+  const status = taskStatus(session, latestTurn, timeline.items);
+  const messageRevision = JSON.stringify([timeline.items, session.submissions]);
 
   return (
     <div className="session-workspace">
@@ -572,13 +642,16 @@ function SessionPageContent({
             </h1>
             <div className="session-meta">
               <span>{session.agent.name}</span>
-              <span>Version {session.agent.version}</span>
-              <Badge tone={statusTones[session.status]}>
-                {statusLabels[session.status]}
-              </Badge>
-              <Badge className="session-connection-badge" tone={connectionTone}>
+              <details className="session-info">
+                <summary>任务信息</summary>
+                <span>助手版本 {session.agent.version}</span>
+              </details>
+              <Badge tone={status.tone}>{status.label}</Badge>
+              <span
+                className={`session-connection session-connection--${connectionTone}`}
+              >
                 {connectionLabel}
-              </Badge>
+              </span>
             </div>
           </div>
           <div className="session-header-actions">
@@ -586,10 +659,10 @@ function SessionPageContent({
               className="rail-toggle"
               label={
                 railOpen
-                  ? "Collapse side panel"
+                  ? "收起成果面板"
                   : panelSummary.length > 0
-                    ? `Open side panel, ${panelSummary}`
-                    : "Open side panel"
+                    ? `打开成果面板，${panelSummary}`
+                    : "打开成果面板"
               }
               aria-expanded={railOpen}
               onClick={() => setRailOpen((open) => !open)}
@@ -600,11 +673,21 @@ function SessionPageContent({
                 <PanelRightOpen size={18} aria-hidden="true" />
               )}
             </IconButton>
-            {session.status === "running" && session.upstreamReady !== false ? (
+            {session.deletionState === "none" ? (
               <Button
                 variant="secondary"
                 size="compact"
-                aria-label="Interrupt Session"
+                onClick={createFollowUp}
+                disabled={pendingAction !== null}
+              >
+                新建后续任务
+              </Button>
+            ) : null}
+            {canStopTask(session) ? (
+              <Button
+                variant="secondary"
+                size="compact"
+                aria-label="停止任务"
                 onClick={() => void interrupt()}
                 loading={pendingAction === "interrupt"}
                 disabled={pendingAction !== null}
@@ -614,14 +697,14 @@ function SessionPageContent({
                 ) : (
                   <Square size={14} aria-hidden="true" />
                 )}
-                Interrupt
+                停止
               </Button>
             ) : null}
             {session.deletionState !== "none" ? null : session.archivedAt ? (
               <Button
                 variant="secondary"
                 size="compact"
-                aria-label="Restore Session"
+                aria-label="恢复任务"
                 onClick={() => void toggleArchive()}
                 loading={pendingAction === "archive"}
                 disabled={pendingAction !== null}
@@ -631,12 +714,12 @@ function SessionPageContent({
                 ) : (
                   <RotateCcw size={14} aria-hidden="true" />
                 )}
-                Restore
+                恢复
               </Button>
             ) : (
               <div ref={actionMenuRef} className="action-menu">
                 <IconButton
-                  label="Session actions"
+                  label="任务操作"
                   aria-expanded={actionsOpen}
                   onClick={() => setActionsOpen((open) => !open)}
                 >
@@ -655,7 +738,7 @@ function SessionPageContent({
                       ) : (
                         <Archive size={15} aria-hidden="true" />
                       )}
-                      Archive Session
+                      归档任务
                     </Button>
                     <Button
                       variant="text"
@@ -667,7 +750,7 @@ function SessionPageContent({
                       }}
                     >
                       <Trash2 size={15} aria-hidden="true" />
-                      Delete Session permanently
+                      永久删除任务
                     </Button>
                   </div>
                 ) : null}
@@ -678,7 +761,7 @@ function SessionPageContent({
 
         <div className="session-body" onClick={handleSessionBodyClick}>
           {session.inputs.length > 0 ? (
-            <div className="session-inputs" aria-label="Session input files">
+            <div className="session-inputs" aria-label="任务材料">
               <Paperclip size={15} aria-hidden="true" />
               {session.inputs.map((input) => (
                 <span key={input.id}>{input.name}</span>
@@ -689,22 +772,66 @@ function SessionPageContent({
           {session.deletionState === "pending" ? (
             <Alert className="session-deletion-alert" tone="warning">
               <div className="session-deletion-alert__copy">
-                <strong>Permanent deletion pending</strong>
-                <span>
-                  The Session will disappear after background cleanup.
-                </span>
+                <strong>正在永久删除</strong>
+                <span>后台清理完成后，任务将被移除。</span>
               </div>
             </Alert>
           ) : session.deletionState === "deletion_failed" ? (
             <Alert className="session-deletion-alert" tone="danger">
               <div className="session-deletion-alert__copy">
-                <strong>Permanent deletion failed</strong>
-                <span>Background cleanup could not finish.</span>
+                <strong>永久删除失败</strong>
+                <span>后台清理尚未完成。</span>
               </div>
             </Alert>
           ) : null}
 
-          <section className="timeline-shell" aria-label="Session timeline">
+          <NewMessages revision={messageRevision}>
+            {session.deletionState === "none" &&
+            (session.historyState?.repairRequired || historyError) ? (
+              <Alert tone="warning">
+                <strong>会话历史待修复</strong>
+                <p>
+                  {historyError ??
+                    "实时消息仍可查看，后台正在补齐历史。完整导出需等待同步成功。"}
+                </p>
+                <Button
+                  variant="secondary"
+                  size="compact"
+                  onClick={() => void retryHistoryExport()}
+                  loading={pendingAction === "history"}
+                  disabled={pendingAction !== null}
+                >
+                  重试同步并导出
+                </Button>
+              </Alert>
+            ) : null}
+
+            {session.deletionState === "none" &&
+            session.status === "failed" &&
+            !visibleTurn ? (
+              <Alert tone="danger">
+                执行失败
+                {session.error?.code
+                  ? `（${session.error.code}）`
+                  : "，原因尚未确认"}
+                。 请刷新状态后重试，或携带摘要创建后续任务。
+              </Alert>
+            ) : null}
+
+            {session.deletionState === "none" && visibleTurn ? (
+              <TurnStatus
+                turn={visibleTurn}
+                hasAnswer={hasSavedTurnAnswer(
+                  visibleTurn,
+                  blocks,
+                  timeline.items,
+                )}
+                onRecover={() => void recoverTurn()}
+                recovering={pendingAction === "turn"}
+                disabled={pendingAction !== null}
+              />
+            ) : null}
+
             {session.submissions
               ?.filter(
                 (item) =>
@@ -728,19 +855,19 @@ function SessionPageContent({
                   ) : null}
                   <p role="status">
                     {item.status === "unknown"
-                      ? "Delivery is being confirmed. Contact an administrator with request "
+                      ? "发送结果确认中，请勿重复发送。需要协助时向管理员提供请求号："
                       : item.status === "failed"
-                        ? "Delivery failed. Request "
+                        ? "发送失败，请求号："
                         : item.status === "accepted"
-                          ? "Message accepted. Request "
-                          : "Message queued. Request "}
+                          ? "消息已接受，请求号："
+                          : "消息已排队，请求号："}
                     {item.submissionId}
                     {item.errorCode ? ` (${item.errorCode})` : ""}
                   </p>
                 </div>
               ))}
             <Transcript blocks={blocks} />
-          </section>
+          </NewMessages>
         </div>
 
         <SessionComposer
@@ -750,13 +877,14 @@ function SessionPageContent({
           pendingAction={pendingAction}
           feedback={feedback}
           onSend={sendMessage}
+          onAttach={createFollowUp}
         />
 
         <Dialog
           open={deleteOpen}
-          title="Delete Session permanently?"
+          title="永久删除任务？"
           onClose={closeDeleteDialog}
-          closeLabel="Close deletion confirmation"
+          closeLabel="关闭删除确认"
           closeDisabled={pendingAction !== null}
           initialFocusRef={deleteInitialFocusRef}
           returnFocusRef={actionTriggerRef}
@@ -768,7 +896,7 @@ function SessionPageContent({
                 onClick={closeDeleteDialog}
                 disabled={pendingAction !== null}
               >
-                Cancel
+                取消
               </Button>
               <Button
                 variant="danger"
@@ -786,20 +914,17 @@ function SessionPageContent({
                     <Trash2 size={15} aria-hidden="true" />
                   )}
                 </span>
-                Delete permanently
+                永久删除
               </Button>
             </>
           }
         >
           <div className="session-delete-dialog">
             <p>
-              This removes the Session, its event history, and generated
-              artifacts. This action cannot be undone. Memories that were
-              already formed from this Session are kept and can be managed
-              separately on the Context page; this deletion does not create a
-              new copy of the conversation.
+              此操作将删除任务、消息历史与生成的成果，无法撤销。此前形成的记忆会保留，
+              可在设置中的记忆页面单独管理；删除不会创建新的对话副本。
             </p>
-            <Field label="Type DELETE to confirm">
+            <Field label="输入 DELETE 确认">
               <Input
                 ref={deleteInitialFocusRef}
                 value={deleteConfirmation}

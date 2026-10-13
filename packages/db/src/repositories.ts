@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
 import { createMemoryRepository } from "./memory-repository.js";
+import { createSessionEventRepository } from "./session-event-repository.js";
+import { createSessionDeliveryRepository } from "./session-delivery-repository.js";
+import { createFileReuseRepository } from "./file-reuse-repository.js";
 
 type Row = Record<string, unknown>;
 
@@ -244,14 +247,6 @@ interface ArtifactRecord {
   lastErrorCode: string | null;
   createdAt: Date;
   updatedAt: Date;
-}
-
-interface StoredSessionEventRow extends Row {
-  eventId: string;
-  sourceType: string;
-  type: string;
-  occurredAt: Date;
-  payload: Record<string, unknown>;
 }
 
 interface StoredSessionEventInput {
@@ -1006,6 +1001,8 @@ export function createRepositories(database: unknown) {
 
   return {
     memories: createMemoryRepository(db),
+    sessionDelivery: createSessionDeliveryRepository(db),
+    fileReuse: createFileReuseRepository(db),
     users: {
       findById(id: string) {
         return first(
@@ -2750,6 +2747,8 @@ export function createRepositories(database: unknown) {
                     where other.drive_file_id = drive.id
                       and other.session_id <> ${id}
                  )
+                 and not exists(select 1 from session_inputs ref where ref.drive_file_id=drive.id
+                   and ref.owner_user_id=${userId} and ref.session_id is distinct from ${id}::uuid)
               returning drive.id`,
         );
         return orphaned.length;
@@ -2795,10 +2794,25 @@ export function createRepositories(database: unknown) {
                    and user_id = ${userId}
                    and status = 'active'`,
           );
+          // Capture only references removed by this deletion. Unrelated syncs
+          // may have committed their drive bytes but not their association yet.
+          const affected = await rows<{ id: string }>(
+            transaction,
+            sql`select d.id from drive_files d where d.owner_user_id=${userId}
+              and (d.source_session_id=${id}
+                or exists(select 1 from artifacts a where a.drive_file_id=d.id and a.session_id=${id})
+                or exists(select 1 from session_inputs ref where ref.drive_file_id=d.id and ref.session_id=${id}))
+              order by d.id for update`,
+          );
           await transaction.execute(
             sql`delete from sessions
                  where id = ${id} and owner_user_id = ${userId}`,
           );
+          for (const drive of affected)
+            await transaction.execute(sql`update drive_files d set orphaned_at=coalesce(orphaned_at,now())
+              where id=${drive.id} and owner_user_id=${userId} and deletion_state='none' and not exists(
+                select 1 from session_inputs ref where ref.drive_file_id=d.id)
+              and not exists(select 1 from artifacts a where a.drive_file_id=d.id and a.deletion_state='none')`);
           return "removed" as const;
         });
       },
@@ -3068,8 +3082,10 @@ export function createRepositories(database: unknown) {
               [input.event],
             );
           if (input.status === "accepted") {
+            // The original body was checked above before any display projection.
+            // Restore it if history cached a sanitized version first.
             await transaction.execute(
-              sql`update session_events set payload=payload || jsonb_build_object('content',${input.event!.payload.content}::text) where session_id=${item.sessionId} and event_id=${input.eventId!} and source_type='user.message' and (payload->>'content' is null or payload->>'content'='')`,
+              sql`update session_events set payload=payload || jsonb_build_object('content',${input.event!.payload.content}::text) where session_id=${item.sessionId} and event_id=${input.eventId!} and source_type='user.message' and (${item.content !== null} or payload->>'content' is null or payload->>'content'='')`,
             );
             const stored = await first(
               transaction,
@@ -3220,6 +3236,17 @@ export function createRepositories(database: unknown) {
               error.name = "ResourceNotFoundError";
               throw error;
             }
+            if (
+              selectedInputs.reduce(
+                (sum, item) => sum + Number(item.sizeBytes),
+                0,
+              ) >
+              100 * 1024 * 1024
+            )
+              throw Object.assign(new Error("材料总量不能超过 100 MB"), {
+                name: "UploadTooLargeError",
+                code: "UPLOAD_TOTAL_TOO_LARGE",
+              });
           }
 
           const quota = await effectiveQuota(transaction, input.ownerUserId);
@@ -3614,81 +3641,7 @@ export function createRepositories(database: unknown) {
               returning ${sessionSelection}`,
         );
       },
-      listEvents(userId: string, id: string) {
-        return rows<StoredSessionEventRow>(
-          db,
-          sql`select event.event_id as "eventId",
-                     event.source_type as "sourceType",
-                     event.type,
-                     event.occurred_at as "occurredAt",
-                     event.payload
-                from session_events event
-                join sessions session on session.id = event.session_id
-               where event.session_id = ${id}
-                 and session.owner_user_id = ${userId}
-               order by event.occurred_at asc, event.event_id asc`,
-        );
-      },
-      async appendEvents(
-        userId: string,
-        id: string,
-        events: StoredSessionEventInput[],
-      ) {
-        if (events.length === 0) return;
-        const values = sql.join(
-          events.map(
-            (event) =>
-              sql`(${event.eventId}::text, ${event.sourceType}::text, ${event.type}::text, ${event.occurredAt}::timestamptz, ${JSON.stringify(event.payload)}::jsonb)`,
-          ),
-          sql`, `,
-        );
-        // A single statement keeps ownership enforcement and de-duplication in
-        // the database: a replay of an already-stored event writes nothing.
-        // The casts are required because a bare VALUES list is untyped.
-        await db.execute(
-          sql`insert into session_events
-                    (session_id, event_id, source_type, type, occurred_at, payload)
-              select ${id}::uuid, batch.event_id, batch.source_type, batch.type,
-                     batch.occurred_at, batch.payload
-                from (values ${values})
-                  as batch(event_id, source_type, type, occurred_at, payload)
-               where exists (
-                       select 1 from sessions
-                        where id = ${id}::uuid
-                          and owner_user_id = ${userId}::uuid
-                     )
-              on conflict (session_id, event_id) do nothing`,
-        );
-      },
-      async historyBackfilled(userId: string, id: string) {
-        const cursor = await first<{ backfilledAt: Date | null }>(
-          db,
-          sql`select cursor.history_backfilled_at as "backfilledAt"
-                from session_event_cursors cursor
-                join sessions session on session.id = cursor.session_id
-               where cursor.session_id = ${id}
-                 and session.owner_user_id = ${userId}
-               limit 1`,
-        );
-        return cursor !== undefined && cursor.backfilledAt !== null;
-      },
-      async markHistoryBackfilled(userId: string, id: string) {
-        await db.execute(
-          sql`insert into session_event_cursors (session_id, history_backfilled_at)
-              select id, now()
-                from sessions
-               where id = ${id} and owner_user_id = ${userId}
-              on conflict (session_id) do nothing`,
-        );
-        await db.execute(
-          sql`update session_event_cursors cursor
-                 set history_backfilled_at = now(), updated_at = now()
-                from sessions session
-               where session.id = cursor.session_id
-                 and session.id = ${id}
-                 and session.owner_user_id = ${userId}`,
-        );
-      },
+      ...createSessionEventRepository(db),
       findSettlementTarget(userId: string, id: string) {
         return first<{
           arkSessionId: string;
@@ -4027,15 +3980,27 @@ export function createRepositories(database: unknown) {
             quantity: number;
           }>;
         },
+        history?: { scanGeneration?: number; signal?: AbortSignal },
       ) {
         return db.transaction(async (transaction) => {
+          history?.signal?.throwIfAborted();
           const owner = await first(
             transaction,
             sql`select id from users
                  where id = ${userId}
                  for update`,
           );
+          history?.signal?.throwIfAborted();
           if (!owner) return false;
+          const session = await first(
+            transaction,
+            sql`select id from sessions
+                 where id = ${id} and owner_user_id = ${userId}
+                   and deletion_state = 'none'
+                 for update`,
+          );
+          history?.signal?.throwIfAborted();
+          if (!session) return false;
           await transaction.execute(
             sql`insert into session_event_cursors
                   (session_id, recent_event_ids)
@@ -4044,21 +4009,33 @@ export function createRepositories(database: unknown) {
                  where id = ${id} and owner_user_id = ${userId}
                 on conflict (session_id) do nothing`,
           );
+          history?.signal?.throwIfAborted();
           const cursor = await first<{
             lastObservedAt: Date | null;
             runningSince: Date | null;
             recentEventIds: string[];
+            scanGeneration: number;
           }>(
             transaction,
             sql`select cursor.last_observed_at as "lastObservedAt",
                        cursor.running_since as "runningSince",
-                       cursor.recent_event_ids as "recentEventIds"
+                       cursor.recent_event_ids as "recentEventIds",
+                       cursor.history_scan_generation as "scanGeneration"
                   from session_event_cursors cursor
                   join sessions session on session.id = cursor.session_id
                  where cursor.session_id = ${id}
                    and session.owner_user_id = ${userId}
                  for update of cursor`,
           );
+          history?.signal?.throwIfAborted();
+          if (
+            cursor &&
+            history?.scanGeneration !== undefined &&
+            cursor.scanGeneration !== history.scanGeneration
+          )
+            throw Object.assign(new Error("History scan was superseded"), {
+              code: "EVENT_HISTORY_SCAN_STALE",
+            });
           if (!cursor || cursor.recentEventIds.includes(projection.eventId)) {
             return false;
           }
@@ -4232,6 +4209,7 @@ export function createRepositories(database: unknown) {
                 where id = ${id} and owner_user_id = ${userId}`,
           );
 
+          history?.signal?.throwIfAborted();
           return tokenUsageInserted;
         });
       },
@@ -4404,15 +4382,27 @@ export function createRepositories(database: unknown) {
         );
       },
       async removeUnbound(id: string, userId: string) {
-        const removed = await rows(
-          db,
-          sql`delete from session_inputs
+        return db.transaction(async (transaction) => {
+          const source = await first<{ driveId: string | null }>(
+            transaction,
+            sql`select drive_file_id as "driveId" from session_inputs
+          where id=${id} and owner_user_id=${userId} and session_id is null`,
+          );
+          if (source?.driveId)
+            await transaction.execute(sql`update drive_files set orphaned_at=coalesce(orphaned_at,now())
+          where id=${source.driveId} and owner_user_id=${userId}
+          and not exists(select 1 from artifacts a where a.drive_file_id=drive_files.id and a.deletion_state='none')
+          and not exists(select 1 from session_inputs other where other.drive_file_id=drive_files.id and other.id<>${id})`);
+          const removed = await rows(
+            transaction,
+            sql`delete from session_inputs
                 where id = ${id}
                   and owner_user_id = ${userId}
                   and session_id is null
                 returning id`,
-        );
-        return removed.length === 1;
+          );
+          return removed.length === 1;
+        });
       },
     },
     artifacts: {
@@ -4458,14 +4448,50 @@ export function createRepositories(database: unknown) {
        * `none`, and a fresh insert is refused once the owning Session has begun
        * deleting, so a late sync can never resurrect deleted state.
        */
-      upsertAssociation(input: ArtifactRecord) {
+      upsertAssociation(input: ArtifactRecord, signal?: AbortSignal) {
+        signal?.throwIfAborted();
         return db.transaction(async (transaction) => {
+          await transaction.execute(sql`set local lock_timeout='5000'`);
+          const session = await first(
+            transaction,
+            sql`select id from sessions where
+            id=${input.sessionId} and owner_user_id=${input.ownerUserId} and deletion_state='none' for update`,
+          );
+          signal?.throwIfAborted();
+          if (!session) throw new Error("Artifact session unavailable");
+          const previous = await first<{ driveFileId: string }>(
+            transaction,
+            sql`select drive_file_id as "driveFileId" from artifacts
+              where owner_user_id=${input.ownerUserId} and session_id=${input.sessionId}
+              and ark_file_id=${input.arkFileId}`,
+          );
+          // Lock both versions before the association, matching reuse/delete.
+          await transaction.execute(
+            sql`select id from drive_files where owner_user_id=${input.ownerUserId}
+              and (id=${input.driveFileId} or id=${previous?.driveFileId ?? input.driveFileId})
+              order by id for update`,
+          );
+          const drive = await first(
+            transaction,
+            sql`select id from drive_files where id=${input.driveFileId}
+              and owner_user_id=${input.ownerUserId} and deletion_state='none'`,
+          );
+          if (!drive) throw new Error("Artifact drive unavailable");
+          await transaction.execute(
+            sql`select id from background_jobs where id=${input.driveFileId}
+              and type='cleanup_drive_object' for update`,
+          );
+          const reclaiming = await first(
+            transaction,
+            sql`select id from background_jobs where id=${input.driveFileId}
+              and type='cleanup_drive_object' and status='running'`,
+          );
+          if (reclaiming) throw new Error("Artifact drive cleanup in progress");
           // A concurrent first sync may have staged its own drive row for the
           // same source: whichever upsert lands second wins the association,
           // and the replaced row must not leak — orphan it here (when nothing
           // else references it) so the GC can reclaim its bytes.
-          const previous = await first<{ driveFileId: string }>(
-            transaction,
+          await transaction.execute(
             sql`select drive_file_id as "driveFileId"
                   from artifacts
                  where owner_user_id = ${input.ownerUserId}
@@ -4501,6 +4527,16 @@ export function createRepositories(database: unknown) {
                 where artifacts.deletion_state = 'none'
                 returning ${artifactSelection}`,
           );
+          await transaction.execute(
+            sql`update drive_files set orphaned_at=null,updated_at=now()
+              where id=${association.driveFileId} and owner_user_id=${input.ownerUserId}`,
+          );
+          // Activation and retiring the durable copy cleanup are atomic. A crash
+          // before this transaction leaves the original delayed job reclaimable.
+          await transaction.execute(sql`update background_jobs set status='succeeded',
+            locked_at=null,locked_by=null,last_error=null,updated_at=now()
+            where id=${association.driveFileId} and owner_user_id=${input.ownerUserId}
+              and type='cleanup_drive_object' and status='pending'`);
           const replaced = previous?.driveFileId;
           if (
             replaced &&
@@ -4522,6 +4558,7 @@ export function createRepositories(database: unknown) {
                      )`,
             );
           }
+          signal?.throwIfAborted();
           return association;
         });
       },
@@ -4629,6 +4666,21 @@ export function createRepositories(database: unknown) {
                limit 1`,
         );
       },
+      async hasInputReferences(
+        userId: string,
+        driveId: string,
+        objectKey: string,
+      ) {
+        const found = await first(
+          db,
+          sql`select ref.id from session_inputs ref
+          where (ref.drive_file_id=${driveId} or ref.reused_object_key=${objectKey})
+          and ref.owner_user_id=${userId}
+          union all select a.id from artifacts a where a.drive_file_id=${driveId}
+          and a.owner_user_id=${userId} and a.deletion_state='none' limit 1`,
+        );
+        return Boolean(found);
+      },
       async markDeleted(id: string, userId: string) {
         const removed = await rows(
           db,
@@ -4690,7 +4742,9 @@ export function createRepositories(database: unknown) {
           sql`select owner_user_id as "ownerUserId",
                      deletion_state::text as "deletionState",
                      write_lease_until as "writeLeaseUntil",
-                     orphaned_at as "orphanedAt"
+                     case when exists(select 1 from session_inputs ref where ref.drive_file_id=drive_files.id)
+                       or exists(select 1 from artifacts a where a.drive_file_id=drive_files.id and a.deletion_state='none')
+                       then null else orphaned_at end as "orphanedAt"
                 from drive_files
                where id = ${driveFileId}
                limit 1`,
@@ -4704,11 +4758,15 @@ export function createRepositories(database: unknown) {
           mimeType: string;
           sizeBytes: number;
           contentHash?: string;
+          signal?: AbortSignal;
         },
       ) {
-        return first<DriveFileRecord & Row>(
-          db,
-          sql`update drive_files
+        input.signal?.throwIfAborted();
+        return db.transaction(async (transaction) => {
+          await transaction.execute(sql`set local lock_timeout='5000'`);
+          const switched = await first<DriveFileRecord & Row>(
+            transaction,
+            sql`update drive_files
                  set tos_object_key = ${input.objectKey},
                      mime_type = ${input.mimeType},
                      size_bytes = ${input.sizeBytes},
@@ -4723,7 +4781,10 @@ export function createRepositories(database: unknown) {
                  and deletion_state = 'none'
                  and orphaned_at is null
                returning ${driveFileSelection}`,
-        );
+          );
+          input.signal?.throwIfAborted();
+          return switched;
+        });
       },
       /**
        * Enqueues the legacy key-addressed cleanup for a key retired by an
@@ -4764,6 +4825,8 @@ export function createRepositories(database: unknown) {
                      orphaned_at as "orphanedAt"
                 from drive_files
                where tos_object_key = ${objectKey}
+               union all select owner_user_id,'none'::text,null::timestamptz,null::timestamptz from session_inputs
+                where reused_object_key=${objectKey}
                limit 1`,
         );
       },
@@ -4858,12 +4921,33 @@ export function createRepositories(database: unknown) {
         });
       },
       /**
-       * Promotes a staged row to `none` and retires its cleanup intent, unless
+       * Promotes a staged row to `none`; artifact copies keep their delayed cleanup
+       * intent and orphan flag until association activation. Other origins retire
+       * the intent, unless
        * a later stage re-armed it (generation changed) or the row was already
        * deleted — in which case the caller must not treat the write as live.
        */
-      commit(input: { id: string; ownerUserId: string }) {
+      commit(input: { id: string; ownerUserId: string; signal?: AbortSignal }) {
+        input.signal?.throwIfAborted();
         return db.transaction(async (transaction) => {
+          await transaction.execute(sql`set local lock_timeout='5000'`);
+          const source = await first<{ sourceSessionId: string | null }>(
+            transaction,
+            sql`select source_session_id as "sourceSessionId" from drive_files
+              where id=${input.id} and owner_user_id=${input.ownerUserId}`,
+          );
+          let sessionAvailable = true;
+          if (source?.sourceSessionId) {
+            sessionAvailable = Boolean(
+              await first(
+                transaction,
+                sql`select id from sessions where
+              id=${source.sourceSessionId} and owner_user_id=${input.ownerUserId}
+              and deletion_state='none' for update`,
+              ),
+            );
+          }
+          input.signal?.throwIfAborted();
           const record = await first<DriveFileRecord & Row>(
             transaction,
             sql`select ${driveFileSelection}
@@ -4882,24 +4966,13 @@ export function createRepositories(database: unknown) {
           // this object was staged, its orphaning pass already ran and would
           // miss this row. Leave it pending so the staged cleanup intent reaps
           // the bytes instead of leaking them.
-          if (record.sourceSessionId) {
-            const session = await first(
-              transaction,
-              sql`select id
-                    from sessions
-                   where id = ${record.sourceSessionId}
-                     and owner_user_id = ${input.ownerUserId}
-                     and deletion_state = 'none'
-                   for update`,
-            );
-            if (!session) {
-              return { record, activated: false };
-            }
-          }
+          if (!sessionAvailable) return { record, activated: false };
+          input.signal?.throwIfAborted();
           const activated = await first<DriveFileRecord & Row>(
             transaction,
             sql`update drive_files
                    set deletion_state = 'none',
+                       orphaned_at = case when origin='artifact' then now() else orphaned_at end,
                        write_lease_until = null,
                        last_error_code = null,
                        updated_at = now()
@@ -4913,7 +4986,7 @@ export function createRepositories(database: unknown) {
           }
           await transaction.execute(
             sql`update background_jobs
-                   set status = 'succeeded',
+                   set status = case when ${activated.origin}='artifact' then 'pending'::background_job_status else 'succeeded'::background_job_status end,
                        payload = payload - 'uploadInProgressUntil',
                        locked_at = null,
                        locked_by = null,
@@ -4924,6 +4997,7 @@ export function createRepositories(database: unknown) {
                    and type = 'cleanup_drive_object'
                    and status = 'pending'`,
           );
+          input.signal?.throwIfAborted();
           return { record: activated, activated: true };
         });
       },
@@ -4997,8 +5071,18 @@ export function createRepositories(database: unknown) {
             sql`select drive.id, drive.owner_user_id as "ownerUserId"
                   from drive_files drive
                  where drive.deletion_state = 'none'
-                   and drive.orphaned_at is not null
-                   and drive.orphaned_at <= ${cutoff}
+                   and (
+                     drive.orphaned_at <= ${cutoff}
+                     or (drive.orphaned_at is null and drive.origin='artifact'
+                       and drive.created_at <= ${cutoff}
+                       and exists (
+                         select 1 from background_jobs retired
+                         where retired.id=drive.id
+                           and retired.owner_user_id=drive.owner_user_id
+                           and retired.type='cleanup_drive_object'
+                           and retired.status='succeeded'
+                       ))
+                   )
                    and drive.folder_id is null
                    and (drive.write_lease_until is null
                         or drive.write_lease_until <= ${input.now})
@@ -5009,17 +5093,25 @@ export function createRepositories(database: unknown) {
                         and live.owner_user_id = drive.owner_user_id
                         and live.deletion_state = 'none'
                    )
+                   and not exists(select 1 from session_inputs ref where ref.drive_file_id=drive.id
+                     and ref.owner_user_id=drive.owner_user_id)
                    and not exists (
                      select 1
                        from background_jobs job
                       where job.id = drive.id
                         and job.status in ('pending', 'running')
                    )
-                 order by drive.orphaned_at asc, drive.id asc
+                 order by coalesce(drive.orphaned_at,drive.created_at) asc, drive.id asc
                  for update skip locked
                  limit ${input.limit}`,
           );
           for (const candidate of candidates) {
+            // Recover pre-fix committed artifact copies whose cleanup retired
+            // before association. Their age already passed normal retention;
+            // the locked row has no live references, job, folder or write lease.
+            await transaction.execute(sql`update drive_files
+              set orphaned_at=coalesce(orphaned_at,created_at),updated_at=${input.now}
+              where id=${candidate.id} and owner_user_id=${candidate.ownerUserId}`);
             // The drive id doubles as the cleanup job id, so the row usually
             // already exists — the retired staging intent. Re-arm it rather
             // than inserting, or the orphan would never be reaped.
@@ -5075,6 +5167,8 @@ export function createRepositories(database: unknown) {
                         and live.owner_user_id = drive_files.owner_user_id
                         and live.deletion_state = 'none'
                    )
+                   and not exists(select 1 from session_inputs ref where ref.drive_file_id=drive_files.id
+                     and ref.owner_user_id=${userId})
                  returning id`,
           );
           if (removed.length !== 1) return false;
@@ -6064,7 +6158,7 @@ export function createRepositories(database: unknown) {
                           now(),
                           (payload ->> 'uploadInProgressUntil')::timestamptz
                         )
-                      else now()
+                      else now()+interval '30 seconds'
                     end,
                     locked_at = null,
                     locked_by = null,
@@ -6328,9 +6422,22 @@ export function createRepositories(database: unknown) {
         const driveCleanupError = driveCleanupErrorCode(error);
         const sessionError = sessionDeletionErrorCode(error);
         await db.transaction(async (transaction) => {
-          const leased = await first<{ attempts: number }>(
+          if (error === "ARTIFACT_SYNC_PAUSED") {
+            // Discovery and completion acquire the session before turn/job.
+            // A paused retry must follow the same order.
+            await transaction.execute(sql`set local lock_timeout='5000'`);
+            await transaction.execute(sql`select s.id from sessions s
+              join session_turns t on t.session_id=s.id and t.owner_user_id=s.owner_user_id
+              join background_jobs j on j.id=t.id and j.owner_user_id=t.owner_user_id
+              where j.id=${id} and j.type='reconcile_session'
+                and j.payload->>'operation'='sync_artifacts' for update of s`);
+          }
+          const leased = await first<{
+            attempts: number;
+            operation: string | null;
+          }>(
             transaction,
-            sql`select attempts
+            sql`select attempts,payload->>'operation' as operation
                   from background_jobs
                  where id = ${id}
                    and status = 'running'
@@ -6339,9 +6446,27 @@ export function createRepositories(database: unknown) {
                  for update`,
           );
           if (!leased) return;
+          if (
+            error === "ARTIFACT_SYNC_PAUSED" &&
+            leased.operation === "sync_artifacts"
+          ) {
+            // Keep a full retry window available after a deployment pauses
+            // background delivery, including a long interval between polls.
+            await transaction.execute(sql`update background_jobs j set payload=payload ||
+              jsonb_build_object('artifactRetryWindowMs',coalesce(
+                (payload->>'artifactRetryWindowMs')::bigint,
+                (select greatest(1000,extract(epoch from retry_until-created_at)*1000)::bigint
+                  from session_turns where id=j.id))) where j.id=${id}`);
+            await transaction.execute(sql`update session_turns set retry_until=greatest(
+              retry_until,${now}::timestamptz+
+              (select (payload->>'artifactRetryWindowMs')::bigint from background_jobs where id=${id})*interval '1 millisecond')
+              where id=${id} and artifact_state in ('pending','syncing','synced')`);
+          }
           const runAfter = new Date(
             now.getTime() + Math.min(60_000, 2 ** leased.attempts * 100),
           );
+          const syncDeferred = sql`type='reconcile_session' and payload->>'operation'='sync_artifacts'
+            and ${error} in ('ARTIFACT_SYNC_PENDING','ARTIFACT_SYNC_PAUSED')`;
           const updated = await first<{
             id: string;
             ownerUserId: string | null;
@@ -6349,9 +6474,9 @@ export function createRepositories(database: unknown) {
           }>(
             transaction,
             sql`update background_jobs
-                  set status = case when type='reconcile_session' and payload->>'operation'='deliver' and ${error}='SUBMISSION_WAITING' then 'pending'::background_job_status else ${final ? "failed" : "pending"}::background_job_status end,
-                      attempts = case when type='reconcile_session' and payload->>'operation'='deliver' and ${error}='SUBMISSION_WAITING' then greatest(attempts-1,0) else attempts end,
-                      run_after = ${runAfter},
+                  set status = case when (${syncDeferred}) or (type='reconcile_session' and payload->>'operation'='deliver' and ${error}='SUBMISSION_WAITING') then 'pending'::background_job_status else ${final ? "failed" : "pending"}::background_job_status end,
+                      attempts = case when (${syncDeferred}) or (type='reconcile_session' and payload->>'operation'='deliver' and ${error}='SUBMISSION_WAITING') then greatest(attempts-1,0) else attempts end,
+                      run_after = case when (${syncDeferred}) then ${new Date(now.getTime() + 10_000)}::timestamptz else ${runAfter}::timestamptz end,
                       locked_at = null,
                       locked_by = null,
                       last_error = case

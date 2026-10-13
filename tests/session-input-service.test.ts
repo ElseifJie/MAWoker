@@ -113,7 +113,7 @@ describe("SessionInputService", () => {
       id: uploadId,
       ownerUserId: userId,
       arkFileId: "ark-file-1",
-      originalName: "quarterly_report_.txt",
+      originalName: "  quarterly report?.txt  ",
       mimeType: "text/plain",
       sizeBytes: 3,
       mountPath: `/mnt/session/inputs/${uploadId}-quarterly_report_.txt`,
@@ -122,6 +122,36 @@ describe("SessionInputService", () => {
       lastErrorCode: null,
     });
     expect(uploaded.expiresAt.toISOString()).toBe("2026-09-06T00:01:00.000Z");
+  });
+
+  it("preserves Chinese and spaces for display while using a safe mount name", async () => {
+    const state = setup();
+    const uploaded = await state.service.upload(
+      {
+        name: "季度 报告.xlsx",
+        contentType: "application/octet-stream",
+        bytes: new Uint8Array([1]),
+      },
+      { userId, requestId: "test" },
+    );
+    expect(uploaded.originalName).toBe("季度 报告.xlsx");
+    expect(uploaded.mountPath).not.toContain("季度");
+  });
+
+  it("rejects oversized inputs before persistence or upstream upload", async () => {
+    const state = setup();
+    await expect(
+      state.service.upload(
+        {
+          name: "big.txt",
+          contentType: "text/plain",
+          bytes: new Uint8Array(20 * 1024 * 1024 + 1),
+        },
+        { userId, requestId: "test" },
+      ),
+    ).rejects.toMatchObject({ code: "UPLOAD_TOO_LARGE" });
+    expect(state.records.size).toBe(0);
+    expect(state.ark.uploadFile).not.toHaveBeenCalled();
   });
 
   it.each([

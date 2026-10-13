@@ -54,6 +54,11 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         agent_name text not null default 'Agent',
         agent_version text not null default '1',
         environment_id text not null default 'environment',
+        create_attempted_at timestamptz,
+        model_id text,
+        config_snapshot jsonb,
+        config_snapshot_state text not null default 'unverified',
+        config_snapshot_error_code text,
         title text not null default '',
         status text not null default 'idle',
         last_error_code text,
@@ -85,7 +90,9 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
       create table quota_reservations (
         id uuid primary key,
         user_id uuid not null,
+        ark_session_id text,
         status text not null default 'active',
+        resolved_at timestamptz,
         expires_at timestamptz not null,
         created_at timestamptz not null
       );
@@ -462,7 +469,7 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         unknown: false,
         ark: "ark:deleting",
         deletion: "pending",
-        pending: true,
+        pending: false,
       },
       {
         inFlight: 0,
@@ -470,7 +477,7 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         unknown: false,
         ark: "ark:failed",
         deletion: "deletion_failed",
-        pending: true,
+        pending: false,
       },
       {
         inFlight: 0,
@@ -478,7 +485,7 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         unknown: false,
         ark: "ark:deleted",
         deletion: "deleted",
-        pending: true,
+        pending: false,
       },
     ];
     const expected = [];

@@ -1,4 +1,5 @@
 import type { ArkGateway } from "@pwa/ark-client";
+import { UPLOAD_MAX_BYTES } from "@pwa/contracts";
 import { arkErrorCode } from "./ark-errors.js";
 
 export interface SessionInputRecord {
@@ -52,6 +53,7 @@ export interface SessionInputRepository {
 interface InputContext {
   userId: string;
   requestId: string;
+  signal?: AbortSignal;
 }
 
 export class InvalidUploadNameError extends Error {
@@ -63,7 +65,7 @@ export class InvalidUploadNameError extends Error {
   }
 }
 
-function sanitizeFilename(name: string): string {
+export function sanitizeFilename(name: string): string {
   const trimmed = name.trim().normalize("NFKC");
   if (
     !trimmed ||
@@ -89,6 +91,14 @@ function sanitizeFilename(name: string): string {
   return sanitized;
 }
 
+export class UploadTooLargeError extends Error {
+  readonly code = "UPLOAD_TOO_LARGE";
+  constructor() {
+    super("单个材料不能超过 20 MB");
+    this.name = "UploadTooLargeError";
+  }
+}
+
 export class SessionInputService {
   constructor(
     private readonly dependencies: {
@@ -104,6 +114,9 @@ export class SessionInputService {
     input: { name: string; contentType: string; bytes: Uint8Array },
     context: InputContext,
   ): Promise<SessionInputRecord> {
+    if (input.bytes.byteLength > UPLOAD_MAX_BYTES)
+      throw new UploadTooLargeError();
+    context.signal?.throwIfAborted();
     const name = sanitizeFilename(input.name);
     const id = this.dependencies.createId();
     const timestamp = (this.dependencies.now ?? (() => new Date()))();
@@ -112,7 +125,7 @@ export class SessionInputService {
       ownerUserId: context.userId,
       sessionId: null,
       arkFileId: null,
-      originalName: name,
+      originalName: input.name,
       mimeType: input.contentType,
       sizeBytes: input.bytes.byteLength,
       mountPath: `/mnt/session/inputs/${id}-${name}`,
@@ -135,7 +148,10 @@ export class SessionInputService {
           bytes: input.bytes,
           purpose: "agent",
         },
-        { correlationId: `upload:${id}` },
+        {
+          correlationId: `upload:${id}`,
+          ...(context.signal ? { signal: context.signal } : {}),
+        },
       );
     } catch (error) {
       await this.dependencies.repository.failUpload(

@@ -166,6 +166,13 @@ export interface SubmissionReceipt {
 }
 export interface SessionSummary {
   upstreamReady?: boolean;
+  historyState?: {
+    complete: boolean;
+    repairRequired: boolean;
+    scannedAt: string | null;
+    persistedSequence: string;
+    scanGeneration: number;
+  };
   submissions?: SubmissionReceipt[];
   id: string;
   title: string;
@@ -195,6 +202,29 @@ export interface SessionInput {
 
 export interface SessionDetail extends SessionSummary {
   inputs: SessionInput[];
+}
+
+export interface SessionTurn {
+  id: string;
+  inputEventId?: string;
+  boundaryEventId?: string;
+  startedAt?: string;
+  outcome: "completed" | "waiting" | "failed" | "confirming";
+  summary: string;
+  artifactState: "none" | "pending" | "syncing" | "synced" | "failed";
+  artifactIds: string[];
+  usageState: "pending" | "complete";
+  errorCode: string | null;
+  endedAt: string;
+}
+
+export interface TaskNotification {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  kind: "completed" | "failed" | "needs_action" | "sync_failed";
+  readAt: string | null;
+  createdAt: string;
 }
 
 export type { UiEvent, UiEventType } from "@pwa/contracts";
@@ -748,6 +778,21 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  listNotifications: () =>
+    request<{ notifications: TaskNotification[] }>("/notifications"),
+  markNotificationRead: (id: string) =>
+    request<void>(`/notifications/${encodeURIComponent(id)}/read`, {
+      method: "POST",
+    }),
+  listSessionTurns: (id: string) =>
+    request<{ turns: SessionTurn[] }>(
+      `/sessions/${encodeURIComponent(id)}/turns`,
+    ),
+  retrySessionTurn: (id: string, turnId: string) =>
+    request<{ status: "queued" }>(
+      `/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(turnId)}/retry`,
+      { method: "POST" },
+    ),
   renameSession: (id: string, title: string) =>
     request<SessionSummary>(`/sessions/${id}`, {
       method: "PATCH",
@@ -765,12 +810,18 @@ export const apiClient = {
       `/sessions/${encodeURIComponent(id)}/transcript`,
     ),
   getUsage: () => request<UsageSummary>("/usage"),
-  upload: (file: File) => {
+  reuseArtifact: (id: string, signal?: AbortSignal) =>
+    request<UploadedInput>(`/artifacts/${encodeURIComponent(id)}/reuse`, {
+      method: "POST",
+      ...(signal ? { signal } : {}),
+    }),
+  upload: (file: File, signal?: AbortSignal) => {
     const body = new FormData();
     body.set("file", file);
     return request<UploadedInput>("/uploads", {
       method: "POST",
       body,
+      ...(signal ? { signal } : {}),
     });
   },
   createSession: (input: {

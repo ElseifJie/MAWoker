@@ -38,13 +38,13 @@ import {
 } from "../ui/index.js";
 
 const statusLabels: Record<SessionStatus, string> = {
-  idle: "Idle",
-  running: "Running",
-  rescheduled: "Rescheduled",
-  initializing: "Initializing",
-  upgrading: "Upgrading",
-  failed: "Failed",
-  terminated: "Terminated",
+  idle: "待开始",
+  running: "执行中",
+  rescheduled: "等待重试",
+  initializing: "准备中",
+  upgrading: "准备中",
+  failed: "执行失败",
+  terminated: "已结束",
 };
 
 export interface SessionGroup {
@@ -79,10 +79,10 @@ export function groupSessions(
   const today = startOfDay(now);
   const day = 24 * 60 * 60 * 1_000;
   const buckets: SessionGroup[] = [
-    { key: "today", label: "Today", sessions: [] },
-    { key: "yesterday", label: "Yesterday", sessions: [] },
-    { key: "week", label: "Previous 7 days", sessions: [] },
-    { key: "older", label: "Older", sessions: [] },
+    { key: "today", label: "今天", sessions: [] },
+    { key: "yesterday", label: "昨天", sessions: [] },
+    { key: "week", label: "最近 7 天", sessions: [] },
+    { key: "older", label: "更早", sessions: [] },
   ];
   for (const session of sessions) {
     const at = lastActivity(session);
@@ -174,7 +174,7 @@ function SessionMenu({
     >
       <IconButton
         className="session-row__menu-trigger"
-        label={`Actions for ${session.title}`}
+        label={`任务操作：${session.title}`}
         aria-haspopup="menu"
         aria-expanded={open}
         size="small"
@@ -196,7 +196,7 @@ function SessionMenu({
             onClick={run(onRename)}
           >
             <Pencil size={14} aria-hidden="true" />
-            Rename
+            重命名
           </button>
           <button
             type="button"
@@ -205,7 +205,7 @@ function SessionMenu({
             onClick={run(onExport)}
           >
             <Download size={14} aria-hidden="true" />
-            Export
+            导出
           </button>
           <button
             type="button"
@@ -218,7 +218,7 @@ function SessionMenu({
             ) : (
               <Pin size={14} aria-hidden="true" />
             )}
-            {session.pinnedAt ? "Unpin" : "Pin"}
+            {session.pinnedAt ? "取消置顶" : "置顶"}
           </button>
           <button
             type="button"
@@ -232,7 +232,7 @@ function SessionMenu({
             ) : (
               <Archive size={14} aria-hidden="true" />
             )}
-            {session.archivedAt ? "Restore" : "Archive"}
+            {session.archivedAt ? "恢复" : "归档"}
           </button>
           <button
             type="button"
@@ -241,7 +241,7 @@ function SessionMenu({
             onClick={run(onDelete)}
           >
             <Trash2 size={14} aria-hidden="true" />
-            Delete
+            删除
           </button>
         </div>
       ) : null}
@@ -274,7 +274,7 @@ function SessionRow({
       onAuthRequired();
       return;
     }
-    onError(`${operation} could not be completed.`);
+    onError(`${operation}未完成，请重试。`);
   };
 
   async function togglePin() {
@@ -287,7 +287,7 @@ function SessionRow({
           : await apiClient.pinSession(session.id),
       );
     } catch (error) {
-      fail(error, session.pinnedAt ? "Unpinning" : "Pinning");
+      fail(error, session.pinnedAt ? "取消置顶" : "置顶");
     } finally {
       setBusy(false);
     }
@@ -303,7 +303,7 @@ function SessionRow({
           : await apiClient.archiveSession(session.id),
       );
     } catch (error) {
-      fail(error, session.archivedAt ? "Restoring" : "Archiving");
+      fail(error, session.archivedAt ? "恢复" : "归档");
     } finally {
       setBusy(false);
     }
@@ -319,7 +319,7 @@ function SessionRow({
         transcriptMarkdown(session.title, events),
       );
     } catch (error) {
-      fail(error, "The export");
+      fail(error, "导出");
     } finally {
       setBusy(false);
     }
@@ -329,7 +329,7 @@ function SessionRow({
     <li className="session-row">
       <IconButton
         className="session-row__pin"
-        label={pinned ? `Unpin ${session.title}` : `Pin ${session.title}`}
+        label={pinned ? `取消置顶 ${session.title}` : `置顶 ${session.title}`}
         size="small"
         aria-pressed={pinned}
         disabled={busy}
@@ -354,7 +354,7 @@ function SessionRow({
         />
         <span className="session-row__title">{session.title}</span>
         <span className="sr-only">
-          {session.archivedAt ? "Archived" : statusLabels[session.status]}
+          {session.archivedAt ? "已归档" : statusLabels[session.status]}
         </span>
       </NavLink>
       {busy ? (
@@ -436,8 +436,8 @@ export function SessionList({
       }
       setError(
         error instanceof ApiClientError && error.code === "VALIDATION_FAILED"
-          ? "That name is not accepted. Use 1 to 120 characters."
-          : "The Session could not be renamed.",
+          ? "名称需为 1 至 120 个字符。"
+          : "任务重命名失败，请重试。",
       );
     } finally {
       setRenamePending(false);
@@ -466,7 +466,7 @@ export function SessionList({
         onAuthRequired();
         return;
       }
-      setError("The Session could not be deleted.");
+      setError("任务无法删除，请重试。");
       closeDelete();
     } finally {
       setDeletePending(false);
@@ -501,9 +501,9 @@ export function SessionList({
       ) : null}
 
       {pinned.length > 0 ? (
-        <section className="session-group" aria-label="Pinned sessions">
+        <section className="session-group" aria-label="置顶任务">
           <h2 className="session-group__label">
-            Pinned
+            置顶
             <span>{pinned.length}</span>
           </h2>
           <ul className="session-group__list">
@@ -533,13 +533,13 @@ export function SessionList({
       ))}
 
       {sessions.length === 0 ? (
-        <p className="session-list__empty">No sessions yet.</p>
+        <p className="session-list__empty">还没有任务</p>
       ) : null}
 
       {archivedSessions.length > 0 ? (
         <section
           className="session-group session-group--archived"
-          aria-label="Archived sessions"
+          aria-label="已归档任务"
         >
           <h2 className="session-group__label">
             <button
@@ -548,7 +548,7 @@ export function SessionList({
               aria-expanded={showArchived}
               onClick={() => setShowArchived((current) => !current)}
             >
-              Archived
+              已归档
               <span>{archivedSessions.length}</span>
             </button>
           </h2>
@@ -564,9 +564,9 @@ export function SessionList({
 
       <Dialog
         open={renameTarget !== null}
-        title="Rename Session"
+        title="重命名任务"
         onClose={closeRename}
-        closeLabel="Close rename dialog"
+        closeLabel="关闭重命名"
         closeDisabled={renamePending}
         initialFocusRef={renameRef}
         footer={
@@ -576,19 +576,19 @@ export function SessionList({
               onClick={closeRename}
               disabled={renamePending}
             >
-              Cancel
+              取消
             </Button>
             <Button
               onClick={() => void submitRename()}
               loading={renamePending}
               disabled={renamePending || renameDraft.trim().length === 0}
             >
-              Save name
+              保存名称
             </Button>
           </>
         }
       >
-        <Field label="Session name">
+        <Field label="任务名称">
           <Input
             ref={renameRef}
             value={renameDraft}
@@ -601,9 +601,9 @@ export function SessionList({
 
       <Dialog
         open={deleteTarget !== null}
-        title="Delete Session permanently?"
+        title="永久删除任务？"
         onClose={closeDelete}
-        closeLabel="Close deletion confirmation"
+        closeLabel="关闭删除确认"
         closeDisabled={deletePending}
         initialFocusRef={deleteRef}
         footer={
@@ -613,7 +613,7 @@ export function SessionList({
               onClick={closeDelete}
               disabled={deletePending}
             >
-              Cancel
+              取消
             </Button>
             <Button
               variant="danger"
@@ -621,20 +621,18 @@ export function SessionList({
               disabled={deletePending || deleteDraft !== "DELETE"}
               onClick={() => void submitDelete()}
             >
-              Delete permanently
+              永久删除
             </Button>
           </>
         }
       >
         <div className="session-delete-dialog">
           <p>
-            This removes <strong>{deleteTarget?.title}</strong>, its event
-            history, and generated artifacts. This action cannot be undone.
-            Memories that were already formed from this Session are kept and can
-            be managed separately on the Context page; this deletion does not
-            create a new copy of the conversation.
+            此操作将删除 <strong>{deleteTarget?.title}</strong>
+            、消息历史及成果，无法撤销。
+            此前形成的记忆会保留，可在个人记忆页面单独管理；删除不会创建对话副本。
           </p>
-          <Field label="Type DELETE to confirm">
+          <Field label="输入 DELETE 确认">
             <Input
               ref={deleteRef}
               value={deleteDraft}

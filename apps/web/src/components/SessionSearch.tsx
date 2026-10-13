@@ -112,7 +112,7 @@ export function SessionSearch({
         className="session-search"
         role="dialog"
         aria-modal="true"
-        aria-label="Search tasks"
+        aria-label="搜索任务"
         tabIndex={-1}
       >
         <div className="session-search__field">
@@ -122,7 +122,7 @@ export function SessionSearch({
             className="ui-input session-search__input"
             type="text"
             role="combobox"
-            aria-label="Search tasks"
+            aria-label="搜索任务"
             aria-expanded={matches.length > 0}
             aria-controls={listId}
             aria-activedescendant={
@@ -130,7 +130,7 @@ export function SessionSearch({
             }
             aria-autocomplete="list"
             autoComplete="off"
-            placeholder="Search tasks by title or agent…"
+            placeholder="搜索任务名称…"
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
@@ -141,7 +141,7 @@ export function SessionSearch({
         </div>
 
         <div className="session-search__meta">
-          <span className="session-search__meta-label">All tasks</span>
+          <span className="session-search__meta-label">全部任务</span>
           <span className="session-search__meta-hints">
             <kbd className="session-search__key" aria-hidden="true">
               <ArrowUp size={13} />
@@ -149,25 +149,25 @@ export function SessionSearch({
             <kbd className="session-search__key" aria-hidden="true">
               <ArrowDown size={13} />
             </kbd>
-            <span>Select</span>
+            <span>选择</span>
             <kbd className="session-search__key session-search__key--wide">
               Enter
             </kbd>
-            <span>Open</span>
+            <span>打开</span>
             <span className="session-search__count">{matches.length}</span>
           </span>
         </div>
 
         {matches.length === 0 ? (
           <p className="session-search__empty">
-            {all.length === 0 ? "No tasks yet." : `No tasks match “${query}”.`}
+            {all.length === 0 ? "还没有任务" : `没有匹配“${query}”的任务`}
           </p>
         ) : (
           <ul
             id={listId}
             className="session-search__list"
             role="listbox"
-            aria-label="Tasks"
+            aria-label="任务"
           >
             {matches.map((session) => {
               const selected = session.id === active?.id;
@@ -190,7 +190,7 @@ export function SessionSearch({
                   </span>
                   <span className="session-search__option-meta">
                     {session.agent.name}
-                    {session.archivedAt ? " · Archived" : ""}
+                    {session.archivedAt ? " · 已归档" : ""}
                   </span>
                   <span className="session-search__option-time">
                     {formatStamp(session, now)}

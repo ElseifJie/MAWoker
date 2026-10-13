@@ -231,7 +231,8 @@ function createBackend() {
           user: { userId: adminId, authSubject: "local:admin", role: "admin" },
         });
       }
-      if (path === "/api/v1/logout") return new Response(null, { status: 204 });
+      if (path === "/api/v1/auth/logout")
+        return new Response(null, { status: 204 });
       if (path === "/api/v1/admin/platform-agents") {
         return json({
           agents: [
@@ -359,6 +360,35 @@ afterEach(() => {
 });
 
 describe("admin console walkthrough", () => {
+  it("guides a self-hosted administrator to a personal account and back to login", async () => {
+    const { fetchMock } = createBackend();
+    vi.stubGlobal("fetch", fetchMock);
+    const signedOut = vi.fn();
+    render(
+      <MemoryRouter initialEntries={["/admin/users"]}>
+        <AdminWorkspace
+          user={{ userId: adminId, authSubject: "local:admin", role: "admin" }}
+          onSignedOut={signedOut}
+          onAuthRequired={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    const guide = await screen.findByRole("region", {
+      name: "个人工作区使用指引",
+    });
+    expect(
+      within(guide).getByRole("link", { name: "配置平台助手" }),
+    ).toHaveAttribute("href", "/admin/platform-agents");
+    expect(
+      within(guide).getByRole("link", { name: "创建个人账户并分配默认助手" }),
+    ).toHaveAttribute("href", "/admin/users");
+    expect(within(guide).getByText(/管理员账户用于配置/)).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(within(guide).getByRole("button", { name: "返回登录" }));
+    await waitFor(() => expect(signedOut).toHaveBeenCalledOnce());
+  });
+
   // The dense row actions live behind the "…" overflow menu.
   async function openRowMenu(
     user: ReturnType<typeof userEvent.setup>,

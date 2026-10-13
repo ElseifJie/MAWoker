@@ -60,10 +60,10 @@ describe("groupSessions", () => {
 
     expect(groups.map((group) => [group.label, group.sessions.length])).toEqual(
       [
-        ["Today", 1],
-        ["Yesterday", 1],
-        ["Previous 7 days", 1],
-        ["Older", 1],
+        ["今天", 1],
+        ["昨天", 1],
+        ["最近 7 天", 1],
+        ["更早", 1],
       ],
     );
   });
@@ -75,7 +75,7 @@ describe("groupSessions", () => {
     );
 
     expect(groups).toHaveLength(1);
-    expect(groups[0]!.label).toBe("Today");
+    expect(groups[0]!.label).toBe("今天");
   });
 });
 
@@ -132,9 +132,9 @@ describe("SessionList", () => {
       onAuthRequired: vi.fn(),
     });
 
-    const pinned = screen.getByRole("region", { name: "Pinned sessions" });
+    const pinned = screen.getByRole("region", { name: "置顶任务" });
     expect(within(pinned).getByText("Pinned task")).toBeInTheDocument();
-    const todayRegion = screen.getByRole("region", { name: "Today" });
+    const todayRegion = screen.getByRole("region", { name: "今天" });
     expect(within(todayRegion).getByText("Plain task")).toBeInTheDocument();
     expect(
       within(todayRegion).queryByText("Pinned task"),
@@ -156,16 +156,16 @@ describe("SessionList", () => {
 
     const user = userEvent.setup();
     await user.click(
-      screen.getByRole("button", { name: "Actions for Quarterly plan" }),
+      screen.getByRole("button", { name: "任务操作：Quarterly plan" }),
     );
     const menu = screen.getByRole("menu");
     expect(
       within(menu)
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
-    ).toEqual(["Rename", "Export", "Pin", "Archive", "Delete"]);
+    ).toEqual(["重命名", "导出", "置顶", "归档", "删除"]);
 
-    await user.click(within(menu).getByRole("menuitem", { name: "Pin" }));
+    await user.click(within(menu).getByRole("menuitem", { name: "置顶" }));
     await waitFor(() =>
       expect(onSessionChanged).toHaveBeenCalledWith(
         expect.objectContaining({ pinnedAt: "2026-09-11T12:00:00.000Z" }),
@@ -200,19 +200,17 @@ describe("SessionList", () => {
 
     const user = userEvent.setup();
     await user.click(
-      screen.getByRole("button", { name: "Actions for Quarterly plan" }),
+      screen.getByRole("button", { name: "任务操作：Quarterly plan" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    await user.click(screen.getByRole("menuitem", { name: "重命名" }));
 
-    const field = await screen.findByLabelText("Session name");
+    const field = await screen.findByLabelText("任务名称");
     await user.clear(field);
     await user.type(field, "Plan v2");
-    await user.click(screen.getByRole("button", { name: "Save name" }));
+    await user.click(screen.getByRole("button", { name: "保存名称" }));
 
     expect(
-      await screen.findByText(
-        "That name is not accepted. Use 1 to 120 characters.",
-      ),
+      await screen.findByText("名称需为 1 至 120 个字符。"),
     ).toBeInTheDocument();
     expect(onSessionChanged).not.toHaveBeenCalled();
   });
@@ -264,9 +262,9 @@ describe("SessionList", () => {
 
     const user = userEvent.setup();
     await user.click(
-      screen.getByRole("button", { name: "Actions for Quarterly plan" }),
+      screen.getByRole("button", { name: "任务操作：Quarterly plan" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Export" }));
+    await user.click(screen.getByRole("menuitem", { name: "导出" }));
 
     await waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript");
@@ -286,7 +284,7 @@ describe("SessionList", () => {
     });
 
     const user = userEvent.setup();
-    const pin = screen.getByRole("button", { name: "Pin Quarterly plan" });
+    const pin = screen.getByRole("button", { name: "置顶 Quarterly plan" });
     expect(pin).toHaveAttribute("aria-pressed", "false");
     await user.click(pin);
 
@@ -311,7 +309,7 @@ describe("SessionList", () => {
     });
 
     const user = userEvent.setup();
-    const pin = screen.getByRole("button", { name: "Unpin Quarterly plan" });
+    const pin = screen.getByRole("button", { name: "取消置顶 Quarterly plan" });
     expect(pin).toHaveAttribute("aria-pressed", "true");
     await user.click(pin);
 

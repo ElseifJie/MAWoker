@@ -9,6 +9,7 @@ export type ArtifactKind =
   | "pdf"
   | "word"
   | "slides"
+  | "spreadsheet"
   | "other";
 
 /** Above this the browser downloads instead of previewing; a huge CSV would hang the tab. */
@@ -32,6 +33,7 @@ const DOCUMENT_KINDS: ReadonlySet<ArtifactKind> = new Set([
   "pdf",
   "word",
   "slides",
+  "spreadsheet",
 ]);
 
 export function canPreview(
@@ -68,6 +70,7 @@ export function artifactKind(
   if (mime === "application/pdf") return "pdf";
   if (mime.includes("wordprocessingml")) return "word";
   if (mime.includes("presentationml")) return "slides";
+  if (mime.includes("spreadsheetml")) return "spreadsheet";
   if (mime.startsWith("image/")) return "image";
   if (mime.startsWith("text/")) return "text";
 
@@ -87,6 +90,8 @@ export function artifactKind(
       return "word";
     case "pptx":
       return "slides";
+    case "xlsx":
+      return "spreadsheet";
     case "txt":
     case "log":
     case "json":

@@ -27,7 +27,9 @@ export function runProductionWorkerPoll(
     artifactCleanup: WorkerProcessor;
     driveCleanup: WorkerProcessor;
     driveOrphanGc: WorkerProcessor;
+    history?: WorkerProcessor;
     memory?: WorkerProcessor;
+    delivery?: WorkerProcessor;
   },
   reportError?: (message: string, error: unknown) => void,
 ): Promise<void> {
@@ -35,8 +37,10 @@ export function runProductionWorkerPoll(
     [
       processors.personalAgent,
       processors.session,
+      ...(processors.delivery ? [processors.delivery] : []),
       processors.sessionDeletion,
       processors.usage,
+      ...(processors.history ? [processors.history] : []),
       processors.quotaInterrupt,
       processors.uploadCleanup,
       processors.artifactDeletion,

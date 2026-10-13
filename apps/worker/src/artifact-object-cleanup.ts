@@ -273,6 +273,17 @@ export class ArtifactObjectCleanupProcessor {
           return;
         }
       } else if (guard.deletionState !== "deleted") {
+        if (payload.retiredBySwitch) {
+          assertArtifactCleanupClaim(
+            await this.dependencies.jobs.deferArtifactCleanup(
+              job.id,
+              this.dependencies.workerId,
+              payload.cleanupGeneration,
+              job.leaseGeneration,
+            ),
+          );
+          return;
+        }
         // A tombstoned row's bytes are safely reaped. `pending` means a
         // staged write with an unknown remote outcome and
         // `none`/`deletion_failed` mean the object may be live: finish the

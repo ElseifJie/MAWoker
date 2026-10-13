@@ -12,6 +12,7 @@ import { createTestDatabase, id } from "./support/test-database.js";
 
 async function fixture(
   databaseOverride?: Awaited<ReturnType<typeof createTestDatabase>>,
+  admissionEnabled = true,
 ) {
   const database = databaseOverride ?? (await createTestDatabase());
   const userId = id();
@@ -59,6 +60,7 @@ async function fixture(
     agentResolver: { resolveForNewSession: resolver },
     ark,
     environmentId: "env",
+    submissionAdmissionEnabled: admissionEnabled,
     createId: id,
   });
   const input = {
@@ -106,6 +108,105 @@ describe("durable submissions", () => {
       await expect(
         f.service.create({ ...f.input, content: "different" }, f.context),
       ).rejects.toMatchObject({ code: "SUBMISSION_CONFLICT" });
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("identifies aggregate material overflow separately from individual size limits", async () => {
+    const f = await fixture();
+    try {
+      const uploadIds = Array.from({ length: 6 }, () => id());
+      for (const uploadId of uploadIds)
+        await f.client.query(
+          "insert into session_inputs(id,owner_user_id,ark_file_id,original_name,mime_type,size_bytes,mount_path,status,expires_at) values($1,$2,$3,'brief.txt','text/plain',$4,$5,'uploaded',$6)",
+          [
+            uploadId,
+            f.context.userId,
+            uploadId,
+            18 * 1024 * 1024,
+            `/mnt/session/inputs/${uploadId}-brief.txt`,
+            new Date(Date.now() + 60_000),
+          ],
+        );
+      await expect(
+        f.service.create({ ...f.input, uploadIds }, f.context),
+      ).rejects.toMatchObject({
+        name: "UploadTooLargeError",
+        code: "UPLOAD_TOTAL_TOO_LARGE",
+      });
+      expect((await f.client.query("select * from sessions")).rows).toEqual([]);
+      expect(
+        (await f.client.query("select * from quota_reservations")).rows,
+      ).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("pauses new durable intake while replay and accepted-work delivery still operate", async () => {
+    const f = await fixture();
+    try {
+      const first = await f.service.create(f.input, f.context);
+      const gated = new SessionService({
+        repository: f.repositories.sessionLifecycle,
+        agentResolver: { resolveForNewSession: f.resolver },
+        ark: f.ark,
+        environmentId: "env",
+        createId: id,
+        submissionAdmissionEnabled: false,
+      } as ConstructorParameters<typeof SessionService>[0]);
+      expect((await gated.create(f.input, f.context)).id).toBe(first.id);
+      await expect(
+        gated.create({ ...f.input, submissionId: id() }, f.context),
+      ).rejects.toMatchObject({ code: "SUBMISSION_ADMISSION_PAUSED" });
+      await f.client.query(
+        "update sessions set ark_session_id='remote',create_attempted_at=now() where id=$1",
+        [first.id],
+      );
+      await expect(
+        gated.sendMessage(
+          first.id,
+          { content: "new", submissionId: id() },
+          f.context,
+        ),
+      ).rejects.toMatchObject({ code: "SUBMISSION_ADMISSION_PAUSED" });
+      await f.client.query("update sessions set status='idle' where id=$1", [
+        first.id,
+      ]);
+      const followup = { content: "followup", submissionId: id() };
+      const receipt = await f.service.sendMessage(
+        first.id,
+        followup,
+        f.context,
+      );
+      expect(await gated.sendMessage(first.id, followup, f.context)).toEqual(
+        receipt,
+      );
+      await expect(
+        gated.sendMessage(
+          first.id,
+          { ...followup, content: "different" },
+          f.context,
+        ),
+      ).rejects.toMatchObject({ code: "SUBMISSION_CONFLICT" });
+      const [job] = await f.repositories.jobs.claim({
+        workerId: "paused-intake",
+        limit: 1,
+        types: ["reconcile_session"],
+      });
+      await gated.deliverSubmission(job!.id, {
+        userId: f.context.userId,
+        workerId: "paused-intake",
+        leaseGeneration: job!.leaseGeneration,
+        requestId: "drain",
+      });
+      expect(
+        (await gated.get(f.context.userId, first.id)).submissions?.[0]?.status,
+      ).toBe("accepted");
+      expect(
+        (await f.client.query("select * from message_submissions")).rows,
+      ).toHaveLength(2);
     } finally {
       await f.close();
     }
@@ -174,6 +275,58 @@ async function claim(
 }
 
 describe("durable submission safety", () => {
+  it("preserves request equality and original content when sanitized history arrives before acknowledgement", async () => {
+    const f = await fixture();
+    try {
+      const content = "Original Authorization: Bearer sensitive.original.token";
+      const session = await f.service.create(
+        { ...f.input, content },
+        f.context,
+      );
+      await makeDeliverable(f, session.id);
+      await f.repositories.sessionLifecycle.appendEvents(
+        f.context.userId,
+        session.id,
+        [
+          {
+            eventId: "event-1",
+            sourceType: "user.message",
+            type: "message",
+            occurredAt: new Date(),
+            payload: { content: "Original Authorization: [redacted]" },
+          },
+        ],
+      );
+      f.ark.submitEvent.mockResolvedValueOnce({
+        id: "event-1",
+        type: "user.message",
+        createdAt: new Date().toISOString(),
+        data: { content },
+      });
+      const job = await claim(f);
+      await f.service.deliverSubmission(job.id, {
+        ...f.context,
+        workerId: "worker-1",
+        leaseGeneration: job.leaseGeneration,
+      });
+      expect(
+        (await f.service.get(f.context.userId, session.id)).submissions?.[0],
+      ).toMatchObject({
+        status: "accepted",
+        content: null,
+        acceptedContent: content,
+      });
+      expect(
+        (await f.service.create({ ...f.input, content }, f.context)).id,
+      ).toBe(session.id);
+      await expect(
+        f.service.create({ ...f.input, content: "different" }, f.context),
+      ).rejects.toMatchObject({ code: "SUBMISSION_CONFLICT" });
+    } finally {
+      await f.close();
+    }
+  });
+
   it("persists the accepted user event before clearing the delivery body", async () => {
     const f = await fixture();
     try {
@@ -272,9 +425,11 @@ describe("durable submission safety", () => {
       const session = await f.service.create(f.input, f.context);
       const opened = await f.service.openEvents(session.id, f.context);
       for await (const event of opened.events) void event;
-      expect(await f.service.transcriptEvents(session.id, f.context)).toEqual(
-        [],
-      );
+      await expect(
+        f.service.transcriptEvents(session.id, f.context),
+      ).rejects.toMatchObject({
+        code: "EVENT_HISTORY_REPAIR_PENDING",
+      });
       expect(f.ark.streamEvents).not.toHaveBeenCalled();
       expect(f.ark.listEvents).not.toHaveBeenCalled();
     } finally {

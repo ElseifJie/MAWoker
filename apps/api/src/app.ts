@@ -1,6 +1,10 @@
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import staticFiles from "@fastify/static";
+import {
+  registerSessionDeliveryRoutes,
+  type DeliveryApiRepository,
+} from "./session-delivery-routes.js";
 import { AuthRequiredError, type AuthContext } from "@pwa/auth";
 import {
   AgentConflictError,
@@ -15,6 +19,7 @@ import {
   ResourceNotFoundError,
   SelfTargetForbiddenError,
   SessionTerminatedError,
+  SessionHistoryRepairPendingError,
   SkillNotSelectableError,
   UserEmailConflictError,
   type AdminPermission,
@@ -30,6 +35,7 @@ import {
   type PersonalAgentRecord,
   type PlatformAgentRecord,
   type SessionRecord,
+  type SessionHistoryState,
   type SessionInputRecord,
   type SkillRecord,
   type SkillScope,
@@ -44,6 +50,7 @@ import {
 } from "@pwa/domain";
 import {
   capabilities as featureCapabilities,
+  projectUiEvent,
   type ErrorCode,
   type UiEvent,
 } from "@pwa/contracts";
@@ -436,7 +443,12 @@ export interface SessionApiService {
   get(
     userId: string,
     id: string,
-  ): PromiseLike<SessionRecord & { inputs?: SessionInputRecord[] }>;
+  ): PromiseLike<
+    SessionRecord & {
+      inputs?: SessionInputRecord[];
+      historyState?: SessionHistoryState;
+    }
+  >;
   archive(id: string, userId: string): PromiseLike<SessionRecord>;
   restore(id: string, userId: string): PromiseLike<SessionRecord>;
   rename(
@@ -480,7 +492,7 @@ export interface SessionApiService {
 export interface SessionInputApiService {
   upload(
     input: { name: string; contentType: string; bytes: Uint8Array },
-    context: { userId: string; requestId: string },
+    context: { userId: string; requestId: string; signal?: AbortSignal },
   ): PromiseLike<SessionInputRecord>;
 }
 
@@ -555,6 +567,14 @@ interface BuildAppOptions {
   sessions?: SessionApiService;
   inputs?: SessionInputApiService;
   artifacts?: ArtifactApiService;
+  fileReuse?: {
+    prepare(
+      id: string,
+      context: { userId: string; requestId: string; signal?: AbortSignal },
+    ): PromiseLike<SessionInputRecord>;
+  };
+  delivery?: DeliveryApiRepository;
+  artifactRetryWindowMs?: number;
   quotaUsage?: QuotaUsageApiService;
   capabilities?: {
     personalAgentModels: readonly string[];
@@ -1460,9 +1480,24 @@ function publicInput(input: SessionInputRecord) {
   };
 }
 
+function inputCancellation(request: FastifyRequest, reply: FastifyReply) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  request.raw.once("aborted", abort);
+  reply.raw.once("close", abort);
+  return {
+    signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]),
+    close: () => {
+      request.raw.removeListener("aborted", abort);
+      reply.raw.removeListener("close", abort);
+    },
+  };
+}
+
 function publicSession(
   session: SessionRecord & {
     inputs?: SessionInputRecord[];
+    historyState?: SessionHistoryState;
     submissions?: Array<{
       submissionId: string;
       status: string;
@@ -1476,13 +1511,30 @@ function publicSession(
 ) {
   return {
     id: session.id,
+    ...(session.historyState
+      ? {
+          historyState: {
+            ...session.historyState,
+            scannedAt: session.historyState.scannedAt?.toISOString() ?? null,
+          },
+        }
+      : {}),
     ...(session.submissions
       ? {
           submissions: session.submissions.map((item) => ({
             submissionId: item.submissionId,
             status: item.status,
             content: item.content,
-            acceptedContent: item.acceptedContent ?? null,
+            acceptedContent:
+              item.acceptedContent == null
+                ? null
+                : (projectUiEvent({
+                    id: item.upstreamEventId ?? item.submissionId,
+                    sourceType: "user.message",
+                    type: "message",
+                    createdAt: item.createdAt.toISOString(),
+                    payload: { content: item.acceptedContent },
+                  }).payload.content ?? null),
             upstreamEventId: item.upstreamEventId,
             errorCode: item.lastErrorCode,
             createdAt: item.createdAt,
@@ -1790,6 +1842,34 @@ function sendSessionError(
   reply: FastifyReply,
 ) {
   captureArkRequestId(error, request);
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    (error.code === "SUBMISSION_ADMISSION_PAUSED" ||
+      error.code === "FILE_REUSE_ADMISSION_PAUSED")
+  )
+    return reply
+      .code(503)
+      .send(applicationError(request.id, error.code, error.message, true));
+  if (hasErrorName(error, "UploadTooLargeError"))
+    return reply
+      .code(413)
+      .send(
+        applicationError(
+          request.id,
+          error instanceof Error &&
+            "code" in error &&
+            error.code === "UPLOAD_TOTAL_TOO_LARGE"
+            ? "UPLOAD_TOTAL_TOO_LARGE"
+            : "UPLOAD_TOO_LARGE",
+          error instanceof Error &&
+            "code" in error &&
+            error.code === "UPLOAD_TOTAL_TOO_LARGE"
+            ? "材料总量不能超过 100 MB"
+            : "单个材料不能超过 20 MB",
+          false,
+        ),
+      );
   if (hasErrorName(error, "SessionPendingOperationError"))
     return reply
       .code(409)
@@ -1844,6 +1924,21 @@ function sendSessionError(
     hasErrorName(error, "ResourceNotFoundError")
   ) {
     return reply.code(404).send(resourceNotFoundError(request.id));
+  }
+  if (
+    error instanceof SessionHistoryRepairPendingError ||
+    hasErrorName(error, "SessionHistoryRepairPendingError")
+  ) {
+    return reply
+      .code(409)
+      .send(
+        applicationError(
+          request.id,
+          "EVENT_HISTORY_REPAIR_PENDING",
+          "会话历史正在修复，暂时无法完整导出。请稍后重试。",
+          true,
+        ),
+      );
   }
   if (
     error instanceof SessionTerminatedError ||
@@ -2390,6 +2485,20 @@ export function buildApp(options: BuildAppOptions = {}) {
       );
   });
 
+  app.get("/preview-frame", async (_request, reply) =>
+    reply
+      .header(
+        "content-security-policy",
+        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'",
+      )
+      .header("x-frame-options", "SAMEORIGIN")
+      .header("cache-control", "no-store")
+      .type("text/html")
+      .send(
+        '<!doctype html><html><head><meta charset="utf-8"></head><body></body></html>',
+      ),
+  );
+
   app.get("/health", async () => ({ status: "ok" }));
   app.get("/health/live", async () => ({ status: "live" }));
   app.get("/health/ready", async (_request, reply) => {
@@ -2449,6 +2558,14 @@ export function buildApp(options: BuildAppOptions = {}) {
       }
       return authorizeUser(request, reply);
     });
+
+    if (options.delivery) {
+      registerSessionDeliveryRoutes(
+        app,
+        options.delivery,
+        options.artifactRetryWindowMs,
+      );
+    }
 
     app.post<{ Body: { email: string; password: string } }>(
       "/api/v1/auth/login",
@@ -2813,6 +2930,30 @@ export function buildApp(options: BuildAppOptions = {}) {
 
     if (options.inputs) {
       const inputs = options.inputs;
+      if (options.fileReuse) {
+        app.post<{ Params: { id: string } }>(
+          "/api/v1/artifacts/:id/reuse",
+          { schema: { params: uuidParamsSchema } },
+          async (request, reply) => {
+            const cancellation = inputCancellation(request, reply);
+            try {
+              const result = await options.fileReuse!.prepare(
+                request.params.id,
+                {
+                  userId: request.auth!.userId,
+                  requestId: request.id,
+                  signal: cancellation.signal,
+                },
+              );
+              return reply.code(201).send(publicInput(result));
+            } catch (error) {
+              return sendSessionError(error, request, reply);
+            } finally {
+              cancellation.close();
+            }
+          },
+        );
+      }
       app.post(
         "/api/v1/uploads",
         {
@@ -2830,6 +2971,7 @@ export function buildApp(options: BuildAppOptions = {}) {
           },
         },
         async (request, reply) => {
+          const cancellation = inputCancellation(request, reply);
           try {
             let file:
               | {
@@ -2866,6 +3008,7 @@ export function buildApp(options: BuildAppOptions = {}) {
             const uploaded = await inputs.upload(file, {
               userId: request.auth!.userId,
               requestId: request.id,
+              signal: cancellation.signal,
             });
             return reply.code(201).send(publicInput(uploaded));
           } catch (error) {
@@ -2885,6 +3028,8 @@ export function buildApp(options: BuildAppOptions = {}) {
                 );
             }
             return sendSessionError(error, request, reply);
+          } finally {
+            cancellation.close();
           }
         },
       );

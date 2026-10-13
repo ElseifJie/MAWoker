@@ -3,6 +3,7 @@ import {
   Bot,
   Database,
   FolderOpen,
+  History,
   KeyRound,
   Plus,
   Puzzle,
@@ -21,6 +22,7 @@ import {
 } from "react";
 import {
   Navigate,
+  Link,
   Route,
   Routes,
   useLocation,
@@ -42,7 +44,9 @@ import { SessionIntro } from "./components/SessionIntro.js";
 import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { SessionList } from "./components/SessionList.js";
 import { SessionSearch } from "./components/SessionSearch.js";
+import { TaskNotifications } from "./components/TaskNotifications.js";
 import { FilesPage } from "./FilesPage.js";
+import { HistoryPage } from "./HistoryPage.js";
 import { MemoryPage, clearMemoryCache } from "./MemoryPage.js";
 import { SessionPage } from "./SessionPage.js";
 import { SkillsPage } from "./SkillsPage.js";
@@ -93,8 +97,8 @@ function accountHandle(authSubject: string): string {
 function LoadingScreen() {
   return (
     <main className="centered-page" aria-busy="true">
-      <Spinner label="Loading workspace" />
-      <p>Loading workspace…</p>
+      <Spinner label="加载工作区" />
+      <p>正在加载工作区...</p>
     </main>
   );
 }
@@ -102,12 +106,10 @@ function LoadingScreen() {
 function BootstrapError({ onRetry }: { onRetry: () => void }) {
   return (
     <main className="centered-page">
-      <h1>Workspace unavailable</h1>
-      <Alert tone="danger">
-        We could not verify your account. Check your connection and retry.
-      </Alert>
+      <h1>工作区暂不可用</h1>
+      <Alert tone="danger">无法验证账号，请检查连接后重试。</Alert>
       <Button variant="secondary" onClick={onRetry}>
-        Retry
+        重试
       </Button>
     </main>
   );
@@ -120,14 +122,14 @@ interface LoginProps {
 function loginErrorMessage(error: unknown): string {
   if (error instanceof ApiClientError) {
     if (error.code === "RATE_LIMITED") {
-      return "Too many sign-in attempts. Wait a moment and try again.";
+      return "登录尝试过于频繁，请稍后重试。";
     }
     if (error.isAuthRequired) {
-      return "Email or password is incorrect.";
+      return "邮箱或密码不正确。";
     }
-    return "Sign-in is temporarily unavailable. Try again in a moment.";
+    return "登录服务暂不可用，请稍后重试。";
   }
-  return "We could not reach the workspace. Check your connection and try again.";
+  return "无法连接工作区，请检查网络后重试。";
 }
 
 function Login({ onAuthenticated }: LoginProps) {
@@ -156,13 +158,13 @@ function Login({ onAuthenticated }: LoginProps) {
         <div className="brand-mark" aria-hidden="true">
           <Bot size={22} />
         </div>
-        <p className="eyebrow">Personal Work Agent</p>
-        <h1 id="login-heading">Sign in to your workspace</h1>
+        <p className="eyebrow">Work Agent</p>
+        <h1 id="login-heading">登录你的工作区</h1>
         <p className="login-panel__lede">
-          Use the email and password your administrator set up for you.
+          使用管理员为你创建的账户，继续任务与个人工作。
         </p>
         <form onSubmit={signIn}>
-          <Field label="Email">
+          <Field label="邮箱">
             <Input
               id="email"
               name="email"
@@ -175,14 +177,14 @@ function Login({ onAuthenticated }: LoginProps) {
               disabled={pending}
             />
           </Field>
-          <Field label="Password">
+          <Field label="密码">
             <PasswordInput
               id="password"
               name="password"
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter your password"
+              placeholder="输入密码"
               required
               disabled={pending}
               aria-describedby={error ? "login-feedback" : undefined}
@@ -191,7 +193,7 @@ function Login({ onAuthenticated }: LoginProps) {
           </Field>
           <Button type="submit" className="full-width" loading={pending}>
             {pending ? <Spinner size={17} aria-hidden="true" /> : null}
-            Sign in
+            登录
           </Button>
         </form>
         {error ? (
@@ -231,56 +233,49 @@ const reservedNavigation: ReservedNavigation[] = [
   {
     capability: "memoryStores",
     to: "/context",
-    label: "Context",
+    label: "记忆",
     icon: Database,
     hint: "Memory stores are not available in this release.",
   },
   {
     capability: "skills",
     to: "/settings/skills",
-    label: "Skills",
+    label: "技能",
     icon: Puzzle,
     hint: "Custom Skills are not available in this release.",
   },
   {
     capability: "mcpServers",
     to: "/settings/mcp",
-    label: "MCP servers",
+    label: "MCP 服务",
     icon: Server,
     hint: "MCP server management is not available in this release.",
   },
   {
     capability: "vaults",
     to: "/settings/vault",
-    label: "Vault",
+    label: "凭据",
     icon: KeyRound,
     hint: "Private credential storage is not available in this release.",
   },
 ];
 
-/**
- * Navigation follows the server's capability report. A reserved entry becomes a
- * link only when the server says the feature exists, and that change must add
- * the matching route; until then every reserved entry is disabled, so nothing
- * can navigate to a route that is not there.
- */
-function navigationFor(
-  capabilities: ClientCapabilities,
-  onSearch: () => void,
-): NavigationItem[] {
+function navigationFor(onSearch: () => void): NavigationItem[] {
   return [
-    { to: "/", label: "New task", icon: Plus },
-    { to: "/search", label: "Search", icon: Search, onSelect: onSearch },
-    { to: "/agents", label: "Agents", icon: Bot },
-    { to: "/files", label: "My files", icon: FolderOpen },
-    ...reservedNavigation.map(
-      ({ capability, hint, icon, label, to }): NavigationItem =>
-        capabilities[capability].available
-          ? { to, label, icon }
-          : { to, label, icon, disabled: true, hint },
-    ),
-    { to: "/settings", label: "Settings", icon: SettingsIcon },
+    { to: "/", label: "新任务", icon: Plus },
+    { to: "/history", label: "历史任务", icon: History },
+    { to: "/files", label: "我的文件", icon: FolderOpen },
+    { to: "/search", label: "搜索", icon: Search, onSelect: onSearch },
+    { to: "/settings", label: "设置", icon: SettingsIcon },
   ];
+}
+
+function LegacyCapabilityRedirect() {
+  const location = useLocation();
+  const path = location.pathname.startsWith("/agents")
+    ? `/settings${location.pathname}`
+    : "/settings/skills";
+  return <Navigate to={`${path}${location.search}${location.hash}`} replace />;
 }
 
 const ignoreStreamReady = () => {};
@@ -306,35 +301,32 @@ function Workspace({
     const destinations: Command[] = [
       {
         id: "nav-new",
-        label: "New task",
-        group: "Go to",
+        label: "新任务",
+        group: "前往",
         run: () => navigate("/"),
       },
       {
-        id: "nav-agents",
-        label: "Agents",
-        group: "Go to",
-        run: () => navigate("/agents"),
+        id: "nav-history",
+        label: "历史任务",
+        group: "前往",
+        run: () => navigate("/history"),
       },
       {
         id: "nav-files",
-        label: "My files",
-        group: "Go to",
+        label: "我的文件",
+        group: "前往",
         run: () => navigate("/files"),
       },
       {
         id: "nav-settings",
-        label: "Settings",
-        group: "Go to",
+        label: "设置",
+        group: "前往",
         run: () => navigate("/settings"),
       },
       {
         id: "theme-toggle",
-        label:
-          next === "dark"
-            ? "Switch to the dark theme"
-            : "Switch to the light theme",
-        group: "Appearance",
+        label: next === "dark" ? "切换深色主题" : "切换浅色主题",
+        group: "外观",
         run: () => setThemePreference(next),
       },
     ];
@@ -352,12 +344,8 @@ function Workspace({
       }));
     return [
       ...destinations,
-      ...sessionCommands(data.sessions, "Open task", "session"),
-      ...sessionCommands(
-        data.archivedSessions,
-        "Open archived task",
-        "archived",
-      ),
+      ...sessionCommands(data.sessions, "打开任务", "session"),
+      ...sessionCommands(data.archivedSessions, "打开归档任务", "archived"),
     ];
   }, [data, navigate, setThemePreference, themeResolved]);
 
@@ -398,7 +386,7 @@ function Workspace({
         if (isAuthError(error)) {
           onAuthRequired();
         } else {
-          setLoadError("Workspace data could not be loaded.");
+          setLoadError("无法加载工作区数据，请重试。");
         }
       });
     return () => {
@@ -513,7 +501,7 @@ function Workspace({
               variant="secondary"
               onClick={() => setReloadKey((key) => key + 1)}
             >
-              Retry
+              重试
             </Button>
           }
         />
@@ -526,23 +514,42 @@ function Workspace({
   return (
     <AppShell
       brand="Work Agent"
-      navigationLabel="Workspace"
-      navigation={navigationFor(data.capabilities, () =>
-        setSearchOpen((open) => !open),
-      )}
-      navigationExtra={
-        <SessionList
-          sessions={data.sessions}
-          archivedSessions={data.archivedSessions}
-          onSessionChanged={handleSessionChanged}
+      navigationLabel="工作区"
+      navigation={navigationFor(() => setSearchOpen((open) => !open))}
+      brandActions={
+        <TaskNotifications
+          sessions={[...data.sessions, ...data.archivedSessions]}
           onAuthRequired={onAuthRequired}
         />
       }
+      navigationExtra={
+        <>
+          <SessionList
+            sessions={data.sessions}
+            archivedSessions={data.archivedSessions}
+            onSessionChanged={handleSessionChanged}
+            onAuthRequired={onAuthRequired}
+          />
+        </>
+      }
       user={{ handle: accountHandle(user.authSubject) }}
-      backdropLabel="Close navigation"
+      openNavigationLabel="打开导航"
+      closeNavigationLabel="关闭导航"
+      backdropLabel="关闭导航"
       onSignOut={signOut}
     >
       <Routes>
+        <Route path="/agents/*" element={<LegacyCapabilityRedirect />} />
+        <Route path="/skills" element={<LegacyCapabilityRedirect />} />
+        <Route
+          path="/history"
+          element={
+            <HistoryPage
+              sessions={data.sessions}
+              archivedSessions={data.archivedSessions}
+            />
+          }
+        />
         <Route
           path="/context"
           element={
@@ -572,17 +579,25 @@ function Workspace({
         <Route
           path="/"
           element={
-            <SessionIntro
-              draftKey={`${user.userId}:new`}
-              agents={data.agents}
-              usage={data.usage}
-              onAuthRequired={onAuthRequired}
-              onSessionCreated={handleSessionCreated}
-            />
+            <>
+              {!data.agents.selection ? (
+                <Alert tone="info">
+                  <p>还没有可用的默认助手。请先配置任务助手，再开始新任务。</p>
+                  <Link to="/settings/agents">配置任务助手</Link>
+                </Alert>
+              ) : null}
+              <SessionIntro
+                draftKey={`${user.userId}:new`}
+                agents={data.agents}
+                usage={data.usage}
+                onAuthRequired={onAuthRequired}
+                onSessionCreated={handleSessionCreated}
+              />
+            </>
           }
         />
         <Route
-          path="/agents"
+          path="/settings/agents"
           element={
             <AgentPage
               agents={data.agents}
@@ -602,7 +617,7 @@ function Workspace({
           }
         />
         <Route
-          path="/agents/new"
+          path="/settings/agents/new"
           element={
             <AgentEditorPage
               models={data.capabilities.personalAgentModels}
@@ -630,7 +645,7 @@ function Workspace({
           }
         />
         <Route
-          path="/agents/:agentId/edit"
+          path="/settings/agents/:agentId/edit"
           element={
             <AgentEditorPage
               models={data.capabilities.personalAgentModels}
@@ -655,7 +670,13 @@ function Workspace({
         />
         <Route
           path="/settings/skills"
-          element={<SkillsPage onAuthRequired={onAuthRequired} />}
+          element={
+            data.capabilities.skills.available ? (
+              <SkillsPage onAuthRequired={onAuthRequired} />
+            ) : (
+              <Navigate to="/settings" replace />
+            )
+          }
         />
         <Route
           path="/files"
@@ -732,11 +753,14 @@ function SettingsPage({
   capabilities: ClientCapabilities;
 }) {
   return (
-    <PageFrame title="Settings">
+    <PageFrame
+      title="设置"
+      description="管理账户与外观，按需调整助手、记忆和技能。"
+    >
       <dl className="settings-list">
         <div>
-          <dt>Account</dt>
-          <dd>{user.authSubject}</dd>
+          <dt>账号</dt>
+          <dd>{accountHandle(user.authSubject)}</dd>
         </div>
       </dl>
 
@@ -744,11 +768,11 @@ function SettingsPage({
         className="settings-section"
         aria-labelledby="appearance-heading"
       >
-        <h2 id="appearance-heading">Appearance</h2>
+        <h2 id="appearance-heading">外观</h2>
         <dl className="settings-list">
           <div>
             <dt>
-              <label htmlFor="appearance">Theme</label>
+              <label htmlFor="appearance">主题</label>
             </dt>
             <dd>
               <Select
@@ -759,9 +783,9 @@ function SettingsPage({
                   if (isThemePreference(next)) theme.setPreference(next);
                 }}
               >
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-                <option value="system">Match system</option>
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+                <option value="system">跟随系统</option>
               </Select>
             </dd>
           </div>
@@ -772,18 +796,31 @@ function SettingsPage({
         className="settings-section"
         aria-labelledby="capabilities-heading"
       >
-        <h2 id="capabilities-heading">Workspace capabilities</h2>
+        <h2 id="capabilities-heading">工作区能力</h2>
+        <p className="muted">
+          按需调整助手、记忆与技能，日常任务无需修改这些配置。
+        </p>
         <dl className="settings-list">
-          {reservedNavigation.map(({ capability, label }) => (
-            <div key={capability}>
-              <dt>{label}</dt>
-              <dd>
-                {capabilities[capability].available
-                  ? "Available"
-                  : "Not available in this release"}
-              </dd>
-            </div>
-          ))}
+          <div>
+            <dt>
+              <Link to="/settings/agents">助手配置</Link>
+            </dt>
+            <dd>选择和管理任务助手</dd>
+          </div>
+          {reservedNavigation
+            .filter(
+              ({ capability }) =>
+                capabilities[capability].available &&
+                (capability === "memoryStores" || capability === "skills"),
+            )
+            .map(({ capability, label, to }) => (
+              <div key={capability}>
+                <dt>
+                  <Link to={to}>{label}</Link>
+                </dt>
+                <dd>可用</dd>
+              </div>
+            ))}
         </dl>
       </section>
     </PageFrame>

@@ -77,6 +77,18 @@ export class SessionReconciliationProcessor {
       service: ReconciliationService;
       workerId: string;
       batchSize?: number;
+      artifactSyncEnabled?: boolean;
+      delivery?: {
+        syncArtifacts(
+          id: string,
+          context: {
+            userId: string;
+            workerId: string;
+            leaseGeneration: number;
+            requestId: string;
+          },
+        ): PromiseLike<void>;
+      };
     },
   ) {}
 
@@ -101,7 +113,22 @@ export class SessionReconciliationProcessor {
       if (!job.ownerUserId) {
         throw new Error("Session reconciliation requires an owner");
       }
-      if (job.payload.operation === "deliver") {
+      if (job.payload.operation === "sync_artifacts") {
+        if (this.dependencies.artifactSyncEnabled === false) {
+          throw Object.assign(new Error("Artifact synchronization paused"), {
+            code: "ARTIFACT_SYNC_PAUSED",
+          });
+        }
+        if (!this.dependencies.delivery || job.payload.turnId !== job.id) {
+          throw new Error("Invalid artifact synchronization job");
+        }
+        await this.dependencies.delivery.syncArtifacts(job.id, {
+          userId: job.ownerUserId,
+          workerId: this.dependencies.workerId,
+          leaseGeneration: job.leaseGeneration,
+          requestId: `worker:${job.id}:${job.attempts}`,
+        });
+      } else if (job.payload.operation === "deliver") {
         if (!this.dependencies.service.deliverSubmission)
           throw new Error("Delivery unavailable");
         await this.dependencies.service.deliverSubmission(job.id, {

@@ -279,6 +279,54 @@ describe("ArtifactService", () => {
     await state.close();
   });
 
+  it("retains cleanup for fresh bytes if the database switch fails", async () => {
+    const state = await setup();
+    try {
+      const tenant = await seedTenant(state.database, "a");
+      const bytes = new TextEncoder().encode("report");
+      state.setArtifacts([
+        exportEntry("ark-file-1", "report.txt", bytes.length),
+      ]);
+      state.storage.putExternal(
+        exportLocation("ark-file-1"),
+        bytes,
+        "text/plain",
+      );
+      const [first] = await state.artifacts.syncSession(tenant.sessionId, {
+        userId: tenant.userId,
+        requestId: "first",
+      });
+      const repository = createRepositories(state.database.db).driveFiles;
+      repository.switchObjectKey = async () => {
+        throw new Error("switch failed");
+      };
+      const cleanup: string[] = [];
+      const drive = new DriveFileService({
+        repository,
+        storage: state.storage,
+        createId: randomUUID,
+        enqueueLegacyKeyCleanup: async (key) => {
+          cleanup.push(key);
+        },
+      });
+      await expect(
+        drive.refreshFromSource(
+          (await drive.findOwned(tenant.userId, first!.driveFileId))!,
+          exportLocation("ark-file-1"),
+          { userId: tenant.userId, requestId: "refresh" },
+        ),
+      ).rejects.toThrow("switch failed");
+      expect(cleanup).toHaveLength(1);
+      expect(cleanup[0]).not.toBe(first!.tosObjectKey);
+      expect(
+        (await drive.findOwned(tenant.userId, first!.driveFileId))
+          ?.tosObjectKey,
+      ).toBe(first!.tosObjectKey);
+    } finally {
+      await state.close();
+    }
+  });
+
   it("orphans the loser row when a concurrent first sync races the upsert", async () => {
     const state = await setup();
     const tenant = await seedTenant(state.database, "a");

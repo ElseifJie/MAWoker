@@ -33,6 +33,47 @@ const valid = {
 };
 
 describe("server configuration", () => {
+  it("defaults independent admission gates on and can pause each", () => {
+    expect(parseServerConfig(valid).reliability).toMatchObject({
+      submissionAdmissionEnabled: true,
+      fileReuseAdmissionEnabled: true,
+    });
+    expect(
+      parseServerConfig({
+        ...valid,
+        SESSION_SUBMISSION_ADMISSION_ENABLED: "false",
+        FILE_REUSE_ADMISSION_ENABLED: "false",
+      }).reliability,
+    ).toMatchObject({
+      submissionAdmissionEnabled: false,
+      fileReuseAdmissionEnabled: false,
+      historyEnabled: true,
+      deliveryEnabled: true,
+    });
+  });
+
+  it("parses independent reliability switches and bounded background budgets", () => {
+    const config = parseServerConfig({
+      ...valid,
+      SESSION_HISTORY_ENABLED: "false",
+      SESSION_DELIVERY_ENABLED: "true",
+      SESSION_HISTORY_BATCH_SIZE: "3",
+      SESSION_DELIVERY_TIMEOUT_MS: "40000",
+    });
+    expect(config.reliability).toMatchObject({
+      historyEnabled: false,
+      deliveryEnabled: true,
+      historyBatchSize: 3,
+      deliveryTimeoutMs: 40000,
+    });
+    expect(() =>
+      parseServerConfig({ ...valid, SESSION_HISTORY_ENABLED: "maybe" }),
+    ).toThrow();
+    expect(() =>
+      parseServerConfig({ ...valid, SESSION_HISTORY_BATCH_SIZE: "10000" }),
+    ).toThrow();
+  });
+
   it("parses multiple system Agent IDs without exposing them publicly", () => {
     const config = parseServerConfig({
       ...valid,

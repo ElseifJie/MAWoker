@@ -28,7 +28,7 @@ describe("humanizeTool", () => {
   it("reads a file by its basename rather than its sandbox path", () => {
     expect(
       line(tool({ name: "read", argsSummary: "/workspace/reports/q3.md" })),
-    ).toBe("Read q3.md");
+    ).toBe("已读取 q3.md");
   });
 
   it("keeps the present tense while the call is in flight", () => {
@@ -40,7 +40,7 @@ describe("humanizeTool", () => {
           argsSummary: "/workspace/a.md",
         }),
       ),
-    ).toBe("Reading a.md");
+    ).toBe("正在读取 a.md");
   });
 
   it("reports a failure as a failure", () => {
@@ -52,15 +52,15 @@ describe("humanizeTool", () => {
           argsSummary: "/workspace/a.md",
         }),
       ),
-    ).toBe("Could not read a.md");
+    ).toBe("读取失败 a.md");
   });
 
   it.each([
-    ["bash", "Ran a command 下载价格快照并校验JSON"],
-    ["write", "Wrote report.md"],
-    ["edit", "Edited report.md"],
-    ["glob", "Found files matching **/*.ts"],
-    ["grep", "Searched for TODO"],
+    ["bash", "已执行命令 下载价格快照并校验JSON"],
+    ["write", "已写入 report.md"],
+    ["edit", "已编辑 report.md"],
+    ["glob", "已查找文件 **/*.ts"],
+    ["grep", "已搜索 TODO"],
   ])("phrases %s from the real argument shape", (name, expected) => {
     const argsSummary =
       name === "bash"
@@ -81,19 +81,19 @@ describe("humanizeTool", () => {
           argsSummary: "https://ark.example.com/v3/models?x=1",
         }),
       ),
-    ).toBe("Fetched ark.example.com");
+    ).toBe("已获取 ark.example.com");
   });
 
   it("falls back to the whole string when a URL does not parse", () => {
     expect(line(tool({ name: "web_fetch", argsSummary: "not a url" }))).toBe(
-      "Fetched not a url",
+      "已获取 not a url",
     );
   });
 
   it("leads with the first web search query and counts the rest", () => {
     expect(
       line(tool({ name: "web_search", argsSummary: "doubao pricing" })),
-    ).toBe("Searched the web for doubao pricing");
+    ).toBe("已搜索网页 doubao pricing");
     expect(
       line(
         tool({
@@ -101,7 +101,7 @@ describe("humanizeTool", () => {
           argsSummary: "doubao pricing · ark pricing · volcengine pricing",
         }),
       ),
-    ).toBe("Searched the web for doubao pricing +2 more");
+    ).toBe("已搜索网页 doubao pricing 另 2 项");
   });
 
   it("summarises the task list by progress and current step", () => {
@@ -116,18 +116,18 @@ describe("humanizeTool", () => {
           ],
         }),
       ),
-    ).toBe("Updated the task list 1/3 done · Write the comparison");
+    ).toBe("已更新任务清单 已完成 1/3 · Write the comparison");
   });
 
   it("still reads correctly when a tool reports no arguments", () => {
-    expect(line(tool({ name: "read" }))).toBe("Read");
-    expect(line(tool({ name: "todo_write" }))).toBe("Updated the task list");
+    expect(line(tool({ name: "read" }))).toBe("已读取");
+    expect(line(tool({ name: "todo_write" }))).toBe("已更新任务清单");
   });
 
   it("names an MCP or custom tool instead of inventing a verb for it", () => {
     expect(
       line(tool({ name: "list_models", argsSummary: "page_size=10" })),
-    ).toBe("Used list_models page_size=10");
+    ).toBe("已使用 list_models page_size=10");
     expect(
       line(
         tool({
@@ -136,7 +136,7 @@ describe("humanizeTool", () => {
           argsSummary: "page_size=10",
         }),
       ),
-    ).toBe("Using list_models page_size=10");
+    ).toBe("正在使用 list_models page_size=10");
     expect(
       line(
         tool({
@@ -145,12 +145,12 @@ describe("humanizeTool", () => {
           argsSummary: "page_size=10",
         }),
       ),
-    ).toBe("Failed using list_models page_size=10");
+    ).toBe("工具执行失败 list_models page_size=10");
   });
 
   it("degrades to a bare activity line when the name is missing", () => {
-    expect(line(tool({ name: undefined, status: "running" }))).toBe("Working");
-    expect(line(tool({ name: undefined }))).toBe("Worked");
+    expect(line(tool({ name: undefined, status: "running" }))).toBe("正在处理");
+    expect(line(tool({ name: undefined }))).toBe("已处理");
   });
 
   it("describes the latest call in a collapsed turn", () => {
@@ -164,7 +164,7 @@ describe("humanizeTool", () => {
       }),
     ];
 
-    expect(humanizeActivity(items)).toBe("Searching the web for pricing");
+    expect(humanizeActivity(items)).toBe("正在搜索网页 pricing");
     expect(humanizeActivity([])).toBeUndefined();
   });
 });

@@ -25,7 +25,7 @@ describe("artifactKind", () => {
     ["log.txt", "text/plain", "text"],
     ["config.json", "application/octet-stream", "text"],
     ["deck.pptx", "application/octet-stream", "slides"],
-    ["sheet.xlsx", "application/octet-stream", "other"],
+    ["sheet.xlsx", "application/octet-stream", "spreadsheet"],
     ["document.docx", "application/octet-stream", "word"],
     ["legacy.doc", "application/msword", "other"],
     ["legacy.ppt", "application/vnd.ms-powerpoint", "other"],
@@ -82,7 +82,6 @@ describe("canPreview", () => {
 
   it("does not preview unknown or legacy binary files", () => {
     for (const [name, mimeType] of [
-      ["a.xlsx", "application/octet-stream"],
       ["a.doc", "application/msword"],
       ["a.ppt", "application/vnd.ms-powerpoint"],
       ["a.zip", "application/zip"],

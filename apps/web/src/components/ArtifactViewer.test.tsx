@@ -131,7 +131,9 @@ describe("ArtifactViewer document previews", () => {
       expect(found).not.toBeNull();
       return found as HTMLIFrameElement;
     });
-    expect(frame.getAttribute("srcdoc")).toContain("scrollbar-gutter:stable");
+    expect(frame).toHaveAttribute("src", "/preview-frame");
+    expect(frame).toHaveAttribute("sandbox", "allow-same-origin");
+    expect(frame).not.toHaveAttribute("srcdoc");
   });
 
   it("does not preview legacy binary Office documents", async () => {

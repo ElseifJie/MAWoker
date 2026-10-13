@@ -1,3 +1,5 @@
+import { FileReuseService } from "../packages/domain/src/file-reuse.js";
+import { apiErrorSchema } from "../packages/contracts/src/index.js";
 import { once } from "node:events";
 import { get, type IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
@@ -64,6 +66,59 @@ function service() {
 }
 
 describe("Artifact API", () => {
+  it("pauses new reuse with retryable 503 while existing files remain readable and deletable", async () => {
+    const artifacts = service();
+    const reserve = vi.fn();
+    const app = buildApp({
+      auth: auth(),
+      artifacts,
+      inputs: {} as never,
+      fileReuse: new FileReuseService({
+        admissionEnabled: false,
+        repository: { reserve, setMount: vi.fn(), release: vi.fn() },
+        inputs: {} as never,
+        ark: {} as never,
+        storage: { openRead: vi.fn() },
+        createId: () => "unused",
+      }),
+    });
+    const cookies = { [AUTH_COOKIE_NAME]: "token" };
+    try {
+      const denied = await app.inject({
+        method: "POST",
+        url: `/api/v1/artifacts/${artifactId}/reuse`,
+        cookies,
+      });
+      expect(denied.statusCode).toBe(503);
+      expect(denied.json().error).toMatchObject({
+        code: "FILE_REUSE_ADMISSION_PAUSED",
+        retryable: true,
+      });
+      expect(apiErrorSchema.safeParse(denied.json()).success).toBe(true);
+      expect(reserve).not.toHaveBeenCalled();
+      expect(
+        (await app.inject({ url: "/api/v1/artifacts", cookies })).statusCode,
+      ).toBe(200);
+      const downloaded = await app.inject({
+        url: `/api/v1/artifacts/${artifactId}/download`,
+        cookies,
+      });
+      expect(downloaded.statusCode).toBe(200);
+      expect(downloaded.body).toBe("hello");
+      expect(
+        (
+          await app.inject({
+            method: "DELETE",
+            url: `/api/v1/artifacts/${artifactId}`,
+            cookies,
+          })
+        ).statusCode,
+      ).toBe(202);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("syncs and lists minimized artifacts with an optional Session filter", async () => {
     const artifacts = service();
     const app = buildApp({ auth: auth(), artifacts });

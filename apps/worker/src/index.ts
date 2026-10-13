@@ -10,6 +10,7 @@ import {
   MemoryService,
   SessionInputService,
   SessionService,
+  SessionDeliveryService,
   SessionSettlementService,
   UserAgentService,
 } from "@pwa/domain";
@@ -25,6 +26,7 @@ import { runProductionWorkerPoll } from "./poll.js";
 import { QuotaInterruptProcessor } from "./quota-interrupt.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
 import { SessionDeletionProcessor } from "./session-deletion.js";
+import { SessionHistoryProcessor } from "./session-history.js";
 import { UploadCleanupProcessor } from "./upload-cleanup.js";
 import { UsageReconciliationProcessor } from "./usage-reconciliation.js";
 
@@ -65,17 +67,23 @@ const personalAgentProcessor = new PersonalAgentReconciliationProcessor({
   service,
   workerId: `personal-agent-worker:${process.pid}:${randomUUID()}`,
 });
-const sessionProcessor = new SessionReconciliationProcessor({
-  jobs: repositories.jobs,
-  service: new SessionService({
-    repository: repositories.sessionLifecycle,
-    agentResolver: service,
-    ark,
-    environmentId: config.ark.environmentId,
-    createId: randomUUID,
-    memory,
-  }),
-  workerId: `session-worker:${process.pid}:${randomUUID()}`,
+const sessionService = new SessionService({
+  repository: repositories.sessionLifecycle,
+  agentResolver: service,
+  ark,
+  environmentId: config.ark.environmentId,
+  createId: randomUUID,
+  memory,
+});
+const sessionHistoryProcessor = new SessionHistoryProcessor({
+  repository: repositories.sessionLifecycle,
+  service: sessionService,
+  workerId: `history-worker:${process.pid}:${randomUUID()}`,
+  enabled: config.reliability.historyEnabled,
+  batchSize: config.reliability.historyBatchSize,
+  cooldownMs: config.reliability.historyCooldownMs,
+  requestTimeoutMs: config.reliability.historyTimeoutMs,
+  reportError: reportWorkerError,
 });
 const driveFiles = new DriveFileService({
   repository: repositories.driveFiles,
@@ -83,6 +91,32 @@ const driveFiles = new DriveFileService({
   createId: randomUUID,
   enqueueLegacyKeyCleanup: (objectKey, ownerUserId) =>
     repositories.driveFiles.enqueueRetiredKeyCleanup(objectKey, ownerUserId),
+});
+const artifacts = new ArtifactService({
+  repository: repositories.artifacts,
+  drive: driveFiles,
+  ark,
+  storage: artifactStorage,
+  createId: randomUUID,
+});
+const delivery = new SessionDeliveryService({
+  repository: repositories.sessionDelivery,
+  sessions: sessionService,
+  ark,
+  artifacts,
+  batchSize: config.reliability.deliveryBatchSize,
+  timeoutMs: config.reliability.deliveryTimeoutMs,
+  retryWindowMs: config.reliability.artifactRetryWindowMs,
+  emptyGraceMs: config.reliability.artifactEmptyGraceMs,
+  reportError: reportWorkerError,
+});
+const sessionProcessor = new SessionReconciliationProcessor({
+  jobs: repositories.jobs,
+  service: sessionService,
+  delivery,
+  artifactSyncEnabled: config.reliability.deliveryEnabled,
+  batchSize: 1,
+  workerId: `session-worker:${process.pid}:${randomUUID()}`,
 });
 const sessionSettlement = new SessionSettlementService({
   repository: repositories.sessionLifecycle,
@@ -198,6 +232,12 @@ await new Promise<void>((resolve) => {
           session: sessionProcessor,
           sessionDeletion: sessionDeletionProcessor,
           usage: usageProcessor,
+          history: sessionHistoryProcessor,
+          ...(config.reliability.deliveryEnabled
+            ? {
+                delivery: { runOnce: () => delivery.discoverOnce() },
+              }
+            : {}),
           quotaInterrupt: quotaInterruptProcessor,
           uploadCleanup: uploadCleanupProcessor,
           artifactDeletion: artifactDeletionProcessor,

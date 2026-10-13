@@ -2917,14 +2917,22 @@ describe("Session database integration", () => {
 
     await expect(
       repositories.sessionLifecycle.listEvents(userId, intent.id),
-    ).resolves.toEqual([first, second]);
+    ).resolves.toEqual([
+      { ...first, localSequence: expect.any(String) },
+      { ...second, localSequence: expect.any(String) },
+    ]);
     await expect(
       repositories.sessionLifecycle.listEvents(id(), intent.id),
     ).resolves.toEqual([]);
 
+    const generation = await repositories.sessionLifecycle.beginHistoryScan(
+      userId,
+      intent.id,
+    );
     await repositories.sessionLifecycle.markHistoryBackfilled(
       userId,
       intent.id,
+      generation,
     );
     await expect(
       repositories.sessionLifecycle.historyBackfilled(userId, intent.id),

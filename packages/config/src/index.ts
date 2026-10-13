@@ -89,6 +89,9 @@ const requiredNonnegativeInteger = z
   .pipe(z.number().int().min(0));
 
 const positiveInteger = z.coerce.number().int().positive();
+const featureSwitch = z
+  .enum(["true", "false"])
+  .transform((value) => value === "true");
 
 const systemAgentIds = z
   .string()
@@ -165,6 +168,21 @@ const environmentSchema = z
       .max(65_535)
       .default(3001),
     WORKER_POLL_INTERVAL_MS: positiveInteger.default(1_000),
+    SESSION_SUBMISSION_ADMISSION_ENABLED: featureSwitch.default(true),
+    FILE_REUSE_ADMISSION_ENABLED: featureSwitch.default(true),
+    SESSION_HISTORY_ENABLED: featureSwitch.default(true),
+    SESSION_DELIVERY_ENABLED: featureSwitch.default(true),
+    SESSION_HISTORY_BATCH_SIZE: positiveInteger.max(25).default(2),
+    SESSION_HISTORY_COOLDOWN_MS: positiveInteger.default(60_000),
+    SESSION_HISTORY_TIMEOUT_MS: positiveInteger.max(120_000).default(30_000),
+    SESSION_DELIVERY_BATCH_SIZE: positiveInteger.max(25).default(2),
+    SESSION_DELIVERY_TIMEOUT_MS: positiveInteger.max(120_000).default(30_000),
+    SESSION_ARTIFACT_RETRY_WINDOW_MS: positiveInteger
+      .max(3_600_000)
+      .default(300_000),
+    SESSION_ARTIFACT_EMPTY_GRACE_MS: positiveInteger
+      .max(300_000)
+      .default(30_000),
   })
   .passthrough()
   .superRefine((env, context) => {
@@ -286,6 +304,19 @@ export function parseServerConfig(
       healthHost: env.WORKER_HEALTH_HOST,
       healthPort: env.WORKER_HEALTH_PORT,
       pollIntervalMs: env.WORKER_POLL_INTERVAL_MS,
+    },
+    reliability: {
+      submissionAdmissionEnabled: env.SESSION_SUBMISSION_ADMISSION_ENABLED,
+      fileReuseAdmissionEnabled: env.FILE_REUSE_ADMISSION_ENABLED,
+      historyEnabled: env.SESSION_HISTORY_ENABLED,
+      deliveryEnabled: env.SESSION_DELIVERY_ENABLED,
+      historyBatchSize: env.SESSION_HISTORY_BATCH_SIZE,
+      historyCooldownMs: env.SESSION_HISTORY_COOLDOWN_MS,
+      historyTimeoutMs: env.SESSION_HISTORY_TIMEOUT_MS,
+      deliveryBatchSize: env.SESSION_DELIVERY_BATCH_SIZE,
+      deliveryTimeoutMs: env.SESSION_DELIVERY_TIMEOUT_MS,
+      artifactRetryWindowMs: env.SESSION_ARTIFACT_RETRY_WINDOW_MS,
+      artifactEmptyGraceMs: env.SESSION_ARTIFACT_EMPTY_GRACE_MS,
     },
     public: publicConfig,
   });

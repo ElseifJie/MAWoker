@@ -7,6 +7,7 @@ import {
   ResourceNotFoundError,
   SessionCreateVerificationError,
   SessionTerminatedError,
+  SessionHistoryRepairPendingError,
   type SessionRecord,
 } from "../packages/domain/src/index.js";
 import {
@@ -166,7 +167,156 @@ function holdAuthInvalidWrite(app: ReturnType<typeof buildApp>) {
   };
 }
 
+describe("intake API errors", () => {
+  it.each(["SUBMISSION_ADMISSION_PAUSED"])(
+    "returns retryable 503 for %s",
+    async (code) => {
+      const service = sessionService();
+      service.create.mockRejectedValueOnce(
+        Object.assign(new Error("Admission paused; retry later"), { code }),
+      );
+      const app = buildApp({ auth: auth(), sessions: service });
+      try {
+        const result = await app.inject({
+          method: "POST",
+          url: "/api/v1/sessions",
+          headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+          payload: {
+            agentId,
+            content: "hello",
+            submissionId: "00000000-0000-4000-8000-000000000004",
+          },
+        });
+        expect(result.statusCode).toBe(503);
+        expect(result.json().error).toMatchObject({
+          code,
+          retryable: true,
+          message: "Admission paused; retry later",
+        });
+      } finally {
+        await app.close();
+      }
+    },
+  );
+  it.each([
+    [undefined, "UPLOAD_TOO_LARGE", "单个材料不能超过 20 MB"],
+    [
+      "UPLOAD_TOTAL_TOO_LARGE",
+      "UPLOAD_TOTAL_TOO_LARGE",
+      "材料总量不能超过 100 MB",
+    ],
+  ])(
+    "preserves distinct material guidance for %s",
+    async (code, expectedCode, message) => {
+      const service = sessionService();
+      service.create.mockRejectedValueOnce(
+        Object.assign(new Error("too large"), {
+          name: "UploadTooLargeError",
+          ...(code ? { code } : {}),
+        }),
+      );
+      const app = buildApp({ auth: auth(), sessions: service });
+      try {
+        const result = await app.inject({
+          method: "POST",
+          url: "/api/v1/sessions",
+          headers: { cookie: `${AUTH_COOKIE_NAME}=user-token` },
+          payload: { agentId },
+        });
+        expect(result.statusCode).toBe(413);
+        expect(result.json().error).toMatchObject({
+          code: expectedCode,
+          message,
+          retryable: false,
+        });
+      } finally {
+        await app.close();
+      }
+    },
+  );
+});
+
 describe("Session API", () => {
+  it("reports history repair state and a retryable Chinese 409 for pending exports", async () => {
+    const sessions = sessionService();
+    sessions.get.mockResolvedValueOnce({
+      ...record,
+      inputs: [],
+      historyState: {
+        complete: false,
+        repairRequired: true,
+        scannedAt: timestamp,
+        persistedSequence: "42",
+        scanGeneration: 3,
+      },
+    } as never);
+    sessions.transcriptEvents.mockRejectedValueOnce(
+      new SessionHistoryRepairPendingError(),
+    );
+    const app = buildApp({ auth: auth(), sessions });
+    const cookies = { [AUTH_COOKIE_NAME]: "user-token" };
+    try {
+      const detail = await app.inject({
+        method: "GET",
+        url: `/api/v1/sessions/${sessionId}`,
+        cookies,
+      });
+      expect(detail.json().historyState).toEqual({
+        complete: false,
+        repairRequired: true,
+        scannedAt: timestamp.toISOString(),
+        persistedSequence: "42",
+        scanGeneration: 3,
+      });
+      const exported = await app.inject({
+        method: "GET",
+        url: `/api/v1/sessions/${sessionId}/transcript`,
+        cookies,
+      });
+      expect(exported.statusCode).toBe(409);
+      expect(exported.json().error).toMatchObject({
+        code: "EVENT_HISTORY_REPAIR_PENDING",
+        retryable: true,
+        message: expect.stringMatching(/历史.*重试/),
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("safely projects accepted acknowledgement content without redacting the original pending body", async () => {
+    const sessions = sessionService();
+    sessions.get.mockResolvedValueOnce({
+      ...record,
+      inputs: [],
+      submissions: [
+        {
+          submissionId: "submission",
+          status: "accepted",
+          content: "Original Authorization: Bearer original",
+          acceptedContent: "Reply Authorization: Bearer private.token",
+          upstreamEventId: "event",
+          lastErrorCode: null,
+          createdAt: timestamp,
+        },
+      ],
+    } as never);
+    const app = buildApp({ auth: auth(), sessions });
+    try {
+      const detail = await app.inject({
+        method: "GET",
+        url: `/api/v1/sessions/${sessionId}`,
+        cookies: { [AUTH_COOKIE_NAME]: "user-token" },
+      });
+      expect(detail.json().submissions[0]).toMatchObject({
+        content: "Original Authorization: Bearer original",
+        acceptedContent: "Reply Authorization: [redacted]",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("archives, restores, and requires exact permanent-delete confirmation", async () => {
     const sessions = sessionService();
     const app = buildApp({ auth: auth(), sessions });

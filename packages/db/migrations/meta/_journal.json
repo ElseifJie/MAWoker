@@ -197,6 +197,34 @@
       "when": 1791825123180,
       "tag": "0027_confused_joystick",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1791846926175,
+      "tag": "0028_big_frightful_four",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1791847104194,
+      "tag": "0029_unknown_silver_sable",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1791847441741,
+      "tag": "0030_minor_revanche",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1791852850211,
+      "tag": "0031_bumpy_lady_vermin",
+      "breakpoints": true
     }
   ]
 }

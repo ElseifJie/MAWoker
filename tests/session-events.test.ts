@@ -404,7 +404,7 @@ describe("Session event recovery", () => {
     const ark = {
       streamEvents: vi.fn(),
       listEvents: vi.fn(async (): Promise<ArkEvent[]> => {
-        throw new Error("a backfilled transcript must not replay Ark history");
+        return [];
       }),
     };
     const service = createService(repository, ark as never);
@@ -447,7 +447,128 @@ describe("Session event recovery", () => {
     ]);
     expect(JSON.stringify(transcript)).not.toContain("drop-this");
     expect(JSON.stringify(transcript)).not.toContain("private-thread");
+    expect(ark.listEvents).toHaveBeenCalledOnce();
+  });
+
+  it("does not call upstream for a pending export", async () => {
+    const repository = Object.assign(
+      baseRepository(session({ arkSessionId: "pending:local" })),
+      {
+        listEvents: vi.fn(async () => []),
+      },
+    );
+    const ark = { listEvents: vi.fn(async () => []), streamEvents: vi.fn() };
+    await expect(
+      createService(repository, ark as never).transcriptEvents(sessionId, {
+        userId,
+        requestId: "pending",
+      }),
+    ).rejects.toMatchObject({ code: "EVENT_HISTORY_REPAIR_PENDING" });
     expect(ark.listEvents).not.toHaveBeenCalled();
+  });
+
+  it("does not certify a cancelled scan after a batch is written", async () => {
+    const controller = new AbortController();
+    const repository = loggedRepository({ backfilled: false, stored: [] });
+    repository.appendEvents.mockImplementationOnce(async () => {
+      controller.abort();
+    });
+    const ark = {
+      listEvents: vi.fn(async () =>
+        Array.from({ length: 51 }, (_, n) =>
+          event(`cancel-${n}`, "agent.message", { content: "Message" }),
+        ),
+      ),
+      streamEvents: vi.fn(),
+    };
+    await expect(
+      createService(repository, ark as never).reconcileHistory(
+        sessionId,
+        { userId, requestId: "cancel" },
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+    expect(repository.markHistoryBackfilled).not.toHaveBeenCalled();
+    expect(repository.appendEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not append a batch after cancellation during its last projection", async () => {
+    const controller = new AbortController();
+    const repository = loggedRepository({ backfilled: false, stored: [] });
+    let projections = 0;
+    repository.projectEvent.mockImplementation(async () => {
+      if (++projections === 50) controller.abort();
+      return false;
+    });
+    const ark = {
+      listEvents: vi.fn(async () =>
+        Array.from({ length: 50 }, (_, n) =>
+          event(`cancel-projection-${n}`, "agent.message", {
+            content: "Message",
+          }),
+        ),
+      ),
+      streamEvents: vi.fn(),
+    };
+    await expect(
+      createService(repository, ark as never).reconcileHistory(
+        sessionId,
+        { userId, requestId: "cancel-projection" },
+        controller.signal,
+      ),
+    ).rejects.toMatchObject({ code: "EVENT_HISTORY_REPAIR_PENDING" });
+    expect(repository.appendEvents).not.toHaveBeenCalled();
+    expect(repository.markHistoryBackfilled).not.toHaveBeenCalled();
+  });
+
+  it("appends live events without reusing a completed history scan generation", async () => {
+    const repository = Object.assign(
+      loggedRepository({ backfilled: false, stored: [] }),
+      {
+        beginHistoryScan: vi.fn(async () => 7),
+      },
+    );
+    const ark = {
+      listEvents: vi.fn(async () => [
+        event("history", "agent.message", { content: "Earlier" }),
+      ]),
+      streamEvents: vi.fn(async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield event("live", "agent.message", { content: "Later" });
+        },
+      })),
+    };
+    const opened = await createService(repository, ark).openEvents(sessionId, {
+      userId,
+      requestId: "live",
+    });
+    await collect(opened.events);
+    expect(repository.appendEvents.mock.calls[0]?.[3]).toBe(7);
+    expect(repository.appendEvents.mock.calls[1]?.[3]).toBeUndefined();
+  });
+
+  it("keeps live display and a durable repair hint if upstream history fails", async () => {
+    const repository = Object.assign(
+      loggedRepository({ backfilled: false, stored: [] }),
+      { invalidateHistory: vi.fn(async () => {}) },
+    );
+    const ark = {
+      listEvents: vi.fn(async () => {
+        throw new Error("history unavailable");
+      }),
+      streamEvents: vi.fn(async () => ({
+        async *[Symbol.asyncIterator]() {
+          yield event("live", "agent.message", { content: "Still visible" });
+        },
+      })),
+    };
+    const opened = await createService(repository, ark).openEvents(sessionId, {
+      userId,
+      requestId: "failure",
+    });
+    expect(await collect(opened.events)).toMatchObject([{ id: "live" }]);
+    expect(repository.invalidateHistory).toHaveBeenCalled();
+    expect(repository.markHistoryBackfilled).not.toHaveBeenCalled();
   });
 
   it("copies the upstream history into the log and marks it complete", async () => {
@@ -486,6 +607,96 @@ describe("Session event recovery", () => {
       "event-3",
     ]);
     expect(repository.markHistoryBackfilled).toHaveBeenCalledOnce();
+  });
+
+  it("does not mark history complete when a middle batch fails", async () => {
+    const state = { backfilled: false, stored: [] as StoredSessionEvent[] };
+    const repository = loggedRepository(state);
+    const append = repository.appendEvents.getMockImplementation()!;
+    repository.appendEvents.mockImplementation(async (...args) => {
+      if (args[2][0]?.eventId === "history-50")
+        throw new Error("database down");
+      await append(...args);
+    });
+    const service = createService(repository, {
+      async listEvents() {
+        return Array.from({ length: 120 }, (_, i) =>
+          event(`history-${i}`, "agent.message", { content: `${i}` }),
+        );
+      },
+      async streamEvents() {
+        return { async *[Symbol.asyncIterator]() {} };
+      },
+    });
+    const opened = await service.openEvents(sessionId, {
+      userId,
+      requestId: "middle-failure",
+    });
+    expect(await collect(opened.events)).toHaveLength(120);
+    expect(state.backfilled).toBe(false);
+    expect(state.stored).toHaveLength(70);
+  });
+
+  it("repairs a live write lost after earlier completion even when invalidation cannot persist", async () => {
+    const state = { backfilled: true, stored: [] as StoredSessionEvent[] };
+    const repository = Object.assign(loggedRepository(state), {
+      invalidateHistory: vi.fn(async () => {
+        throw new Error("database down");
+      }),
+    });
+    repository.appendEvents.mockRejectedValueOnce(new Error("database down"));
+    let stream = 0;
+    const service = createService(repository, {
+      async listEvents() {
+        return [
+          event("lost-live", "agent.message", { content: "must recover" }),
+        ];
+      },
+      async streamEvents() {
+        const first = stream++ === 0;
+        return {
+          async *[Symbol.asyncIterator]() {
+            if (first)
+              yield event("lost-live", "agent.message", {
+                content: "must recover",
+              });
+          },
+        };
+      },
+    });
+    await collect(
+      (
+        await service.openEvents(sessionId, {
+          userId,
+          requestId: "failed-live",
+        })
+      ).events,
+    );
+    await collect(
+      (await service.openEvents(sessionId, { userId, requestId: "recovery" }))
+        .events,
+    );
+    expect(state.stored.map((item) => item.eventId)).toEqual(["lost-live"]);
+  });
+
+  it("refuses a partial export when event persistence fails", async () => {
+    const repository = loggedRepository({ backfilled: true, stored: [] });
+    repository.appendEvents.mockRejectedValue(new Error("database down"));
+    const service = createService(repository, {
+      async listEvents() {
+        return [
+          event("missed-with-no-viewer", "agent.message", {
+            content: "result",
+          }),
+        ];
+      },
+      async streamEvents() {
+        return { async *[Symbol.asyncIterator]() {} };
+      },
+    });
+    await expect(
+      service.transcriptEvents(sessionId, { userId, requestId: "export" }),
+    ).rejects.toMatchObject({ code: "EVENT_HISTORY_REPAIR_PENDING" });
   });
 
   it("survives an unwritable log and still streams the Session", async () => {

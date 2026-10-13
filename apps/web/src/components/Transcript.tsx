@@ -4,9 +4,9 @@ import { Markdown } from "./Markdown.js";
 import { TurnGroup } from "./TurnGroup.js";
 
 const noticeLabels = {
-  info: "Rescheduled",
-  warn: "Recoverable error",
-  danger: "Session stopped",
+  info: "已安排重试",
+  warn: "可恢复的异常",
+  danger: "任务已停止",
 } as const;
 
 /**
@@ -21,7 +21,7 @@ export function Transcript({ blocks }: { blocks: readonly TranscriptBlock[] }) {
     return (
       <div className="timeline-empty">
         <Bot size={20} aria-hidden="true" />
-        <p>Waiting for Session activity…</p>
+        <p>等待任务开始…</p>
       </div>
     );
   }

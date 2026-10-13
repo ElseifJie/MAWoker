@@ -30,6 +30,7 @@ export interface AppShellProps {
   navigationLabel: string;
   navigation: NavigationItem[];
   navigationExtra?: ReactNode;
+  brandActions?: ReactNode;
   openNavigationLabel?: string;
   closeNavigationLabel?: string;
   backdropLabel?: string;
@@ -136,7 +137,7 @@ function UserMenu({ user, tabIndex, onSignOut }: UserMenuProps) {
         className="ui-app-shell__user-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Account: ${user.handle}`}
+        aria-label={`账号：${user.handle}`}
         tabIndex={tabIndex}
         onClick={() => setOpen((current) => !current)}
       >
@@ -172,7 +173,7 @@ function UserMenu({ user, tabIndex, onSignOut }: UserMenuProps) {
             }}
           >
             <LogOut size={15} aria-hidden="true" />
-            Disconnect
+            退出登录
           </button>
         </div>
       ) : null}
@@ -183,6 +184,7 @@ function UserMenu({ user, tabIndex, onSignOut }: UserMenuProps) {
 export function AppShell({
   backdropLabel = "Close navigation drawer",
   brand,
+  brandActions,
   children,
   closeNavigationLabel = "Close navigation",
   navigation,
@@ -243,6 +245,11 @@ export function AppShell({
     focusable()[0]?.focus();
 
     const containFocus = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        document.activeElement?.closest('[aria-modal="true"]')
+      )
+        return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeDrawer("toggle");
@@ -288,7 +295,10 @@ export function AppShell({
           <span className="ui-app-shell__brand-mark" aria-hidden="true">
             {brand.charAt(0)}
           </span>
-          <span>{brand}</span>
+          <span className="ui-app-shell__brand-name">{brand}</span>
+          {(!mobileNavigation || drawerOpen) && brandActions ? (
+            <div className="ui-app-shell__brand-actions">{brandActions}</div>
+          ) : null}
         </div>
         <nav aria-label={navigationLabel} className="ui-app-shell__navigation">
           <div className="ui-app-shell__navigation-primary">
@@ -377,7 +387,10 @@ export function AppShell({
               <Menu size={18} aria-hidden="true" />
             )}
           </IconButton>
-          <span>{brand}</span>
+          <span className="ui-app-shell__brand-name">{brand}</span>
+          {mobileNavigation && !drawerOpen && brandActions ? (
+            <div className="ui-app-shell__brand-actions">{brandActions}</div>
+          ) : null}
         </header>
         <main
           ref={mainRef}

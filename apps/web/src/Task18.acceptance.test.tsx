@@ -28,10 +28,10 @@ function renderApp(path = "/") {
 
 async function signIn(email: string) {
   const user = userEvent.setup();
-  await screen.findByRole("heading", { name: "Sign in to your workspace" });
-  await user.type(screen.getByLabelText("Email"), email);
-  await user.type(screen.getByLabelText("Password"), "acceptance-password");
-  await user.click(screen.getByRole("button", { name: "Sign in" }));
+  await screen.findByRole("heading", { name: "登录你的工作区" });
+  await user.type(screen.getByLabelText("邮箱"), email);
+  await user.type(screen.getByLabelText("密码"), "acceptance-password");
+  await user.click(screen.getByRole("button", { name: "登录" }));
   return user;
 }
 
@@ -61,25 +61,42 @@ afterEach(() => {
 describe("Task 18 browser acceptance", () => {
   it("completes the ordinary-user workflow through real React DOM interactions", async () => {
     const backend = createTask18BrowserBackend();
-    vi.stubGlobal("fetch", vi.fn(backend.fetch));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input, init) => {
+        const response = await backend.fetch(input, init);
+        const path = new URL(String(input), "http://localhost").pathname;
+        if (
+          path === `/api/v1/sessions/${backend.sessionId}` &&
+          (!init?.method || init.method === "GET") &&
+          response.ok
+        ) {
+          return new Response(
+            JSON.stringify({ ...(await response.json()), upstreamReady: true }),
+            { status: response.status, headers: response.headers },
+          );
+        }
+        return response;
+      }),
+    );
     renderApp();
     const user = await signIn("user-a@example.com");
 
     expect(
-      await screen.findByRole("heading", { name: "New task" }),
+      await screen.findByRole("heading", { name: "新任务" }),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("Agent")).toHaveValue(backend.platformAgentId);
+    expect(screen.getByLabelText("助手")).toHaveValue(backend.platformAgentId);
 
     await user.upload(
-      screen.getByLabelText("File picker"),
+      screen.getByLabelText("材料文件"),
       new File(["acceptance input"], "brief.txt", { type: "text/plain" }),
     );
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(await screen.findByText("已就绪")).toBeInTheDocument();
     await user.type(
-      screen.getByLabelText("Task message"),
+      screen.getByLabelText("任务要求"),
       "Prepare an acceptance report",
     );
-    await user.click(screen.getByRole("button", { name: "Send task" }));
+    await user.click(screen.getByRole("button", { name: "开始任务" }));
 
     expect(
       await screen.findByRole("heading", {
@@ -93,9 +110,12 @@ describe("Task 18 browser acceptance", () => {
       return instance;
     });
     act(() => stream.emitOpen());
-    await waitFor(() =>
-      expect(backend.callsFor("POST", "/messages")).toHaveLength(1),
-    );
+    const [creation] = backend.callsFor("POST", "/sessions");
+    expect(creation?.body).toMatchObject({
+      content: "Prepare an acceptance report",
+      submissionId: expect.any(String),
+    });
+    expect(backend.callsFor("POST", "/messages")).toHaveLength(0);
     const sessionHeading = screen.getByRole("heading", {
       name: "Prepare an acceptance report",
     });
@@ -103,12 +123,12 @@ describe("Task 18 browser acceptance", () => {
       .closest(".session-page")!
       .querySelector<HTMLElement>(".session-meta")!;
     expect(
-      within(sessionMeta).getByText("Idle").closest(".ui-badge"),
+      within(sessionMeta).getByText("待开始").closest(".ui-badge"),
     ).toHaveClass("ui-badge");
-    expect(
-      within(sessionMeta).getByText("Live").closest(".ui-badge"),
-    ).toHaveClass("ui-badge", "ui-badge--success");
-    expect(screen.getByRole("button", { name: "Send message" })).toHaveClass(
+    expect(within(sessionMeta).getByText("已连接")).toHaveClass(
+      "session-connection--success",
+    );
+    expect(screen.getByRole("button", { name: "发送消息" })).toHaveClass(
       "ui-icon-button",
     );
 
@@ -141,7 +161,7 @@ describe("Task 18 browser acceptance", () => {
     });
     const toolRow = () =>
       document.querySelector('[data-event-id="call_write_1"]')!;
-    expect(toolRow().textContent).toContain("Writing");
+    expect(toolRow().textContent).toContain("正在写入");
     expect(toolRow().textContent).toContain("acceptance-report.md");
 
     act(() => {
@@ -174,15 +194,15 @@ describe("Task 18 browser acceptance", () => {
     expect(await screen.findByText("Acceptance report ready.")).toBeVisible();
     expect(screen.queryByText("must remain private")).not.toBeInTheDocument();
     // The result folded into the same row rather than adding a second one.
-    expect(toolRow().textContent).toContain("Wrote");
-    expect(toolRow().textContent).not.toContain("Writing");
+    expect(toolRow().textContent).toContain("已写入");
+    expect(toolRow().textContent).not.toContain("正在写入");
     expect(toolRow().textContent).toContain("500ms");
     const preview = screen.getByText("Wrote /workspace/acceptance-report.md");
     expect(preview).toBeInTheDocument();
     expect(preview).not.toBeVisible();
 
     act(() => stream.emitError());
-    expect(screen.getByText("Reconnecting…")).toBeVisible();
+    expect(screen.getByText("连接重试中")).toBeVisible();
     act(() => {
       stream.emitOpen();
       stream.emit("agent.message", {
@@ -195,53 +215,58 @@ describe("Task 18 browser acceptance", () => {
     });
     expect(screen.getAllByText("Acceptance report ready.")).toHaveLength(1);
 
-    await user.type(screen.getByLabelText("Message"), "Add the risk section");
-    await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(await screen.findByText("Message queued.")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Interrupt Session" }));
-    expect(await screen.findByText("Interrupt requested.")).toBeVisible();
+    await user.type(screen.getByLabelText("补充要求"), "Add the risk section");
+    await user.click(screen.getByRole("button", { name: "发送消息" }));
+    expect(
+      await screen.findByText("消息已排队，后台将继续发送。"),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "停止任务" }));
+    expect(
+      await screen.findByText("已请求停止，等待任务状态确认。"),
+    ).toBeVisible();
 
-    await user.click(screen.getByRole("link", { name: "Agents" }));
-    await screen.findByRole("heading", { name: "Agents" });
-    await user.click(
-      screen.getByRole("button", { name: "New personal Agent" }),
-    );
-    await screen.findByRole("heading", { name: "New personal Agent" });
-    await user.type(screen.getByLabelText("Name"), "Private reviewer");
-    await user.type(screen.getByLabelText("Description"), "Checks reports");
-    await user.selectOptions(screen.getByLabelText("Model"), "model-a");
-    await user.type(screen.getByLabelText("System"), "Review safely.");
-    await user.click(screen.getByRole("button", { name: "Create Agent" }));
-    await screen.findByRole("heading", { name: "Agents" });
+    await user.click(screen.getByRole("link", { name: "设置" }));
+    await screen.findByRole("heading", { name: "设置" });
+    await user.click(screen.getByRole("link", { name: "助手配置" }));
+    await screen.findByRole("heading", { name: "助手配置" });
+    await user.click(screen.getByRole("button", { name: "创建个人助手" }));
+    await screen.findByRole("heading", { name: "创建个人助手" });
+    await user.type(screen.getByLabelText("名称"), "Private reviewer");
+    await user.type(screen.getByLabelText("描述"), "Checks reports");
+    await user.selectOptions(screen.getByLabelText("模型"), "model-a");
+    await user.type(screen.getByLabelText("系统提示词"), "Review safely.");
+    await user.click(screen.getByRole("button", { name: "创建助手" }));
+    await screen.findByRole("heading", { name: "助手配置" });
     expect(await screen.findByText("Private reviewer")).toBeVisible();
 
     await user.click(
-      screen.getByRole("button", { name: "Edit Private reviewer" }),
+      screen.getByRole("button", { name: "编辑 Private reviewer" }),
     );
-    const agentName = await screen.findByLabelText("Name");
+    const agentName = await screen.findByLabelText("名称");
     await user.clear(agentName);
     await user.type(agentName, "Private editor");
-    await user.click(screen.getByRole("button", { name: "Save changes" }));
-    await screen.findByRole("heading", { name: "Agents" });
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    await screen.findByRole("heading", { name: "助手配置" });
     expect(await screen.findByText("Private editor")).toBeVisible();
     await user.click(
-      screen.getByRole("button", { name: "Delete Private editor" }),
+      screen.getByRole("button", { name: "删除 Private editor" }),
     );
     await user.click(
-      within(
-        screen.getByRole("dialog", { name: "Delete personal Agent?" }),
-      ).getByRole("button", { name: "Delete Agent" }),
+      within(screen.getByRole("dialog", { name: "删除个人助手？" })).getByRole(
+        "button",
+        { name: "删除助手" },
+      ),
     );
     await waitFor(() =>
       expect(screen.queryByText("Private editor")).not.toBeInTheDocument(),
     );
 
-    await user.click(screen.getByRole("link", { name: "My files" }));
+    await user.click(screen.getByRole("link", { name: "我的文件" }));
     expect(
-      await screen.findByRole("heading", { name: "My files" }),
+      await screen.findByRole("heading", { name: "我的文件" }),
     ).toBeVisible();
     const download = screen.getByRole("link", {
-      name: "Download acceptance-report.txt",
+      name: "下载 acceptance-report.txt",
     });
     expect(download).toHaveAttribute(
       "href",
@@ -257,29 +282,25 @@ describe("Task 18 browser acceptance", () => {
     await screen.findByRole("heading", {
       name: "Prepare an acceptance report",
     });
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(screen.getByRole("button", { name: "Archive Session" }));
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "归档任务" }));
     expect(
-      await screen.findByRole("button", { name: "Restore Session" }),
+      await screen.findByRole("button", { name: "恢复任务" }),
     ).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Restore Session" }));
-    await user.click(screen.getByRole("button", { name: "Session actions" }));
-    await user.click(
-      screen.getByRole("button", { name: "Delete Session permanently" }),
-    );
+    await user.click(screen.getByRole("button", { name: "恢复任务" }));
+    await user.click(screen.getByRole("button", { name: "任务操作" }));
+    await user.click(screen.getByRole("button", { name: "永久删除任务" }));
     const dialog = screen.getByRole("dialog", {
-      name: "Delete Session permanently?",
+      name: "永久删除任务？",
     });
     await user.type(
-      within(dialog).getByLabelText("Type DELETE to confirm"),
+      within(dialog).getByLabelText("输入 DELETE 确认"),
       "DELETE",
     );
-    await user.click(
-      within(dialog).getByRole("button", { name: "Delete permanently" }),
-    );
+    await user.click(within(dialog).getByRole("button", { name: "永久删除" }));
 
-    expect(await screen.findByText("Permanent deletion pending")).toBeVisible();
-    expect(backend.callsFor("POST", "/messages")).toHaveLength(2);
+    expect(await screen.findByText("正在永久删除")).toBeVisible();
+    expect(backend.callsFor("POST", "/messages")).toHaveLength(1);
     expect(backend.callsFor("POST", "/interrupt")).toHaveLength(1);
     expect(
       backend.callsFor("DELETE", `/sessions/${backend.sessionId}`),

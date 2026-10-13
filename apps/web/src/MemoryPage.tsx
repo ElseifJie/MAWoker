@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { presentMemory } from "./memory-presentation.js";
 import {
   ApiClientError,
   apiClient,
@@ -55,18 +56,18 @@ function memoryError(error: unknown): string {
   if (error instanceof ApiClientError) {
     switch (error.code) {
       case "MEMORY_BUSY":
-        return "Memory is busy. Wait for the current operation.";
+        return "记忆正在处理中，请等待当前操作完成。";
       case "MEMORY_CONFLICT":
-        return "Memory content changed. Reload before editing.";
+        return "记忆内容已变更，请重新加载后编辑。";
       case "MEMORY_INVALID":
-        return "Check the path and content. Credentials cannot be stored in memory.";
+        return "请检查路径和内容；记忆中不能保存凭证。";
       case "MEMORY_CAPACITY":
-        return "Memory capacity exceeded. Use smaller entries or compress your memory.";
+        return "记忆容量已达上限，请精简内容。";
       case "MEMORY_REPAIR_REQUIRED":
-        return "Memory requires repair. Contact support.";
+        return "记忆需要修复，请联系管理员。";
     }
   }
-  return "Memory could not be loaded or updated. Retry when your connection is available.";
+  return "记忆无法加载或更新，请检查连接后重试。";
 }
 
 function formatBytes(bytes: number): string {
@@ -236,35 +237,35 @@ function MemoryStoreList({
   }, [account, reload]);
 
   return (
-    <div className="page page--wide">
+    <div className="page page--wide memory-overview">
       <PageHeader
-        title="Memory Stores"
-        description="Persistent memory for Agents, provisioned automatically with your sessions and mounted read-write at runtime."
+        title="个人记忆"
+        description="助手可读取和记录个人记忆；自动整理单独控制。不使用记忆的任务仍会保存对话。"
       />
       {error ? <Alert tone="danger">{error}</Alert> : null}
       {!list ? (
         error ? (
           <EmptyState
-            title="Memory Store unavailable"
+            title="个人记忆暂不可用"
             action={
               <Button onClick={() => setReload((value) => value + 1)}>
-                Retry
+                重试
               </Button>
             }
           />
         ) : (
-          <Spinner label="Loading memory" />
+          <Spinner label="正在加载记忆" />
         )
       ) : (
-        <DataTable caption="Memory Stores">
+        <DataTable caption="个人记忆">
           <thead>
             <tr>
-              <th scope="col">Name/ID</th>
-              <th scope="col">Sessions</th>
-              <th scope="col">Memories</th>
-              <th scope="col">Storage</th>
-              <th scope="col">Updated</th>
-              <th scope="col">Actions</th>
+              <th scope="col">名称</th>
+              <th scope="col">关联任务</th>
+              <th scope="col">记忆条目</th>
+              <th scope="col">容量</th>
+              <th scope="col">更新时间</th>
+              <th scope="col">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -272,24 +273,24 @@ function MemoryStoreList({
               className="memory-store-row"
               onClick={() => navigate("/context/store")}
             >
-              <td data-label="Name/ID">
-                <span className="memory-store-name">Personal Memory</span>
+              <td data-label="名称">
+                <span className="memory-store-name">个人记忆</span>
                 <span className="memory-store-id">{list.store.id}</span>
               </td>
-              <td data-label="Sessions">
+              <td data-label="关联任务">
                 <span className="memory-store-count">{list.sessionCount}</span>
               </td>
-              <td data-label="Memories">{list.capacity.count}</td>
-              <td data-label="Storage">{formatBytes(list.capacity.bytes)}</td>
-              <td data-label="Updated">
+              <td data-label="记忆条目">{list.capacity.count}</td>
+              <td data-label="容量">{formatBytes(list.capacity.bytes)}</td>
+              <td data-label="更新时间">
                 {formatDateTime(list.store.updatedAt)}
               </td>
-              <td data-label="Actions">
+              <td data-label="操作">
                 <Button
                   variant="text"
                   onClick={() => navigate("/context/store")}
                 >
-                  View
+                  查看记忆
                 </Button>
               </td>
             </tr>
@@ -428,13 +429,11 @@ function MemoryStoreDetail({
           setState(result.state);
           setError(null);
           if (next.run?.stage === "failed") {
-            setError(next.run.error ?? "Memory operation failed.");
+            setError(next.run.error ?? "记忆操作失败。");
             setFeedback(null);
           } else if (accepted.current) {
             const action = accepted.current;
-            setFeedback(
-              action === "Save" ? "Memory saved." : "Memory deleted.",
-            );
+            setFeedback(action === "Save" ? "记忆已保存。" : "记忆已删除。");
             if (action === "Save") {
               const savedPath = editorRef.current?.path;
               const savedEntry = result.entries.find(
@@ -488,7 +487,9 @@ function MemoryStoreDetail({
       if (action) {
         accepted.current = action;
         setFeedback(
-          `${action} queued; ${action === "Save" ? "not saved" : "not deleted"} yet.`,
+          action === "Save"
+            ? "保存已排队，尚未保存。"
+            : "删除已排队，尚未删除。",
         );
       }
       setState(next);
@@ -508,7 +509,7 @@ function MemoryStoreDetail({
       const next = await apiClient.recoverMemory();
       if (!alive.current) return;
       setState(next);
-      setFeedback("Repair accepted; memory resumes in the background.");
+      setFeedback("已接受修复请求，后台将继续处理。");
     } catch (repairError) {
       handleError(repairError);
     } finally {
@@ -525,7 +526,7 @@ function MemoryStoreDetail({
       const next = await apiClient.cancelMemory();
       if (!alive.current) return;
       setState(next);
-      setFeedback("Operation cancelled.");
+      setFeedback("操作已取消。");
       setReload((value) => value + 1);
     } catch (cancelError) {
       handleError(cancelError);
@@ -548,36 +549,50 @@ function MemoryStoreDetail({
         className="memory-back"
         onClick={() => navigate("/context")}
       >
-        ‹ Memory Stores
+        ‹ 返回个人记忆
       </Button>
+      <PageHeader
+        title="编辑个人记忆"
+        description="查看与编辑已保存的记忆；原始路径和版本校验仍用于安全更新。"
+      />
 
       {error ? <Alert tone="danger">{error}</Alert> : null}
       {versionNotice ? <Alert tone="warning">{versionNotice}</Alert> : null}
+      {running || (state !== null && state.status !== "active") ? (
+        <Alert tone="warning">
+          记忆正在准备或维护中，暂时不能编辑。
+          <Button variant="text" onClick={() => navigate("/?temporary=true")}>
+            另开不使用记忆的任务
+          </Button>
+        </Alert>
+      ) : null}
       {running ? (
         <Alert tone="info">
-          Memory consolidation is running. This is a point-in-time read of the
-          live store and may show changes being applied; the page refreshes and
-          editing unlocks when it finishes.
+          自动整理正在运行。当前内容可能包含整理中的变更，完成后会刷新并恢复编辑。
         </Alert>
       ) : null}
       {feedback ? (
         <Alert tone={running ? "info" : "success"}>{feedback}</Alert>
       ) : null}
 
-      {!list && !error ? <Spinner label="Loading memory" /> : null}
+      {!list && !error ? <Spinner label="正在加载记忆" /> : null}
 
       {state ? (
         <>
           <header className="memory-detail__header">
             <div className="memory-detail__title">
-              <h2>Personal Memory</h2>
+              <h2>记忆状态</h2>
               <Badge tone={running ? "warning" : "neutral"}>
-                {state.status}
+                {{
+                  active: "可用",
+                  provisioning: "准备中",
+                  draining: "等待任务结束",
+                  applying: "应用中",
+                  repairing: "修复中",
+                }[state.status] ?? state.status}
               </Badge>
               {running ? (
-                <span className="memory-detail__running">
-                  Consolidating memories…
-                </span>
+                <span className="memory-detail__running">正在整理记忆…</span>
               ) : null}
             </div>
             <div className="memory-detail__actions">
@@ -592,14 +607,14 @@ function MemoryStoreDetail({
                     )
                   }
                 />
-                Auto consolidation
+                自动整理
               </label>
               <Button
                 variant="secondary"
                 disabled={pending}
                 onClick={() => setReload((value) => value + 1)}
               >
-                Refresh
+                刷新
               </Button>
               {running ? (
                 <Button
@@ -607,7 +622,7 @@ function MemoryStoreDetail({
                   loading={cancelPending}
                   onClick={() => void cancelOperation()}
                 >
-                  Cancel
+                  取消操作
                 </Button>
               ) : null}
               {state.status === "repairing" ? (
@@ -616,7 +631,7 @@ function MemoryStoreDetail({
                   loading={repairPending}
                   onClick={() => void repair()}
                 >
-                  Repair
+                  修复
                 </Button>
               ) : null}
             </div>
@@ -628,11 +643,11 @@ function MemoryStoreDetail({
             {list ? (
               <>
                 <span>
-                  Memories: {list.capacity.count} (
+                  记忆条目：{list.capacity.count} (
                   {formatBytes(list.capacity.bytes)})
                 </span>
-                <span>Sessions: {list.sessionCount}</span>
-                <span>Updated: {formatDateTime(list.store.updatedAt)}</span>
+                <span>关联任务：{list.sessionCount}</span>
+                <span>更新于 {formatDateTime(list.store.updatedAt)}</span>
               </>
             ) : null}
           </p>
@@ -642,151 +657,188 @@ function MemoryStoreDetail({
       {!list ? (
         error ? (
           <EmptyState
-            title="Memory Store unavailable"
+            title="个人记忆暂不可用"
             action={
               <Button onClick={() => setReload((value) => value + 1)}>
-                Retry
+                重试
               </Button>
             }
           />
         ) : null
       ) : (
-        <div className="memory-detail__body">
-          <aside className="memory-tree" aria-label="Memory files">
-            <div className="memory-tree__head">
-              <span>Files</span>
-              <span className="memory-tree__count">{entries.length}</span>
-            </div>
-            <PathTree
-              nodes={tree}
-              selectedPath={editor?.path ?? null}
-              disabled={pending}
-              onSelect={(node) => {
-                const entry = entries.find((item) => item.path === node.path);
-                if (!entry) return;
-                setEditor(entry);
-                setBaseHash(entry.hash ?? null);
-                setVersionNotice(null);
-                setExisting(true);
-                setFeedback(null);
-              }}
-            />
-            <div className="memory-tree__footer">
-              <Button
-                variant="text"
-                disabled={blocked}
-                onClick={() => {
-                  setEditor({ path: "", content: "" });
-                  setBaseHash(null);
+        <>
+          <section className="memory-catalog" aria-label="记忆分类与来源">
+            <h2>偏好、事实与协作习惯</h2>
+            <p>
+              关闭自动整理只停止后台整理，不会关闭助手原生记忆读写。删除任务与删除记忆是独立操作。
+            </p>
+            <ul className="memory-catalog__list">
+              {entries.map((entry) => (
+                <li key={entry.path}>
+                  <Button
+                    variant="text"
+                    onClick={() => {
+                      setEditor(entry);
+                      setBaseHash(entry.hash ?? null);
+                      setExisting(true);
+                      setVersionNotice(null);
+                    }}
+                  >
+                    {presentMemory(entry).category} ·{" "}
+                    {entry.path.split("/").at(-1)}
+                  </Button>
+                  <p>{entry.content.slice(0, 300)}</p>
+                  <p className="muted">{presentMemory(entry).source}</p>
+                </li>
+              ))}
+            </ul>
+          </section>
+          <div className="memory-detail__body">
+            <aside className="memory-tree" aria-label="记忆文件">
+              <div className="memory-tree__head">
+                <span>路径浏览</span>
+                <span className="memory-tree__count">{entries.length}</span>
+              </div>
+              <PathTree
+                nodes={tree}
+                selectedPath={editor?.path ?? null}
+                disabled={pending}
+                onSelect={(node) => {
+                  const entry = entries.find((item) => item.path === node.path);
+                  if (!entry) return;
+                  setEditor(entry);
+                  setBaseHash(entry.hash ?? null);
                   setVersionNotice(null);
-                  setExisting(false);
+                  setExisting(true);
                   setFeedback(null);
                 }}
-              >
-                + New memory
-              </Button>
-            </div>
-          </aside>
-
-          <section className="memory-editor" aria-label="Memory editor">
-            {editor ? (
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  // `hash` is read metadata, never a writable field.
-                  const entry = { path: editor.path, content: editor.content };
-                  if (existing && baseHash === null) {
-                    // Never fall back to an unversioned write: re-read once.
-                    // The notice survives the refresh; the draft is re-based
-                    // only if the server content is byte-identical.
-                    setAwaitingVersionFor(entry.path);
-                    setVersionNotice(
-                      "This entry was read without a version. The page refreshed; if saving is still blocked, refresh the page or update the client.",
-                    );
-                    setReload((value) => value + 1);
-                    return;
-                  }
-                  void mutate(
-                    () =>
-                      apiClient.writeMemory(
-                        existing && baseHash !== null
-                          ? { ...entry, expectedHash: baseHash }
-                          : entry,
-                      ),
-                    "Save",
-                  );
-                }}
-              >
-                <Field
-                  label="Path"
-                  hint="Use /memories/, /procedures/, /episodes/, or /resources/."
+              />
+              <div className="memory-tree__footer">
+                <Button
+                  variant="text"
+                  disabled={blocked}
+                  onClick={() => {
+                    setEditor({ path: "", content: "" });
+                    setBaseHash(null);
+                    setVersionNotice(null);
+                    setExisting(false);
+                    setFeedback(null);
+                  }}
                 >
-                  <Input
-                    value={editor.path}
-                    required
-                    maxLength={512}
-                    disabled={blocked || existing}
-                    onChange={(event) =>
-                      setEditor({ ...editor, path: event.target.value })
+                  + 新建记忆
+                </Button>
+              </div>
+            </aside>
+
+            <section className="memory-editor" aria-label="记忆编辑器">
+              {editor ? (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    // `hash` is read metadata, never a writable field.
+                    const entry = {
+                      path: editor.path,
+                      content: editor.content,
+                    };
+                    if (existing && baseHash === null) {
+                      // Never fall back to an unversioned write: re-read once.
+                      // The notice survives the refresh; the draft is re-based
+                      // only if the server content is byte-identical.
+                      setAwaitingVersionFor(entry.path);
+                      setVersionNotice(
+                        "当前条目缺少版本信息，已重新读取；仍无法保存时请刷新页面或更新客户端。",
+                      );
+                      setReload((value) => value + 1);
+                      return;
                     }
-                  />
-                </Field>
-                <Field label="Content">
-                  <Textarea
-                    rows={16}
-                    value={editor.content}
-                    disabled={blocked}
-                    onChange={(event) =>
-                      setEditor({ ...editor, content: event.target.value })
-                    }
-                  />
-                </Field>
-                <Field label="Protected">
-                  <Input
-                    type="checkbox"
-                    checked={
-                      state?.protectedPaths.includes(editor.path) ?? false
-                    }
-                    disabled={blocked || !existing}
-                    onChange={(event) =>
-                      void mutate(() =>
-                        apiClient.protectMemory(
-                          editor.path,
-                          event.target.checked,
+                    void mutate(
+                      () =>
+                        apiClient.writeMemory(
+                          existing && baseHash !== null
+                            ? { ...entry, expectedHash: baseHash }
+                            : entry,
                         ),
-                      )
-                    }
-                  />
-                </Field>
-                <div className="memory-editor__actions">
-                  <Button
-                    type="submit"
-                    disabled={blocked || !editor.path}
-                    loading={pending}
+                      "Save",
+                    );
+                  }}
+                >
+                  <Field
+                    label="路径"
+                    hint="可使用 /memories/、/procedures/、/episodes/ 或 /resources/。"
                   >
-                    Save
-                  </Button>
-                  {existing ? (
-                    <Button
-                      variant="danger"
+                    <Input
+                      value={editor.path}
+                      required
+                      maxLength={512}
+                      disabled={blocked || existing}
+                      onChange={(event) =>
+                        setEditor({ ...editor, path: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field label="内容">
+                    <Textarea
+                      rows={16}
+                      value={editor.content}
                       disabled={blocked}
-                      onClick={() =>
-                        void mutate(
-                          () => apiClient.removeMemory(editor.path),
-                          "Delete",
+                      onChange={(event) =>
+                        setEditor({ ...editor, content: event.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field
+                    label="保护（仅限制后台整理）"
+                    hint="保护不会关闭助手原生记忆写入；维护期间仍需等待锁释放。"
+                  >
+                    <Input
+                      type="checkbox"
+                      checked={
+                        state?.protectedPaths.includes(editor.path) ?? false
+                      }
+                      disabled={blocked || !existing}
+                      onChange={(event) =>
+                        void mutate(() =>
+                          apiClient.protectMemory(
+                            editor.path,
+                            event.target.checked,
+                          ),
                         )
                       }
+                    />
+                  </Field>
+                  <div className="memory-editor__actions">
+                    <Button
+                      type="submit"
+                      disabled={blocked || !editor.path}
+                      loading={pending}
                     >
-                      Delete
+                      保存
                     </Button>
-                  ) : null}
-                </div>
-              </form>
-            ) : (
-              <EmptyState title="Select a file from the tree to view or edit it." />
-            )}
-          </section>
-        </div>
+                    {existing ? (
+                      <Button
+                        variant="danger"
+                        disabled={blocked}
+                        onClick={() =>
+                          void mutate(
+                            () => apiClient.removeMemory(editor.path),
+                            "Delete",
+                          )
+                        }
+                      >
+                        删除
+                      </Button>
+                    ) : null}
+                  </div>
+                </form>
+              ) : (
+                <EmptyState
+                  title="选择记忆条目后查看或编辑"
+                  description="可从分类卡片或左侧路径浏览中选择。"
+                />
+              )}
+            </section>
+          </div>
+        </>
       )}
     </div>
   );

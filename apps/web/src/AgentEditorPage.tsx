@@ -37,19 +37,19 @@ interface EditorValue {
 function editorErrorMessage(error: unknown): string {
   if (error instanceof ApiClientError) {
     if (error.code === "ARK_CONFLICT") {
-      return "This Agent changed elsewhere. Go back and reopen the editor, then try again.";
+      return "助手配置已在其他位置变更，请返回并重新打开编辑页。";
     }
     if (error.code === "QUOTA_EXCEEDED") {
-      return "Your personal Agent limit has been reached.";
+      return "个人助手数量已达上限。";
     }
     if (error.code === "SKILL_NOT_AVAILABLE") {
-      return "One of the selected Skills is no longer available. Review the list and try again.";
+      return "部分已选技能不可用，请重新选择。";
     }
     if (error.retryable) {
-      return "The Agent service is temporarily unavailable. Try again.";
+      return "助手服务暂不可用，请重试。";
     }
   }
-  return "The Agent could not be saved. Check the fields and try again.";
+  return "助手无法保存，请检查配置后重试。";
 }
 
 function SkillPickList({
@@ -62,7 +62,7 @@ function SkillPickList({
   onToggle: (skillId: string, add: boolean) => void;
 }) {
   return (
-    <ul className="skill-pick-list" aria-label="Available skills">
+    <ul className="skill-pick-list" aria-label="可用技能">
       {available.map((skill) => {
         const picked = selected.includes(skill.id);
         return (
@@ -70,7 +70,7 @@ function SkillPickList({
             <div className="skill-pick-list__label">
               <Puzzle size={14} aria-hidden="true" />
               <span>{skill.displayTitle || skill.fileName}</span>
-              {skill.preset ? <Badge tone="info">Preset</Badge> : null}
+              {skill.preset ? <Badge tone="info">预置</Badge> : null}
             </div>
             <Button
               size="compact"
@@ -78,8 +78,8 @@ function SkillPickList({
               aria-pressed={picked}
               aria-label={
                 picked
-                  ? `Remove ${skill.displayTitle}`
-                  : `Add ${skill.displayTitle}`
+                  ? `移除 ${skill.displayTitle}`
+                  : `添加 ${skill.displayTitle}`
               }
               onClick={() => onToggle(skill.id, !picked)}
             >
@@ -88,7 +88,7 @@ function SkillPickList({
               ) : (
                 <Check size={14} aria-hidden="true" />
               )}
-              {picked ? "Remove" : "Add"}
+              {picked ? "移除" : "添加"}
             </Button>
           </li>
         );
@@ -174,7 +174,7 @@ export function AgentEditorPage({
   }, [agentId]);
 
   function goBack() {
-    navigate("/agents");
+    navigate("/settings/agents");
   }
 
   function toggleSkill(skillId: string, add: boolean) {
@@ -224,10 +224,10 @@ export function AgentEditorPage({
   if (loadFailed) {
     return (
       <div className="page page--wide">
-        <PageHeader title="Agent unavailable" />
-        <Alert tone="danger">The Agent could not be loaded.</Alert>
+        <PageHeader title="助手暂不可用" />
+        <Alert tone="danger">无法加载助手，请返回列表后重试。</Alert>
         <Button variant="secondary" onClick={goBack}>
-          Back to Agents
+          返回助手列表
         </Button>
       </div>
     );
@@ -244,20 +244,20 @@ export function AgentEditorPage({
     <div className="page page--wide agent-editor-page">
       <button type="button" className="agent-editor-back" onClick={goBack}>
         <ArrowLeft size={16} aria-hidden="true" />
-        Agents
+        返回助手列表
       </button>
       <PageHeader
-        title={editing ? "Edit Agent" : "New personal Agent"}
+        title={editing ? "编辑助手" : "创建个人助手"}
         headingRef={headingRef}
         description={
           editing
-            ? "Update the configuration. Existing Sessions keep their Agent snapshot."
-            : "Create a personal Agent, then extend it with the Skills you have uploaded."
+            ? "调整助手配置。已有任务仍保留原来的配置。"
+            : "设置名称、模型与工作方式，再选择助手可使用的技能。"
         }
         actions={
           <>
             <Button variant="secondary" onClick={goBack} disabled={pending}>
-              Cancel
+              取消
             </Button>
             <Button
               type="submit"
@@ -265,7 +265,7 @@ export function AgentEditorPage({
               loading={pending}
               disabled={loading || !value.name.trim() || !value.modelId}
             >
-              {editing ? "Save changes" : "Create Agent"}
+              {editing ? "保存修改" : "创建助手"}
             </Button>
           </>
         }
@@ -273,7 +273,7 @@ export function AgentEditorPage({
 
       {loading ? (
         <div className="skills-loading" aria-busy="true">
-          <Spinner label="Loading Agent" />
+          <Spinner label="正在加载助手" />
         </div>
       ) : (
         <form
@@ -288,12 +288,12 @@ export function AgentEditorPage({
             <header className="agent-form-section__header">
               <span className="agent-form-section__index">01</span>
               <div>
-                <h3 id="agent-section-basic">Basic information</h3>
-                <p>How this Agent is identified across the workspace.</p>
+                <h3 id="agent-section-basic">基本信息</h3>
+                <p>用于在工作区识别与选择助手。</p>
               </div>
             </header>
             <div className="agent-form-section__body">
-              <Field label="Name" hint="Required.">
+              <Field label="名称" hint="必填">
                 <Input
                   value={value.name}
                   maxLength={80}
@@ -303,10 +303,7 @@ export function AgentEditorPage({
                   }
                 />
               </Field>
-              <Field
-                label="Description"
-                hint="Describe the Agent's use case and scope."
-              >
+              <Field label="描述" hint="说明助手适合处理的任务和范围。">
                 <Textarea
                   value={value.description}
                   maxLength={500}
@@ -326,12 +323,12 @@ export function AgentEditorPage({
             <header className="agent-form-section__header">
               <span className="agent-form-section__index">02</span>
               <div>
-                <h3 id="agent-section-model">Model configuration</h3>
-                <p>Only models on the workspace allowlist can be used.</p>
+                <h3 id="agent-section-model">模型配置</h3>
+                <p>只能使用工作区允许的模型。</p>
               </div>
             </header>
             <div className="agent-form-section__body">
-              <Field label="Model">
+              <Field label="模型">
                 <Select
                   value={value.modelId}
                   required
@@ -342,7 +339,7 @@ export function AgentEditorPage({
                   {modelOptions.map((model) => (
                     <option key={model} value={model}>
                       {model}
-                      {model === offAllowlistModel ? " (not allowed)" : ""}
+                      {model === offAllowlistModel ? "（当前不可用）" : ""}
                     </option>
                   ))}
                 </Select>
@@ -357,15 +354,15 @@ export function AgentEditorPage({
             <header className="agent-form-section__header">
               <span className="agent-form-section__index">03</span>
               <div>
-                <h3 id="agent-section-prompt">System Prompt</h3>
-                <p>
-                  Defines the Agent's role, boundaries, and working style — how
-                  it should think, reply, and which rules to follow.
-                </p>
+                <h3 id="agent-section-prompt">工作指令</h3>
+                <p>定义助手的角色、工作方式与边界，以及回答时应遵守的要求。</p>
               </div>
             </header>
             <div className="agent-form-section__body">
-              <Field label="System" hint={`${value.systemPrompt.length}/32000`}>
+              <Field
+                label="系统提示词"
+                hint={`${value.systemPrompt.length}/32000`}
+              >
                 <Textarea
                   value={value.systemPrompt}
                   maxLength={32_000}
@@ -385,15 +382,15 @@ export function AgentEditorPage({
             <header className="agent-form-section__header">
               <span className="agent-form-section__index">04</span>
               <div>
-                <h3 id="agent-section-capabilities">Capability extensions</h3>
-                <p>Attach the capabilities this Agent can use.</p>
+                <h3 id="agent-section-capabilities">技能配置</h3>
+                <p>选择助手执行任务时可用的技能。</p>
               </div>
             </header>
             <div className="agent-capabilities">
               <div
                 className="agent-capabilities__tabs"
                 role="tablist"
-                aria-label="Capability types"
+                aria-label="能力类型"
               >
                 <button
                   type="button"
@@ -404,40 +401,24 @@ export function AgentEditorPage({
                   }
                   onClick={() => setCapabilitiesTab("skills")}
                 >
-                  Skills
+                  技能
                   <span className="agent-capabilities__count">
                     {value.skillIds.length}
                   </span>
                 </button>
-                {["Tools", "Custom tools", "Multi Agents", "MCPs"].map(
-                  (capability) => (
-                    <button
-                      key={capability}
-                      type="button"
-                      role="tab"
-                      aria-selected={false}
-                      disabled
-                      title={`${capability} are not available in this release.`}
-                    >
-                      {capability}
-                    </button>
-                  ),
-                )}
               </div>
               <div className="agent-capabilities__pane">
                 {agent?.isAutoDefault ? (
                   <Alert tone="info">
-                    This is your default Agent. It automatically carries every
-                    Skill in your library, so the list is managed for you.
+                    默认助手会自动同步你的技能库，此处无需手动选择。
                   </Alert>
                 ) : skills === null ? (
                   <div className="skills-loading" aria-busy="true">
-                    <Spinner label="Loading skills" />
+                    <Spinner label="正在加载技能" />
                   </div>
                 ) : skills.length === 0 ? (
                   <p className="agent-capabilities__empty">
-                    You have not uploaded any Skills yet. Skills you upload on
-                    the Skills page can be attached here.
+                    还没有可用技能。上传到技能库后，可在这里添加。
                   </p>
                 ) : capabilitiesTab === "skills" ? (
                   <SkillPickList
@@ -448,8 +429,7 @@ export function AgentEditorPage({
                 ) : null}
                 {selectedSkills.length > 0 && !agent?.isAutoDefault ? (
                   <p className="agent-capabilities__summary">
-                    {selectedSkills.length} Skill
-                    {selectedSkills.length === 1 ? "" : "s"} attached.
+                    已添加 {selectedSkills.length} 个技能。
                   </p>
                 ) : null}
               </div>

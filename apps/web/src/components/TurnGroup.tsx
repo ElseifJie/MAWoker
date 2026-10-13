@@ -6,10 +6,6 @@ import { Markdown } from "./Markdown.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolRow } from "./ToolRow.js";
 
-function pluralize(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
 /**
  * One turn of Agent activity. The summary is the live surface: while the Session
  * is working it names what is happening now, so progress is visible without the
@@ -50,11 +46,11 @@ export function TurnGroup({
   const label =
     stepCount > 0
       ? live
-        ? `Running · ${pluralize(stepCount, "step")}`
-        : pluralize(stepCount, "step")
+        ? `执行中 · ${stepCount} 步`
+        : `执行过程 · ${stepCount} 步`
       : live
-        ? "Running"
-        : "Agent activity";
+        ? "执行中"
+        : "执行过程";
 
   return (
     <details

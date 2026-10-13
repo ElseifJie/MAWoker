@@ -50,10 +50,11 @@ export interface DriveFileRepository {
     runAfter: Date;
     writeLeaseUntil: Date;
   }): PromiseLike<boolean>;
-  /** Commits a staged row; retires the cleanup intent when still pending. */
+  /** Commits staged bytes; artifact copies retain cleanup until association activation. */
   commit(input: {
     id: string;
     ownerUserId: string;
+    signal?: AbortSignal;
   }): PromiseLike<{ record: DriveFileRecord; activated: boolean }>;
   /** Re-arms the cleanup intent after a failed write so the object is reaped. */
   release(id: string, ownerUserId: string): PromiseLike<void>;
@@ -74,6 +75,7 @@ export interface DriveFileRepository {
       mimeType: string;
       sizeBytes: number;
       contentHash?: string;
+      signal?: AbortSignal;
     },
   ): PromiseLike<DriveFileRecord | undefined>;
   /** Marks the bytes unreferenced; the GC reaps them after the retention. */
@@ -214,6 +216,7 @@ export class DriveFileService {
       const committed = await this.dependencies.repository.commit({
         id,
         ownerUserId: input.ownerUserId,
+        ...(context.signal ? { signal: context.signal } : {}),
       });
       if (!committed.activated) {
         // The Session began deleting mid-flight. Re-arm the staging intent so
@@ -274,15 +277,29 @@ export class DriveFileService {
       { contentType: mimeType, contentLength: sizeBytes },
       context.signal,
     );
-    const switched = await this.dependencies.repository.switchObjectKey(
-      record.id,
-      record.ownerUserId,
-      {
-        objectKey: nextKey,
-        mimeType,
-        sizeBytes,
-      },
-    );
+    if (context.signal?.aborted) {
+      await this.dependencies.storage.delete(nextKey);
+      context.signal.throwIfAborted();
+    }
+    let switched: DriveFileRecord | undefined;
+    try {
+      switched = await this.dependencies.repository.switchObjectKey(
+        record.id,
+        record.ownerUserId,
+        {
+          objectKey: nextKey,
+          mimeType,
+          sizeBytes,
+          ...(context.signal ? { signal: context.signal } : {}),
+        },
+      );
+    } catch (error) {
+      await this.dependencies.enqueueLegacyKeyCleanup?.(
+        nextKey,
+        record.ownerUserId,
+      );
+      throw error;
+    }
     if (!switched) {
       // The row is being deleted or was orphaned while we copied: the new
       // bytes are unreferenced garbage, the old row owns its own lifecycle.

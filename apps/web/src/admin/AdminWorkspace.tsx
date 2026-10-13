@@ -6,14 +6,14 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Link, Navigate, Route, Routes } from "react-router-dom";
 import {
   ApiClientError,
   apiClient,
   type AdminPlatformAgent,
   type CurrentUser,
 } from "../api.js";
-import { AppShell, EmptyState, Spinner } from "../ui/index.js";
+import { AppShell, Button, EmptyState, Spinner } from "../ui/index.js";
 import { AdminAuditPage } from "./AdminAuditPage.js";
 import { AdminPlatformAgentsPage } from "./AdminPlatformAgentsPage.js";
 import { AdminSettingsPage } from "./AdminSettingsPage.js";
@@ -125,6 +125,23 @@ export function AdminWorkspace({
       user={{ handle: adminHandle(user.authSubject) }}
       onSignOut={() => void signOut()}
     >
+      <section className="page" aria-label="个人工作区使用指引">
+        <details>
+          <summary>开始使用个人工作区</summary>
+          <p>
+            管理员账户用于配置。完成平台助手配置后，请创建个人使用账户并分配默认助手，
+            再返回登录，以个人账户发起任务。
+          </p>
+          <p>
+            <Link to="/admin/platform-agents">配置平台助手</Link>
+            {" · "}
+            <Link to="/admin/users">创建个人账户并分配默认助手</Link>
+          </p>
+          <Button variant="secondary" onClick={() => void signOut()}>
+            返回登录
+          </Button>
+        </details>
+      </section>
       <Routes>
         <Route
           path="/admin/users"

@@ -50,7 +50,10 @@ export interface ArtifactRepository {
     arkFileId: string,
   ): PromiseLike<ArtifactRecord | undefined>;
   /** Inserts or refreshes the Session→drive-file association. */
-  upsertAssociation(record: ArtifactRecord): PromiseLike<ArtifactRecord>;
+  upsertAssociation(
+    record: ArtifactRecord,
+    signal?: AbortSignal,
+  ): PromiseLike<ArtifactRecord>;
   listOwned(userId: string, sessionId?: string): PromiseLike<ArtifactRecord[]>;
   findOwned(
     userId: string,
@@ -66,6 +69,11 @@ export interface ArtifactRepository {
     id: string,
   ): PromiseLike<ArtifactRecord | undefined>;
   markDeleted(id: string, userId: string): PromiseLike<boolean>;
+  hasInputReferences?(
+    userId: string,
+    driveId: string,
+    objectKey: string,
+  ): PromiseLike<boolean>;
 }
 
 export interface ArtifactStorage {
@@ -87,6 +95,9 @@ interface ArtifactContext {
   userId: string;
   requestId: string;
   signal?: AbortSignal;
+  /** Limit background copying to the inventory attributed to one turn. */
+  sourceFileIds?: string[];
+  refreshExisting?: boolean;
 }
 
 export class ArtifactService {
@@ -108,6 +119,7 @@ export class ArtifactService {
     sessionId: string,
     context: ArtifactContext,
   ): Promise<ArtifactRecord[]> {
+    context.signal?.throwIfAborted();
     const session = await this.dependencies.repository.findSessionOwned(
       context.userId,
       sessionId,
@@ -127,22 +139,33 @@ export class ArtifactService {
         sessionId,
       )) ?? [],
     );
+    context.signal?.throwIfAborted();
+    const sources =
+      context.sourceFileIds === undefined
+        ? null
+        : new Set(context.sourceFileIds);
     // An export with no TOS location has no reachable bytes; Ark's Files API
     // has no content endpoint, so there is nothing to copy.
     const outputs = upstream.filter(
       (artifact): artifact is ArkArtifact & { tos: ArkTosLocation } =>
         artifact.sessionId === session.arkSessionId &&
         artifact.tos !== null &&
+        (sources === null || sources.has(artifact.id)) &&
         !inputFileIds.has(artifact.id),
     );
     const synced: ArtifactRecord[] = [];
     for (const artifact of outputs) {
+      context.signal?.throwIfAborted();
       const existing = await this.dependencies.repository.findBySource(
         context.userId,
         sessionId,
         artifact.id,
       );
       if (existing && existing.deletionState !== "none") continue;
+      if (existing && context.refreshExisting === false) {
+        synced.push(existing);
+        continue;
+      }
 
       let drive: DriveFileRecord | null | undefined;
       if (existing) {
@@ -181,22 +204,26 @@ export class ArtifactService {
       }
 
       const timestamp = (this.dependencies.now ?? (() => new Date()))();
-      const association = await this.dependencies.repository.upsertAssociation({
-        id: existing?.id ?? this.dependencies.createId(),
-        ownerUserId: context.userId,
-        sessionId,
-        arkFileId: artifact.id,
-        driveFileId: drive.id,
-        tosObjectKey: drive.tosObjectKey,
-        name: artifact.name,
-        mimeType: artifact.contentType,
-        sizeBytes: artifact.size,
-        generatedAt: new Date(artifact.createdAt),
-        deletionState: "none",
-        lastErrorCode: null,
-        createdAt: existing?.createdAt ?? timestamp,
-        updatedAt: timestamp,
-      });
+      context.signal?.throwIfAborted();
+      const association = await this.dependencies.repository.upsertAssociation(
+        {
+          id: existing?.id ?? this.dependencies.createId(),
+          ownerUserId: context.userId,
+          sessionId,
+          arkFileId: artifact.id,
+          driveFileId: drive.id,
+          tosObjectKey: drive.tosObjectKey,
+          name: artifact.name,
+          mimeType: artifact.contentType,
+          sizeBytes: artifact.size,
+          generatedAt: new Date(artifact.createdAt),
+          deletionState: "none",
+          lastErrorCode: null,
+          createdAt: existing?.createdAt ?? timestamp,
+          updatedAt: timestamp,
+        },
+        context.signal,
+      );
       synced.push(association);
     }
     return synced;
@@ -253,6 +280,14 @@ export class ArtifactService {
       id,
     );
     if (!artifact) return;
+    if (
+      await this.dependencies.repository.hasInputReferences?.(
+        userId,
+        artifact.driveFileId,
+        artifact.tosObjectKey,
+      )
+    )
+      return;
     await this.dependencies.storage.delete(artifact.tosObjectKey);
     const removed = await this.dependencies.repository.markDeleted(id, userId);
     if (!removed) throw new Error("Artifact index was not removed");

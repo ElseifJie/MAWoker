@@ -24,6 +24,10 @@ export const errorCodeSchema = z.enum([
   "LAST_ACTIVE_ADMIN",
   "INVALID_MULTIPART",
   "INVALID_UPLOAD_NAME",
+  "UPLOAD_TOO_LARGE",
+  "UPLOAD_TOTAL_TOO_LARGE",
+  "SUBMISSION_ADMISSION_PAUSED",
+  "FILE_REUSE_ADMISSION_PAUSED",
   "INVALID_SKILL_PACKAGE",
   "SKILL_NOT_AVAILABLE",
   "QUOTA_EXCEEDED",
@@ -38,8 +42,10 @@ export const errorCodeSchema = z.enum([
   "ARK_REQUEST_REJECTED",
   "ARTIFACT_STORAGE_UNAVAILABLE",
   "ARTIFACT_SOURCE_UNAVAILABLE",
+  "ARTIFACT_RETRY_UNAVAILABLE",
   "SESSION_TERMINATED",
   "SESSION_BUSY",
+  "EVENT_HISTORY_REPAIR_PENDING",
   "MEMORY_BUSY",
   "MEMORY_CONFLICT",
   "MEMORY_INVALID",
@@ -548,3 +554,5 @@ export const capabilities: FeatureCapabilities = {
   vaults: { available: false },
   memoryStores: { available: false },
 };
+
+export * from "./upload-limits.js";

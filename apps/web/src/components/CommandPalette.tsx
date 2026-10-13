@@ -84,7 +84,8 @@ export function CommandPalette({
   return (
     <Dialog
       open={open}
-      title="Command palette"
+      title="快捷操作"
+      closeLabel="关闭快捷操作"
       onClose={onClose}
       initialFocusRef={inputRef}
     >
@@ -97,7 +98,7 @@ export function CommandPalette({
             className="ui-input command-palette__input"
             type="text"
             role="combobox"
-            aria-label="Search commands"
+            aria-label="搜索操作"
             aria-expanded={matches.length > 0}
             aria-controls={listId}
             aria-activedescendant={
@@ -106,7 +107,7 @@ export function CommandPalette({
             aria-autocomplete="list"
             autoComplete="off"
             value={query}
-            placeholder="Search tasks, pages and themes…"
+            placeholder="搜索任务、页面和主题…"
             onChange={(event) => {
               setQuery(event.target.value);
               setActiveIndex(0);
@@ -116,13 +117,13 @@ export function CommandPalette({
         </div>
 
         {matches.length === 0 ? (
-          <p className="command-palette__empty">No matching commands.</p>
+          <p className="command-palette__empty">没有匹配的操作</p>
         ) : (
           <ul
             id={listId}
             className="command-palette__list"
             role="listbox"
-            aria-label="Commands"
+            aria-label="操作"
           >
             {matches.map((command) => {
               const selected = command.id === active?.id;

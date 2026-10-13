@@ -395,6 +395,7 @@ export const sessions = pgTable(
     settlementEvidence: jsonb("settlement_evidence").$type<
       Record<string, unknown>
     >(),
+    deliveryCheckedAt: timestamp("delivery_checked_at", { withTimezone: true }),
     lastEventAt: timestamp("last_event_at", { withTimezone: true }),
     ...timestamps,
   },
@@ -443,6 +444,21 @@ export const sessionEventCursors = pgTable("session_event_cursors", {
   historyBackfilledAt: timestamp("history_backfilled_at", {
     withTimezone: true,
   }),
+  historyScanGeneration: integer("history_scan_generation")
+    .default(0)
+    .notNull(),
+  historyRepairRequired: boolean("history_repair_required")
+    .default(true)
+    .notNull(),
+  historyScannedAt: timestamp("history_scanned_at", { withTimezone: true }),
+  persistedSequence: bigint("persisted_sequence", { mode: "bigint" })
+    .default(sql`0`)
+    .notNull(),
+  historyAttemptedAt: timestamp("history_attempted_at", { withTimezone: true }),
+  historyNextAttemptAt: timestamp("history_next_attempt_at", {
+    withTimezone: true,
+  }),
+  historyFailureCount: integer("history_failure_count").default(0).notNull(),
   recentEventIds: jsonb("recent_event_ids")
     .$type<string[]>()
     .default(sql`'[]'::jsonb`)
@@ -465,6 +481,8 @@ export const sessionEvents = pgTable(
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
     eventId: text("event_id").notNull(),
+    localSequence: bigserial("local_sequence", { mode: "bigint" }).notNull(),
+    historyPosition: bigint("history_position", { mode: "number" }),
     sourceType: text("source_type").notNull(),
     type: text("type").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
@@ -475,10 +493,118 @@ export const sessionEvents = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.sessionId, table.eventId] }),
+    uniqueIndex("session_events_session_sequence_idx").on(
+      table.sessionId,
+      table.localSequence,
+    ),
     index("session_events_session_occurred_idx").on(
       table.sessionId,
       table.occurredAt,
       table.eventId,
+    ),
+  ],
+);
+
+export const sessionTurns = pgTable(
+  "session_turns",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id),
+    sessionId: uuid("session_id").notNull(),
+    boundaryEventId: text("boundary_event_id").notNull(),
+    inputEventId: text("input_event_id").notNull(),
+    outcome: text("outcome").notNull(),
+    summary: text("summary").default("").notNull(),
+    expectedNames: jsonb("expected_names")
+      .$type<string[]>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
+    endedAt: timestamp("ended_at", { withTimezone: true }).notNull(),
+    artifactState: text("artifact_state").default("pending").notNull(),
+    artifactIds: jsonb("artifact_ids")
+      .$type<string[]>()
+      .default(sql`'[]'::jsonb`)
+      .notNull(),
+    usageState: text("usage_state").default("pending").notNull(),
+    errorCode: text("error_code"),
+    retryUntil: timestamp("retry_until", { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("session_turns_boundary_key").on(
+      table.ownerUserId,
+      table.sessionId,
+      table.boundaryEventId,
+    ),
+    unique("session_turns_owner_id_key").on(
+      table.ownerUserId,
+      table.sessionId,
+      table.id,
+    ),
+    foreignKey({
+      name: "session_turns_owner_session_fk",
+      columns: [table.ownerUserId, table.sessionId],
+      foreignColumns: [sessions.ownerUserId, sessions.id],
+    }).onDelete("cascade"),
+    check(
+      "session_turns_outcome_check",
+      sql`${table.outcome} in ('completed','waiting','failed','confirming')`,
+    ),
+    check(
+      "session_turns_artifact_state_check",
+      sql`${table.artifactState} in ('none','pending','syncing','synced','failed')`,
+    ),
+    check(
+      "session_turns_usage_state_check",
+      sql`${table.usageState} in ('pending','complete')`,
+    ),
+    index("session_turns_owner_session_ended_idx").on(
+      table.ownerUserId,
+      table.sessionId,
+      table.endedAt,
+    ),
+  ],
+);
+
+export const userNotifications = pgTable(
+  "user_notifications",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id").notNull(),
+    sessionId: uuid("session_id").notNull(),
+    turnId: uuid("turn_id").notNull(),
+    kind: text("kind").notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    foreignKey({
+      name: "user_notifications_owned_turn_fk",
+      columns: [table.ownerUserId, table.sessionId, table.turnId],
+      foreignColumns: [
+        sessionTurns.ownerUserId,
+        sessionTurns.sessionId,
+        sessionTurns.id,
+      ],
+    }).onDelete("cascade"),
+    unique("user_notifications_round_kind_key").on(
+      table.ownerUserId,
+      table.sessionId,
+      table.turnId,
+      table.kind,
+    ),
+    check(
+      "user_notifications_kind_check",
+      sql`${table.kind} in ('completed','failed','needs_action','sync_failed')`,
+    ),
+    index("user_notifications_owner_created_idx").on(
+      table.ownerUserId,
+      table.createdAt,
     ),
   ],
 );
@@ -553,6 +679,7 @@ export const sessionInputs = pgTable(
     driveFileId: uuid("drive_file_id").references(() => driveFiles.id, {
       onDelete: "set null",
     }),
+    reusedObjectKey: text("reused_object_key"),
     mountPath: text("mount_path").notNull(),
     status: uploadStatus("status").default("uploading").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -579,6 +706,8 @@ export const sessionInputs = pgTable(
       table.sessionId,
     ),
     index("session_inputs_cleanup_idx").on(table.status, table.expiresAt),
+    index("session_inputs_drive_reference_idx").on(table.driveFileId),
+    index("session_inputs_reused_object_idx").on(table.reusedObjectKey),
   ],
 );
 

@@ -58,13 +58,13 @@ function formatBytes(size: number): string {
 function skillErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof ApiClientError) {
     if (error.code === "INVALID_SKILL_PACKAGE") {
-      return "That file is not a valid Skill package. Upload a non-empty .zip archive up to 50 MB.";
+      return "技能包无效，请上传不超过 50 MB 的非空 ZIP 文件。";
     }
     if (error.code === "QUOTA_EXCEEDED") {
-      return "Your Skill could not be synced to your default Agent because the personal Agent quota is exhausted.";
+      return "个人助手额度不足，技能暂时无法同步到默认助手。";
     }
     if (error.retryable) {
-      return "The Skill service is temporarily unavailable. Try again.";
+      return "技能服务暂不可用，请重试。";
     }
   }
   return fallback;
@@ -104,41 +104,50 @@ function SkillCard({
           <FolderArchive size={18} />
         </span>
         <div className="skill-card__title">
-          <h3>{skill.displayTitle || skill.fileName || "Skill"}</h3>
+          <h3>{skill.displayTitle || skill.fileName || "技能"}</h3>
           {skill.name ? (
             <code className="skill-card__name">{skill.name}</code>
           ) : null}
         </div>
-        <Badge tone={skillStatusTone(skill.status)}>{skill.status}</Badge>
+        <Badge tone={skillStatusTone(skill.status)}>
+          {{
+            active: "可用",
+            failed: "失败",
+            provisioning: "准备中",
+            deleting: "删除中",
+          }[skill.status] ?? skill.status}
+        </Badge>
       </div>
       <p className="skill-card__description">
-        {skill.description || "No description"}
+        {skill.description || "暂无描述"}
       </p>
       <div className="skill-card__metadata">
         <span>v{skill.latestVersion}</span>
         <span>{formatBytes(skill.fileSize)}</span>
-        <span>Updated {new Date(skill.updatedAt).toLocaleDateString()}</span>
+        <span>
+          更新于 {new Date(skill.updatedAt).toLocaleDateString("zh-CN")}
+        </span>
       </div>
       {!skill.preset ? (
         <div className="skill-card__actions">
           <Button
             size="compact"
             variant="secondary"
-            aria-label={`Edit ${skill.displayTitle}`}
+            aria-label={`编辑 ${skill.displayTitle}`}
             onClick={() => onEdit(skill)}
           >
             <Pencil size={14} aria-hidden="true" />
-            Edit
+            编辑
           </Button>
           <Button
             size="compact"
             variant="text"
             className="skill-card__delete"
-            aria-label={`Delete ${skill.displayTitle}`}
+            aria-label={`删除 ${skill.displayTitle}`}
             onClick={() => onDelete(skill)}
           >
             <Trash2 size={14} aria-hidden="true" />
-            Delete
+            删除
           </Button>
         </div>
       ) : null}
@@ -247,7 +256,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
             });
       if (!saved.defaultAgentSync.synced) {
         setSyncWarning(
-          "This Skill is saved, but your default Agent could not be re-synced. The next Skill change retries automatically.",
+          "技能已保存，默认助手尚未完成同步。下次技能变更时会自动重试。",
         );
       }
       setEditor(null);
@@ -260,8 +269,8 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
           skillErrorMessage(
             error,
             editor.mode === "create"
-              ? "The Skill could not be created. Check the file and try again."
-              : "The Skill could not be saved. Try again.",
+              ? "技能无法创建，请检查文件后重试。"
+              : "技能无法保存，请重试。",
           ),
         );
       }
@@ -282,9 +291,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       if (isAuthError(error)) {
         onAuthRequired();
       } else {
-        setFeedback(
-          skillErrorMessage(error, "The Skill could not be deleted."),
-        );
+        setFeedback(skillErrorMessage(error, "技能无法删除，请重试。"));
         setDeleteTarget(null);
       }
     } finally {
@@ -303,15 +310,15 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
   const createBlocked = editor?.mode === "create" && !editor.value.file;
 
   return (
-    <div className="page page--wide">
+    <div className="page page--wide skills-page">
       <PageHeader
-        title="Skills"
+        title="技能库"
         headingRef={headingRef}
-        description="Reusable capability packages your Agents can load. Upload once, and your default Agent always carries every Skill you own."
+        description="管理可复用的工作能力。上传技能后，默认助手会自动同步。"
         actions={
           <Button onClick={openCreate}>
             <Plus size={16} aria-hidden="true" />
-            New skill
+            上传技能
           </Button>
         }
       />
@@ -328,7 +335,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       ) : null}
 
       <div className="skills-toolbar">
-        <div className="skills-tabs" role="tablist" aria-label="Skill scope">
+        <div className="skills-tabs" role="tablist" aria-label="技能范围">
           <button
             type="button"
             role="tab"
@@ -336,7 +343,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
             className={scope === "custom" ? "is-active" : undefined}
             onClick={() => setScope("custom")}
           >
-            Custom
+            我的技能
           </button>
           <button
             type="button"
@@ -345,14 +352,14 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
             className={scope === "preset" ? "is-active" : undefined}
             onClick={() => setScope("preset")}
           >
-            Preset
+            预置技能
           </button>
         </div>
         <Input
           type="search"
           className="skills-search"
-          placeholder="Search skills"
-          aria-label="Search skills"
+          placeholder="搜索技能名称"
+          aria-label="搜索技能"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
@@ -360,31 +367,32 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
 
       {loadError ? (
         <EmptyState
-          title="Skills could not be loaded."
+          className="ui-empty-state--page"
+          title="技能无法加载"
           action={
             <Button
               variant="secondary"
               onClick={() => setReloadKey((key) => key + 1)}
             >
-              Retry
+              重试
             </Button>
           }
         />
       ) : list === null ? (
         <div className="skills-loading" aria-busy="true">
-          <Spinner label="Loading skills" />
+          <Spinner label="正在加载技能" />
         </div>
       ) : filtered.length === 0 ? (
         <EmptyState
+          className="ui-empty-state--page"
           title={
             scope === "custom" && !search.trim()
-              ? "No skills yet."
-              : "No matching skills."
+              ? "还没有技能"
+              : "没有匹配的技能"
           }
           {...(scope === "custom" && !search.trim()
             ? {
-                description:
-                  "Create your first Skill — it is added to your default Agent automatically.",
+                description: "上传第一个技能包，将自动同步到默认助手。",
               }
             : {})}
           {...(scope === "custom" && !search.trim()
@@ -392,14 +400,14 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                 action: (
                   <Button variant="secondary" onClick={openCreate}>
                     <Plus size={16} aria-hidden="true" />
-                    New skill
+                    上传技能
                   </Button>
                 ),
               }
             : {})}
         />
       ) : (
-        <ul className="skill-cards" aria-label="Skills">
+        <ul className="skill-cards" aria-label="技能">
           {filtered.map((skill) => (
             <SkillCard
               key={skill.id}
@@ -414,10 +422,10 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
 
       <Dialog
         open={editor !== null}
-        title={editor?.mode === "create" ? "Create skill" : "Edit skill"}
-        eyebrow="Skills"
+        title={editor?.mode === "create" ? "上传技能" : "编辑技能"}
+        eyebrow="技能库"
         onClose={closeEditor}
-        closeLabel="Close skill editor"
+        closeLabel="关闭技能编辑"
         closeDisabled={pending}
         initialFocusRef={editorInitialFocusRef}
         footer={
@@ -428,7 +436,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                 onClick={closeEditor}
                 disabled={pending}
               >
-                Cancel
+                取消
               </Button>
               <Button
                 type="submit"
@@ -436,7 +444,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                 loading={pending}
                 disabled={createBlocked}
               >
-                {editor.mode === "create" ? "Create" : "Save changes"}
+                {editor.mode === "create" ? "上传" : "保存修改"}
               </Button>
             </>
           ) : null
@@ -444,29 +452,6 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       >
         {editor ? (
           <>
-            <div
-              className="skills-source-tabs"
-              role="tablist"
-              aria-label="Source"
-            >
-              <button
-                type="button"
-                className="is-active"
-                role="tab"
-                aria-selected
-              >
-                Local upload
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={false}
-                disabled
-                title="GitHub import is coming soon"
-              >
-                GitHub
-              </button>
-            </div>
             <form
               id="skill-editor-form"
               className="skill-editor-form"
@@ -475,7 +460,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                 void saveSkill();
               }}
             >
-              <Field label="Skill package">
+              <Field label="技能包">
                 <div
                   className={
                     dragActive ? "skill-dropzone is-dragging" : "skill-dropzone"
@@ -495,12 +480,12 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                   ) : (
                     <p>
                       {editor.mode === "create"
-                        ? "Click or drag a Skill package to upload"
-                        : "Replace the package (optional)"}
+                        ? "选择或拖入技能包"
+                        : "替换技能包（可选）"}
                     </p>
                   )}
                   <span className="skill-dropzone__hint">
-                    .zip archive, up to 50 MB
+                    ZIP 文件，最大 50 MB
                   </span>
                   <div className="skill-dropzone__actions">
                     <Button
@@ -508,7 +493,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                       variant="secondary"
                       onClick={() => fileInputRef.current?.click()}
                     >
-                      Choose file
+                      选择文件
                     </Button>
                     {editor.value.file ? (
                       <Button
@@ -516,7 +501,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                         variant="text"
                         onClick={() => acceptFile(null)}
                       >
-                        Remove
+                        移除
                       </Button>
                     ) : null}
                   </div>
@@ -525,21 +510,19 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                     className="file-input"
                     type="file"
                     accept=".zip,application/zip"
-                    aria-label="Skill package file"
+                    aria-label="技能包文件"
                     onChange={onFilePicked}
                     tabIndex={-1}
                   />
                 </div>
               </Field>
-              <Field label="Title">
+              <Field label="标题">
                 <Input
                   ref={editorInitialFocusRef}
                   value={editor.value.displayTitle}
                   maxLength={80}
                   placeholder={
-                    editor.mode === "create"
-                      ? "Defaults to the file name"
-                      : undefined
+                    editor.mode === "create" ? "留空时使用文件名称" : undefined
                   }
                   onChange={(event) =>
                     setEditor({
@@ -552,7 +535,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                   }
                 />
               </Field>
-              <Field label="Description">
+              <Field label="描述">
                 <Textarea
                   value={editor.value.description}
                   maxLength={300}
@@ -580,7 +563,7 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
 
       <Dialog
         open={deleteTarget !== null}
-        title="Delete skill?"
+        title="删除技能？"
         onClose={() => setDeleteTarget(null)}
         closeDisabled={pending}
         hideCloseButton
@@ -594,14 +577,14 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
                 onClick={() => setDeleteTarget(null)}
                 disabled={pending}
               >
-                Cancel
+                取消
               </Button>
               <Button
                 variant="danger"
                 loading={pending}
                 onClick={() => void deleteSkill()}
               >
-                Delete skill
+                删除技能
               </Button>
             </>
           ) : null
@@ -609,9 +592,8 @@ export function SkillsPage({ onAuthRequired }: SkillsPageProps) {
       >
         {deleteTarget ? (
           <p className="skill-dialog-copy">
-            Delete <strong>{deleteTarget.displayTitle}</strong>. Agents that
-            bound it keep working, and your default Agent is updated
-            automatically.
+            删除 <strong>{deleteTarget.displayTitle}</strong>
+            。已绑定该技能的助手仍可继续工作，默认助手会自动更新。
           </p>
         ) : null}
       </Dialog>

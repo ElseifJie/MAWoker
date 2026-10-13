@@ -307,7 +307,7 @@ describe("administrator role routing", () => {
     expect(
       within(navigation).getByRole("link", { name: "Users" }),
     ).toBeInTheDocument();
-    for (const name of ["New task", "My files", "Sessions"]) {
+    for (const name of ["新任务", "我的文件", "历史任务"]) {
       expect(
         within(navigation).queryByRole("link", { name }),
       ).not.toBeInTheDocument();
@@ -332,7 +332,7 @@ describe("administrator role routing", () => {
     renderApp("/admin/users");
 
     expect(
-      await screen.findByRole("heading", { name: "New task" }),
+      await screen.findByRole("heading", { name: "新任务" }),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("navigation", { name: "Administration" }),

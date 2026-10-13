@@ -576,14 +576,14 @@ describe("Page headings", () => {
   it("renders section copy and actions with a level-two heading", () => {
     render(
       <SectionHeader
-        title="Personal Agents"
+        title="我的助手"
         description="Agents available only to you."
         actions={<Button variant="secondary">Refresh</Button>}
       />,
     );
 
     expect(
-      screen.getByRole("heading", { level: 2, name: "Personal Agents" }),
+      screen.getByRole("heading", { level: 2, name: "我的助手" }),
     ).toHaveClass("ui-section-header__title");
     expect(screen.getByText("Agents available only to you.")).toBeVisible();
     expect(
@@ -647,6 +647,7 @@ describe("AppShell", () => {
 
   function renderShell({
     backdropLabel,
+    brandActions,
     children = <button type="button">Page action</button>,
     closeNavigationLabel,
     initialPath = "/agents",
@@ -655,6 +656,7 @@ describe("AppShell", () => {
     onSignOut = vi.fn(),
   }: {
     backdropLabel?: string;
+    brandActions?: React.ReactNode;
     children?: React.ReactNode;
     closeNavigationLabel?: string;
     initialPath?: string;
@@ -669,6 +671,7 @@ describe("AppShell", () => {
           <AppShell
             backdropLabel={backdropLabel}
             brand="Work Agent"
+            brandActions={brandActions}
             closeNavigationLabel={closeNavigationLabel}
             navigationLabel="Workspace"
             navigation={navigation}
@@ -684,6 +687,20 @@ describe("AppShell", () => {
     };
   }
 
+  it.each([false, true])(
+    "renders one reachable brand action on mobile=%s",
+    (mobile) => {
+      setMobileViewport(mobile);
+      renderShell({ brandActions: <button type="button">任务通知</button> });
+      expect(screen.getAllByRole("button", { name: "任务通知" })).toHaveLength(
+        1,
+      );
+      expect(
+        screen.getByRole("button", { name: "任务通知" }),
+      ).not.toHaveAttribute("tabindex", "-1");
+    },
+  );
+
   it("marks the current navigation item active and disconnects from the account menu", async () => {
     setMobileViewport(false);
     const user = userEvent.setup();
@@ -696,9 +713,9 @@ describe("AppShell", () => {
     expect(screen.getByRole("navigation", { name: "Workspace" })).toBeVisible();
 
     await user.click(
-      screen.getByRole("button", { name: "Account: user@example.com" }),
+      screen.getByRole("button", { name: "账号：user@example.com" }),
     );
-    await user.click(screen.getByRole("menuitem", { name: "Disconnect" }));
+    await user.click(screen.getByRole("menuitem", { name: "退出登录" }));
     expect(onSignOut).toHaveBeenCalledOnce();
   });
 
@@ -726,7 +743,7 @@ describe("AppShell", () => {
     ).toHaveAttribute("tabindex", "-1");
     expect(
       screen.getByRole("button", {
-        name: "Account: user@example.com",
+        name: "账号：user@example.com",
         hidden: true,
       }),
     ).toHaveAttribute("tabindex", "-1");
@@ -751,7 +768,7 @@ describe("AppShell", () => {
 
     const firstLink = screen.getByRole("link", { name: "New task" });
     const lastControl = screen.getByRole("button", {
-      name: "Account: user@example.com",
+      name: "账号：user@example.com",
     });
     expect(firstLink).toHaveFocus();
     expect(screen.getByRole("main")).toHaveAttribute("inert");
