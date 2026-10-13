@@ -81,6 +81,17 @@ afterEach(() => {
 });
 
 describe("new task composer and materials", () => {
+  it("labels the assistant selector without repeating its selected name as a hint", () => {
+    vi.spyOn(apiClient, "listArtifacts").mockResolvedValue({ artifacts: [] });
+    render(page());
+    const selector = screen.getByRole("combobox", { name: "助手" });
+    expect(selector).toHaveValue("agent");
+    expect(selector).not.toHaveAccessibleDescription("助手");
+    expect(
+      within(selector).getByRole("option", { selected: true }),
+    ).toHaveTextContent("助手");
+  });
+
   it("accepts a text-only task after StrictMode replay and releases submitting", async () => {
     vi.spyOn(apiClient, "listArtifacts").mockResolvedValue({ artifacts: [] });
     const accepted = { id: "strict-text-session" };

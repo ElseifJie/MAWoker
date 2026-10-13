@@ -129,11 +129,17 @@ function SessionMenu({
     const trigger = containerRef.current?.querySelector<HTMLElement>("button");
     if (trigger) {
       const rect = trigger.getBoundingClientRect();
-      const menuHeight = 208;
-      const opensUp = rect.bottom + menuHeight > window.innerHeight;
+      const menuHeight =
+        panelRef.current?.getBoundingClientRect().height || 280;
+      const opensUp = rect.bottom + menuHeight + 12 > window.innerHeight;
+      const preferredTop = opensUp
+        ? rect.top - menuHeight - 4
+        : rect.bottom + 4;
       setPanelStyle({
-        top: opensUp ? undefined : rect.bottom + 4,
-        bottom: opensUp ? window.innerHeight - rect.top + 4 : undefined,
+        top: Math.max(
+          8,
+          Math.min(preferredTop, window.innerHeight - menuHeight - 8),
+        ),
         right: Math.max(8, window.innerWidth - rect.right),
       });
     }
@@ -148,7 +154,14 @@ function SessionMenu({
       containerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
     };
     // The panel is viewport-anchored, so any scroll would leave it detached.
-    const close = () => setOpen(false);
+    const close = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        panelRef.current?.contains(event.target)
+      )
+        return;
+      setOpen(false);
+    };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     window.addEventListener("resize", close);
@@ -189,6 +202,7 @@ function SessionMenu({
           ref={panelRef}
           style={panelStyle}
         >
+          <div className="session-menu__title">{session.title}</div>
           <button
             type="button"
             role="menuitem"
@@ -327,20 +341,6 @@ function SessionRow({
 
   return (
     <li className="session-row">
-      <IconButton
-        className="session-row__pin"
-        label={pinned ? `取消置顶 ${session.title}` : `置顶 ${session.title}`}
-        size="small"
-        aria-pressed={pinned}
-        disabled={busy}
-        onClick={() => void togglePin()}
-      >
-        {pinned ? (
-          <PinOff size={14} aria-hidden="true" />
-        ) : (
-          <Pin size={14} aria-hidden="true" />
-        )}
-      </IconButton>
       <NavLink
         to={`/sessions/${session.id}`}
         className={({ isActive }) =>
@@ -348,12 +348,21 @@ function SessionRow({
         }
         title={session.title}
       >
-        <span
-          className={`session-row__dot session-row__dot--${session.status}`}
-          aria-hidden="true"
-        />
+        {pinned ? (
+          <Pin
+            className="session-row__pin-indicator"
+            size={13}
+            aria-hidden="true"
+          />
+        ) : (
+          <span
+            className={`session-row__dot session-row__dot--${session.status}`}
+            aria-hidden="true"
+          />
+        )}
         <span className="session-row__title">{session.title}</span>
         <span className="sr-only">
+          {pinned ? "已置顶，" : ""}
           {session.archivedAt ? "已归档" : statusLabels[session.status]}
         </span>
       </NavLink>

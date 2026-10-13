@@ -401,12 +401,9 @@ export function SessionIntro({
   return (
     <div className="page session-intro">
       <div className="session-intro__header">
-        <PageHeader
-          title="新任务"
-          description="描述你希望得到的结果，按需添加材料。"
-        />
+        <PageHeader title="新任务" />
         <Link className="session-intro__settings-link" to="/settings">
-          设置助手与个人记忆
+          助手与记忆设置
         </Link>
       </div>
       {sourceSessionId ? (
@@ -617,13 +614,7 @@ export function SessionIntro({
             </div>
           </div>
           <div className="composer-controls composer-controls--submit">
-            <Field
-              label="助手"
-              hint={
-                agents.agents.find((agent) => agent.id === selectedAgentId)
-                  ?.name ?? "暂无可用助手"
-              }
-            >
+            <Field label="助手">
               <Select
                 className="agent-picker"
                 aria-label="助手"

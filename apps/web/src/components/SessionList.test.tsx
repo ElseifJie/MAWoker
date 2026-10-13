@@ -270,7 +270,7 @@ describe("SessionList", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript");
   });
 
-  it("pins a Session from the row's hover control", async () => {
+  it("pins a Session through its compact action menu", async () => {
     stubFetch((path, method) =>
       path.endsWith("/pin") && method === "PUT"
         ? { ...session(), pinnedAt: "2026-09-11T12:00:00.000Z" }
@@ -284,9 +284,14 @@ describe("SessionList", () => {
     });
 
     const user = userEvent.setup();
-    const pin = screen.getByRole("button", { name: "置顶 Quarterly plan" });
-    expect(pin).toHaveAttribute("aria-pressed", "false");
-    await user.click(pin);
+    expect(
+      screen.queryByRole("button", { name: "置顶 Quarterly plan" }),
+    ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "任务操作：Quarterly plan" }),
+    );
+    expect(screen.getByRole("menu")).toHaveTextContent("Quarterly plan");
+    await user.click(screen.getByRole("menuitem", { name: "置顶" }));
 
     await waitFor(() =>
       expect(onSessionChanged).toHaveBeenCalledWith(
@@ -295,7 +300,7 @@ describe("SessionList", () => {
     );
   });
 
-  it("unpins a pinned Session from the row control", async () => {
+  it("unpins a pinned Session through its action menu", async () => {
     stubFetch((path, method) =>
       path.endsWith("/pin") && method === "DELETE"
         ? { ...session(), pinnedAt: null }
@@ -309,9 +314,10 @@ describe("SessionList", () => {
     });
 
     const user = userEvent.setup();
-    const pin = screen.getByRole("button", { name: "取消置顶 Quarterly plan" });
-    expect(pin).toHaveAttribute("aria-pressed", "true");
-    await user.click(pin);
+    await user.click(
+      screen.getByRole("button", { name: "任务操作：Quarterly plan" }),
+    );
+    await user.click(screen.getByRole("menuitem", { name: "取消置顶" }));
 
     await waitFor(() =>
       expect(onSessionChanged).toHaveBeenCalledWith(

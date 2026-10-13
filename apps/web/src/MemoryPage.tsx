@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { presentMemory } from "./memory-presentation.js";
@@ -127,13 +134,18 @@ function PathTree({
   onSelect: (node: PathNode) => void;
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const render = (level: PathNode[]) =>
+  const indent = (depth: number): CSSProperties =>
+    ({ "--memory-depth": depth }) as CSSProperties;
+  const render = (level: PathNode[], depth = 0) =>
     level.map((node) =>
       node.folder ? (
         <div key={node.path}>
           <button
             type="button"
             className="memory-tree__row memory-tree__row--folder"
+            style={indent(depth)}
+            title={node.path}
+            aria-expanded={!collapsed.has(node.path)}
             onClick={() =>
               setCollapsed((current) => {
                 const next = new Set(current);
@@ -151,13 +163,16 @@ function PathTree({
             <Folder size={14} aria-hidden="true" />
             <span>{node.name}</span>
           </button>
-          {!collapsed.has(node.path) ? render(node.children) : null}
+          {!collapsed.has(node.path) ? render(node.children, depth + 1) : null}
         </div>
       ) : (
         <button
           key={node.path}
           type="button"
           disabled={disabled}
+          style={indent(depth)}
+          title={node.path}
+          aria-pressed={selectedPath === node.path}
           className={
             selectedPath === node.path
               ? "memory-tree__row memory-tree__row--file is-selected"

@@ -102,7 +102,7 @@ export function SessionSearch({
 
   return (
     <div
-      className="ui-dialog-backdrop"
+      className="ui-dialog-backdrop session-search-backdrop"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -185,10 +185,16 @@ export function SessionSearch({
                     onSelect(session);
                   }}
                 >
-                  <span className="session-search__option-title">
+                  <span
+                    className="session-search__option-title"
+                    title={session.title}
+                  >
                     {session.title}
                   </span>
-                  <span className="session-search__option-meta">
+                  <span
+                    className="session-search__option-meta"
+                    title={session.agent.name}
+                  >
                     {session.agent.name}
                     {session.archivedAt ? " · 已归档" : ""}
                   </span>

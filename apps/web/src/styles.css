@@ -315,40 +315,10 @@ select:not(.ui-select):hover {
   background: var(--ui-color-surface-hover);
 }
 
-/* Reserve pin and menu space so focus/hover never move task titles. */
-.session-row__pin {
-  position: absolute;
-  z-index: 1;
-  top: 50%;
-  left: var(--ui-space-1);
-  width: var(--ui-control-height-small);
-  min-height: var(--ui-control-height-small);
-  transform: translateY(-50%);
-  border-color: transparent;
+/* One compact marker leaves the task title most of the row. */
+.session-row__pin-indicator {
+  flex: 0 0 auto;
   color: var(--ui-color-text-muted);
-  background: transparent;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.session-row:focus-within .session-row__pin,
-.session-row__pin:focus-visible {
-  opacity: 1;
-}
-
-.session-row:focus-within .session-row__link,
-.session-row:has(.session-row__pin:focus-visible) .session-row__link {
-  color: var(--ui-color-text);
-}
-
-@media (hover: hover) {
-  .session-row:hover .session-row__pin {
-    opacity: 1;
-  }
-
-  .session-row:hover .session-row__link {
-    color: var(--ui-color-text);
-  }
 }
 
 .session-row__link {
@@ -358,8 +328,7 @@ select:not(.ui-select):hover {
   flex: 1;
   align-items: center;
   gap: var(--ui-space-2);
-  padding: var(--ui-space-2) var(--ui-space-1) var(--ui-space-2)
-    calc(var(--ui-control-height-small) + var(--ui-space-1));
+  padding: var(--ui-space-2);
   border-radius: var(--ui-radius-small);
   color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-control);
@@ -401,13 +370,22 @@ select:not(.ui-select):hover {
 .session-row__title {
   min-width: 0;
   flex: 1;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-row__menu {
   position: relative;
   flex: 0 0 auto;
   padding-right: var(--ui-space-1);
+}
+
+.session-row__menu-trigger {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ui-color-text-muted);
 }
 
 .session-row__busy {
@@ -435,14 +413,25 @@ select:not(.ui-select):hover {
   position: fixed;
   z-index: 40;
   display: grid;
-  min-width: 180px;
+  width: 240px;
+  min-width: 0;
   max-width: calc(100vw - var(--ui-space-6));
+  max-height: calc(100dvh - var(--ui-space-6));
+  overflow-y: auto;
   gap: var(--ui-space-1);
   padding: var(--ui-space-1);
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-medium);
   background: var(--ui-color-surface);
   box-shadow: var(--ui-shadow-overlay);
+}
+
+.session-menu__title {
+  padding: var(--ui-space-2);
+  border-bottom: 1px solid var(--ui-color-border);
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+  overflow-wrap: anywhere;
 }
 
 .session-menu__item {
@@ -521,11 +510,25 @@ select:not(.ui-select):hover {
 }
 
 /* Standalone task search, opened from the sidebar's Search entry. */
+.ui-dialog-backdrop.session-search-backdrop {
+  padding-top: clamp(3rem, 14dvh, 8rem);
+  padding-left: calc(var(--ui-sidebar-width) + var(--ui-space-6));
+  align-items: start;
+  justify-items: center;
+}
+
+@media (max-width: 760px) {
+  .ui-dialog-backdrop.session-search-backdrop {
+    padding-inline: var(--ui-space-4);
+    padding-top: clamp(2rem, 10dvh, 4rem);
+  }
+}
+
 .session-search {
   display: flex;
   min-width: 0;
   min-height: 0;
-  width: min(100%, 620px);
+  width: min(100%, 42rem);
   max-height: min(100%, 720px);
   flex-direction: column;
   overflow: hidden;
@@ -622,7 +625,7 @@ select:not(.ui-select):hover {
 .session-search__option {
   display: flex;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: var(--ui-space-3);
   min-height: var(--ui-control-height-default);
@@ -640,15 +643,19 @@ select:not(.ui-select):hover {
 .session-search__option-title {
   min-width: 0;
   flex: 1 1 10rem;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-search__option-meta {
   min-width: 0;
-  flex: 0 1 auto;
+  flex: 0 1 10rem;
   color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-aux);
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-search__option-time {
@@ -1694,6 +1701,19 @@ select:not(.ui-select):hover {
   margin-bottom: var(--ui-space-6);
 }
 
+.agents-page .ui-section-header__title {
+  font-size: 1rem;
+}
+
+.agents-page .ui-empty-state__title,
+.agents-page .ui-empty-state__description {
+  font-size: var(--ui-font-size-control);
+}
+
+.agents-page .ui-empty-state {
+  padding: var(--ui-space-4);
+}
+
 .agent-records {
   margin: 0;
   padding: 0;
@@ -1731,23 +1751,30 @@ select:not(.ui-select):hover {
 }
 
 .agent-record__heading {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: space-between;
   gap: var(--ui-space-3);
+}
+
+.agent-record__heading > .ui-badge {
+  flex-shrink: 0;
 }
 
 .agent-record__heading h3 {
   min-width: 0;
   margin: 0;
-  overflow-wrap: anywhere;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ui-color-text);
-  font-size: var(--ui-font-size-section);
+  font-size: 0.9375rem;
 }
 
 .agent-record__description {
   margin: var(--ui-space-1) 0 0;
   color: var(--ui-color-text-muted);
-  font-size: var(--ui-font-size-body);
+  font-size: var(--ui-font-size-control);
   line-height: var(--ui-line-height-body);
 }
 
@@ -1789,14 +1816,17 @@ select:not(.ui-select):hover {
 }
 
 .session-page {
+  --ui-transcript-max-width: 100%;
+  --ui-font-size-body: 0.9375rem;
+  --ui-line-height-body: 1.75;
   display: grid;
-  width: min(100%, 1040px);
+  width: 100%;
   min-width: 0;
   max-width: 100%;
   height: 100dvh;
   min-height: 0;
   margin: 0 auto;
-  padding: var(--ui-space-6);
+  padding: var(--ui-space-5) clamp(1rem, 2.5vw, 2rem);
   overflow-y: auto;
   grid-template-rows: auto minmax(8rem, 1fr) auto;
   gap: var(--ui-space-3);
@@ -1823,7 +1853,7 @@ select:not(.ui-select):hover {
 .session-heading h1 {
   margin: 0;
   color: var(--ui-color-text);
-  font-size: var(--ui-font-size-page);
+  font-size: var(--ui-font-size-section-large);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -2861,7 +2891,7 @@ select:not(.ui-select):hover {
 }
 
 .composer-controls--materials {
-  flex: 1 1 25rem;
+  flex: 1 1 19rem;
 }
 
 .composer-controls--materials .ui-button {
@@ -2871,13 +2901,28 @@ select:not(.ui-select):hover {
 
 .composer-controls--submit {
   margin-left: auto;
-  flex: 1 1 22rem;
-  align-items: end;
+  flex: 1 1 19rem;
+  align-items: center;
 }
 
 .composer-controls--submit .ui-field {
   min-width: 0;
-  flex: 1 1 12rem;
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  flex: 1 1 11rem;
+}
+
+.composer-controls--submit .ui-field__label {
+  flex-shrink: 0;
+  color: var(--ui-color-text-muted);
+}
+
+.composer-controls--submit .agent-picker {
+  min-width: 0;
+  width: 100%;
+  flex: 1;
+  text-overflow: ellipsis;
 }
 
 @container new-task (max-width: 30rem) {
@@ -4159,7 +4204,7 @@ select:not(.ui-select):hover {
   display: grid;
   min-width: 0;
   min-height: 480px;
-  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(13rem, 24%) minmax(0, 1fr);
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-medium);
   overflow: hidden;
@@ -4246,20 +4291,22 @@ select:not(.ui-select):hover {
 }
 
 .memory-tree__nodes {
+  min-width: 0;
   flex: 1;
   padding: var(--ui-space-1);
-  overflow-y: auto;
+  overflow: auto;
 }
 
 .memory-tree__row {
   display: flex;
-  min-width: 0;
+  min-width: calc(10rem + var(--memory-depth, 0) * 0.5rem);
   min-height: var(--ui-control-height-default);
-  overflow-wrap: anywhere;
-  gap: var(--ui-space-1);
+  overflow: hidden;
+  gap: var(--ui-space-2);
   align-items: center;
   width: 100%;
   padding: var(--ui-space-1) var(--ui-space-2);
+  padding-left: calc(var(--ui-space-2) + var(--memory-depth, 0) * 0.5rem);
   border: 0;
   border-radius: var(--ui-radius-small, 6px);
   background: none;
@@ -4270,13 +4317,28 @@ select:not(.ui-select):hover {
   cursor: pointer;
 }
 
+.memory-tree__row > svg {
+  flex: 0 0 auto;
+}
+
+.memory-tree__row > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .memory-tree__row--folder {
   color: var(--ui-color-text);
   font-weight: 500;
 }
 
 .memory-tree__row--file {
-  padding-left: var(--ui-space-8);
+  min-width: calc(11.375rem + var(--memory-depth, 0) * 0.5rem);
+  padding-left: calc(
+    var(--ui-space-2) + 1.375rem + var(--memory-depth, 0) * 0.5rem
+  );
   color: var(--ui-color-text-muted);
 }
 

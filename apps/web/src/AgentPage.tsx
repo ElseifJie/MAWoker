@@ -37,7 +37,7 @@ function AgentRecord({
     <li className="agent-record">
       <div className="agent-record__content">
         <div className="agent-record__heading">
-          <h3>{agent.name}</h3>
+          <h3 title={agent.name}>{agent.name}</h3>
           {agent.isAutoDefault ? (
             <Badge tone="info">
               <Lock size={11} aria-hidden="true" />
@@ -48,9 +48,9 @@ function AgentRecord({
             {personal ? "个人" : "平台"}
           </Badge>
         </div>
-        <p className="agent-record__description">
-          {agent.description || "暂无描述"}
-        </p>
+        {agent.description ? (
+          <p className="agent-record__description">{agent.description}</p>
+        ) : null}
         <div className="agent-record__metadata">
           <span>{agent.modelId}</span>
           <span>版本 {agent.version}</span>
@@ -113,7 +113,7 @@ export function AgentPage({
       <PageHeader
         title="助手配置"
         headingRef={pageHeadingRef}
-        description="默认助手会同步你的技能。按需创建其他助手，设置不同模型、提示词和技能。"
+        description="默认助手同步已启用技能。"
         actions={
           <Button
             onClick={() => navigate("/settings/agents/new")}
@@ -158,7 +158,7 @@ export function AgentPage({
         {personalAgents.length === 0 ? (
           <EmptyState
             title="还没有个人助手"
-            description="上传技能可自动准备默认助手，也可以自行创建。"
+            description="上传技能或创建助手即可开始。"
           />
         ) : (
           <ul className="agent-records" aria-label="个人助手">

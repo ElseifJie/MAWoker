@@ -186,6 +186,25 @@ async function openDetail() {
 }
 
 describe("MemoryPage", () => {
+  it("keeps long nested filenames accessible and exposes folder and selection state", async () => {
+    const name = "sesn-20261011171750-7xp6r.md";
+    const path = `/episodes/digest/${name}`;
+    entries.push({ path, content: "Digest", hash: "digest-hash" });
+    await openDetail();
+    const folder = screen.getByRole("button", { name: "digest" });
+    expect(folder).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(folder);
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    fireEvent.click(folder);
+    const file = screen.getByRole("button", { name });
+    expect(file).toHaveAttribute("title", path);
+    fireEvent.click(file);
+    expect(file).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("路径")).toHaveValue(path);
+    expect(screen.getByLabelText("内容")).toHaveValue("Digest");
+  });
+
   it("lists the Memory Store with usage and opens the detail from the row", async () => {
     open();
     expect(
