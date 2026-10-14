@@ -2024,6 +2024,31 @@ select:not(.ui-select):hover {
   padding: var(--ui-space-6) var(--ui-space-1);
 }
 
+.submission-message {
+  margin-bottom: var(--ui-space-6);
+}
+
+.submission-message__status,
+.submission-message__details {
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+  line-height: var(--ui-line-height-control);
+}
+
+.submission-message__status {
+  margin: var(--ui-space-3) 0 var(--ui-space-1);
+}
+
+.submission-message__details summary {
+  cursor: pointer;
+}
+
+.submission-message__details span {
+  display: block;
+  margin-top: var(--ui-space-1);
+  overflow-wrap: anywhere;
+}
+
 .timeline-empty {
   display: grid;
   min-height: 100%;

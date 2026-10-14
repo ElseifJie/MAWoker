@@ -9,6 +9,17 @@ const noticeLabels = {
   danger: "任务已停止",
 } as const;
 
+export function UserMessage({ text }: { text: string }) {
+  return (
+    <>
+      <UserRound size={17} aria-hidden="true" />
+      <div className="transcript__bubble">
+        <Markdown artifactLinks>{text}</Markdown>
+      </div>
+    </>
+  );
+}
+
 /**
  * Renders the folded timeline as turns rather than as a flat event list.
  *
@@ -16,8 +27,15 @@ const noticeLabels = {
  * event lost, none duplicated — stays observable in the DOM even though a tool
  * call and its result now share one row.
  */
-export function Transcript({ blocks }: { blocks: readonly TranscriptBlock[] }) {
+export function Transcript({
+  blocks,
+  showEmptyState = true,
+}: {
+  blocks: readonly TranscriptBlock[];
+  showEmptyState?: boolean;
+}) {
   if (blocks.length === 0) {
+    if (!showEmptyState) return null;
     return (
       <div className="timeline-empty">
         <Bot size={20} aria-hidden="true" />
@@ -36,10 +54,7 @@ export function Transcript({ blocks }: { blocks: readonly TranscriptBlock[] }) {
               className="transcript__row transcript__row--user"
               data-event-id={block.item.id}
             >
-              <UserRound size={17} aria-hidden="true" />
-              <div className="transcript__bubble">
-                <Markdown artifactLinks>{block.item.text}</Markdown>
-              </div>
+              <UserMessage text={block.item.text} />
             </li>
           );
         }

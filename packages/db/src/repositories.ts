@@ -3030,6 +3030,72 @@ export function createRepositories(database: unknown) {
           sql`update sessions set memory_store_id=${memoryStoreId} where id=${sessionId} and owner_user_id=${userId} and ark_session_id like 'pending:%' and create_attempted_at is null and deletion_state='none'`,
         );
       },
+      async resumeVerifiedCreateSubmission(
+        userId: string,
+        id: string,
+        generation: number,
+      ): Promise<boolean> {
+        return db.transaction(async (transaction) => {
+          // The job fences delivery; session-before-receipt matches deletion.
+          const job = await first(
+            transaction,
+            sql`select id from background_jobs
+            where id=${id} and owner_user_id=${userId} and type='reconcile_session'
+              and payload->>'operation'='deliver' and status='succeeded'
+              and locked_by is null and attempts < max_attempts for update`,
+          );
+          if (!job) return false;
+          const owner = await first(
+            transaction,
+            sql`select id from users where id=${userId}
+            and status='active' and role='user' for update`,
+          );
+          if (!owner) return false;
+          const item = await first<SubmissionRow>(
+            transaction,
+            sql`select ${submissionSelection}
+            from message_submissions where id=${id} and owner_user_id=${userId}
+              and status='unknown' and lease_generation=${generation}
+              and last_error_code='ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE'
+              and upstream_event_id is null and content is not null
+              and retain_until > now()`,
+          );
+          if (!item) return false;
+          const session = await first(
+            transaction,
+            sql`select id from sessions
+            where id=${item.sessionId} and owner_user_id=${userId}
+              and ark_session_id not like 'pending:%' and create_attempted_at is not null
+              and config_snapshot_state='verified' and config_snapshot_error_code is null
+              and deletion_state='none' and status <> 'terminated'
+              and not exists(select 1 from message_submissions earlier
+                where earlier.session_id=${item.sessionId} and earlier.sequence < ${item.sequence})
+              and not exists(select 1 from session_events event where event.session_id=${item.sessionId}
+                and event.source_type='user.message') for update`,
+          );
+          if (!session) return false;
+          // Revalidate after acquiring the session. Do not wait on receipt
+          // locks held by expiry/acknowledgement paths in the reverse order.
+          const locked = await first(
+            transaction,
+            sql`select id from message_submissions
+            where id=${id} and owner_user_id=${userId} and session_id=${item.sessionId}
+              and status='unknown' and lease_generation=${generation}
+              and last_error_code='ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE'
+              and upstream_event_id is null and content is not null and retain_until > now()
+            for update skip locked`,
+          );
+          if (!locked) return false;
+          await transaction.execute(sql`update message_submissions set status='queued',last_error_code=null,
+            updated_at=now() where id=${id}`);
+          await transaction.execute(sql`update background_jobs set status='pending',run_after=now(),last_error=null,
+            updated_at=now() where id=${id}`);
+          await transaction.execute(sql`update sessions set message_unknown_outcome=exists(
+            select 1 from message_submissions other where other.session_id=${item.sessionId} and other.status='unknown'),
+            updated_at=now() where id=${item.sessionId} and owner_user_id=${userId}`);
+          return true;
+        });
+      },
       async finishSubmission(
         userId: string,
         id: string,
@@ -3465,7 +3531,8 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`update sessions
                   set ark_session_id = ${upstream.arkSessionId},
-                      status = case when message_in_flight_count > 0 then 'running'::session_status else ${upstream.status}::session_status end,
+                      status = case when status='terminated' or ${upstream.status}='terminated' then 'terminated'::session_status
+                        when message_in_flight_count > 0 then 'running'::session_status else ${upstream.status}::session_status end,
                       model_id = ${upstream.modelId ?? null},
                       config_snapshot = ${
                         upstream.configSnapshot
@@ -3544,7 +3611,8 @@ export function createRepositories(database: unknown) {
               await transaction.execute(
                 sql`update sessions
                       set ark_session_id = ${upstream.arkSessionId},
-                          status = case when message_in_flight_count > 0 then 'running'::session_status else ${upstream.status}::session_status end,
+                          status = case when status='terminated' or ${upstream.status}='terminated' then 'terminated'::session_status
+                        when message_in_flight_count > 0 then 'running'::session_status else ${upstream.status}::session_status end,
                           model_id = ${upstream.modelId ?? null},
                           config_snapshot =
                             ${JSON.stringify(upstream.configSnapshot)}::jsonb,
@@ -3559,7 +3627,7 @@ export function createRepositories(database: unknown) {
               await transaction.execute(
                 sql`update sessions
                       set ark_session_id = ${upstream.arkSessionId},
-                          status = ${upstream.status},
+                          status = case when status='terminated' then 'terminated'::session_status else ${upstream.status}::session_status end,
                           updated_at = now()
                     where id = ${id} and owner_user_id = ${userId}`,
               );

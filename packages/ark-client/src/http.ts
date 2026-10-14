@@ -239,15 +239,22 @@ function sessionConfigSnapshot(
   const tools = toolSnapshots(agent.tools);
   const environment = isRecord(environmentValue) ? environmentValue : {};
   const config = isRecord(environment.config) ? environment.config : {};
+  const scope = optionalField(environment, "scope", isNonEmptyString);
   const environmentSnapshot = {
     id: isNonEmptyString(environment.id) ? environment.id : null,
     type: isNonEmptyString(environment.type) ? environment.type : null,
     configType: isNonEmptyString(config.type) ? config.type : null,
-    scope: isNonEmptyString(environment.scope) ? environment.scope : null,
+    scope: scope.value,
   };
-  const environmentComplete = Object.values(environmentSnapshot).every(
-    (field) => field !== null,
-  );
+  // Scope is descriptive metadata omitted by live Session snapshots. Keep
+  // absence honest without treating it as a missing environment identity.
+  const environmentComplete =
+    scope.valid &&
+    [
+      environmentSnapshot.id,
+      environmentSnapshot.type,
+      environmentSnapshot.configType,
+    ].every((field) => field !== null);
 
   return {
     modelId: model.value,

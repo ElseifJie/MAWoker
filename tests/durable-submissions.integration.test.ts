@@ -252,6 +252,151 @@ describe("durable submissions", () => {
   });
 });
 
+async function verifySnapshotResume(
+  f: Awaited<ReturnType<typeof fixture>>,
+  sessionId: string,
+) {
+  f.ark.createSession.mockResolvedValueOnce({
+    ...remoteSession(),
+    configSnapshot: {
+      ...remoteSession().configSnapshot,
+      completeness: "incomplete",
+    },
+  });
+  f.ark.getSession.mockResolvedValue(remoteSession());
+  const processor = new SessionReconciliationProcessor({
+    jobs: f.repositories.jobs,
+    service: f.service,
+    workerId: "snapshot-worker",
+  });
+  await processor.runOnce();
+  expect(
+    (await f.service.get(f.context.userId, sessionId)).submissions?.[0],
+  ).toMatchObject({
+    status: "unknown",
+    lastErrorCode: "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE",
+  });
+  expect(f.ark.submitEvent).not.toHaveBeenCalled();
+  const [receipt] = await f.repositories.sessionLifecycle.listSubmissions(
+    f.context.userId,
+    sessionId,
+  );
+  await f.client.query(
+    "update message_submissions set last_error_code='ARK_WRITE_OUTCOME_UNKNOWN' where id=$1",
+    [receipt!.id],
+  );
+  expect(
+    (
+      await f.service.reconcileSubmission(
+        f.context.userId,
+        sessionId,
+        f.input.submissionId,
+        f.context,
+      )
+    ).status,
+  ).toBe("unknown");
+  expect(f.ark.getSession).not.toHaveBeenCalled();
+  await f.client.query(
+    "update message_submissions set last_error_code='ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE' where id=$1",
+    [receipt!.id],
+  );
+  await f.service.reconcileCreate(sessionId, f.context);
+  expect(
+    await f.repositories.sessionLifecycle.resumeVerifiedCreateSubmission(
+      id(),
+      receipt!.id,
+      receipt!.leaseGeneration,
+    ),
+  ).toBe(false);
+  expect(
+    await f.repositories.sessionLifecycle.resumeVerifiedCreateSubmission(
+      f.context.userId,
+      receipt!.id,
+      receipt!.leaseGeneration + 1,
+    ),
+  ).toBe(false);
+  await f.client.query(
+    "update sessions set deletion_state='pending' where id=$1",
+    [sessionId],
+  );
+  expect(
+    await f.repositories.sessionLifecycle.resumeVerifiedCreateSubmission(
+      f.context.userId,
+      receipt!.id,
+      receipt!.leaseGeneration,
+    ),
+  ).toBe(false);
+  await f.client.query(
+    "update sessions set deletion_state='none' where id=$1",
+    [sessionId],
+  );
+  if (f.client instanceof Pool) {
+    const blocker = await f.client.connect();
+    let resuming: Promise<boolean> | undefined;
+    let lockError: string | null = null;
+    try {
+      await blocker.query("begin");
+      const { rows } = await blocker.query("select pg_backend_pid() as pid");
+      await blocker.query("select id from sessions where id=$1 for update", [
+        sessionId,
+      ]);
+      resuming = f.repositories.sessionLifecycle.resumeVerifiedCreateSubmission(
+        f.context.userId,
+        receipt!.id,
+        receipt!.leaseGeneration,
+      );
+      await expect
+        .poll(
+          async () =>
+            (
+              await f.client.query(
+                "select exists(select 1 from pg_stat_activity where $1=any(pg_blocking_pids(pid))) as blocked",
+                [rows[0].pid],
+              )
+            ).rows[0].blocked,
+        )
+        .toBe(true);
+      try {
+        await blocker.query(
+          "select id from message_submissions where id=$1 for update nowait",
+          [receipt!.id],
+        );
+      } catch (error) {
+        lockError = (error as { code: string }).code;
+      }
+    } finally {
+      await blocker.query("rollback");
+      blocker.release();
+      if (resuming) await resuming;
+    }
+    expect(lockError).toBeNull();
+  }
+  const restored = await Promise.all([
+    f.service.reconcileSubmission(
+      f.context.userId,
+      sessionId,
+      f.input.submissionId,
+      f.context,
+    ),
+    f.service.reconcileSubmission(
+      f.context.userId,
+      sessionId,
+      f.input.submissionId,
+      f.context,
+    ),
+  ]);
+  expect(restored.every((r) => r.status === "queued")).toBe(true);
+  expect(f.ark.submitEvent).not.toHaveBeenCalled();
+  await processor.runOnce();
+  expect(
+    (await f.service.get(f.context.userId, sessionId)).submissions?.[0]?.status,
+  ).toBe("accepted");
+  expect(f.ark.createSession).toHaveBeenCalledTimes(1);
+  expect(f.ark.submitEvent).toHaveBeenCalledTimes(1);
+  await processor.runOnce();
+  expect(f.ark.submitEvent).toHaveBeenCalledTimes(1);
+}
+
 async function makeDeliverable(
   f: Awaited<ReturnType<typeof fixture>>,
   sessionId: string,
@@ -518,6 +663,68 @@ describe("durable submission safety", () => {
 });
 
 describe("durable worker delivery", () => {
+  it.each(["local", "remote", "during-refresh"])(
+    "never resumes a terminated snapshot-blocked task: %s",
+    async (kind) => {
+      const f = await fixture();
+      try {
+        const session = await f.service.create(f.input, f.context);
+        f.ark.createSession.mockResolvedValueOnce({
+          ...remoteSession(),
+          configSnapshot: {
+            ...remoteSession().configSnapshot,
+            completeness: "incomplete",
+          },
+        });
+        const processor = new SessionReconciliationProcessor({
+          jobs: f.repositories.jobs,
+          service: f.service,
+          workerId: "stop-check",
+        });
+        await processor.runOnce();
+        f.ark.getSession.mockImplementation(async () => {
+          if (kind === "during-refresh")
+            await f.client.query(
+              "update sessions set status='terminated' where id=$1",
+              [session.id],
+            );
+          return {
+            ...remoteSession(),
+            status: kind === "remote" ? "terminated" : "idle",
+          };
+        });
+        if (kind === "local")
+          await f.client.query(
+            "update sessions set status='terminated' where id=$1",
+            [session.id],
+          );
+        const result = await f.service.reconcileSubmission(
+          f.context.userId,
+          session.id,
+          f.input.submissionId,
+          f.context,
+        );
+        expect(result.status).toBe("unknown");
+        expect((await f.service.get(f.context.userId, session.id)).status).toBe(
+          "terminated",
+        );
+        expect(f.ark.submitEvent).not.toHaveBeenCalled();
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  it("resumes only a verified pre-message snapshot failure in the same session without recreating or double sending", async () => {
+    const f = await fixture();
+    try {
+      const session = await f.service.create(f.input, f.context);
+      await verifySnapshotResume(f, session.id);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("creates the remote session in the worker and safely retries a definite rejection", async () => {
     const f = await fixture();
     try {
@@ -749,6 +956,7 @@ const postgresUrl = process.env.TEST_POSTGRES_URL;
           ),
         ).toBe(1);
         expect(f.ark.createSession).not.toHaveBeenCalled();
+        await verifySnapshotResume(f, sessions[0]!.id);
       } finally {
         await pool.end();
         await administration.query(

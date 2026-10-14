@@ -177,7 +177,19 @@ describe("B1 task page", () => {
       "确认中",
     );
     expect(screen.queryByText("任务信息")).toBeNull();
-    expect(screen.getByText(/发送结果确认中.*request/)).toBeInTheDocument();
+    expect(
+      screen.getByText("正在核实消息发送结果，请勿重复发送。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Continue").closest(".transcript__row--user"),
+    ).not.toBeNull();
+    expect(
+      screen
+        .getByText("正在核实消息发送结果，请勿重复发送。")
+        .closest(".transcript__bubble"),
+    ).toBeNull();
+    expect(screen.queryByText("等待任务开始…")).toBeNull();
+    expect(screen.getByText("request")).toBeInTheDocument();
     expect(screen.queryByText("本轮完成")).toBeNull();
   });
   it("shows failure evidence and a next step without implying an idle task succeeded", async () => {

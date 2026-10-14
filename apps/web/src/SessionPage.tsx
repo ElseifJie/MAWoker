@@ -24,7 +24,7 @@ import {
   type SessionSummary,
   type SessionTurn,
 } from "./api.js";
-import { Transcript } from "./components/Transcript.js";
+import { Transcript, UserMessage } from "./components/Transcript.js";
 import { NewMessages } from "./components/NewMessages.js";
 import { TurnStatus } from "./components/TurnStatus.js";
 import { canStopTask, taskStatus } from "./task-status.js";
@@ -824,22 +824,41 @@ function SessionPageContent({
                       event.kind === "user" &&
                       event.id === item.upstreamEventId,
                   ) ? (
-                    <p>{item.content ?? item.acceptedContent}</p>
+                    <div
+                      className="transcript__row transcript__row--user"
+                      data-submission-id={item.submissionId}
+                    >
+                      <UserMessage
+                        text={item.content ?? item.acceptedContent ?? ""}
+                      />
+                    </div>
                   ) : null}
-                  <p role="status">
+                  <p className="submission-message__status" role="status">
                     {item.status === "unknown"
-                      ? "发送结果确认中，请勿重复发送。需要协助时向管理员提供请求号："
+                      ? "正在核实消息发送结果，请勿重复发送。"
                       : item.status === "failed"
-                        ? "发送失败，请求号："
+                        ? "消息发送失败。"
                         : item.status === "accepted"
-                          ? "消息已接受，请求号："
-                          : "消息已排队，请求号："}
-                    {item.submissionId}
-                    {item.errorCode ? ` (${item.errorCode})` : ""}
+                          ? "消息已接受。"
+                          : "消息已排队。"}
                   </p>
+                  <details className="submission-message__details">
+                    <summary>发送详情</summary>
+                    <span>
+                      请求号：<code>{item.submissionId}</code>
+                    </span>
+                    {item.errorCode ? (
+                      <span>
+                        错误码：<code>{item.errorCode}</code>
+                      </span>
+                    ) : null}
+                  </details>
                 </div>
               ))}
-            <Transcript blocks={blocks} />
+            <Transcript
+              blocks={blocks}
+              showEmptyState={!session.submissions?.length}
+            />
           </NewMessages>
         </div>
 

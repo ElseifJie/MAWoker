@@ -2410,9 +2410,12 @@ describe("new task composer", () => {
     expect(
       await screen.findByText("Saved before disconnect"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/发送结果确认中/)).toHaveTextContent(
-      "00000000-0000-4000-8000-000000000099",
-    );
+    expect(
+      screen.getByText("正在核实消息发送结果，请勿重复发送。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("00000000-0000-4000-8000-000000000099"),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "Retry first message" }),
     ).not.toBeInTheDocument();

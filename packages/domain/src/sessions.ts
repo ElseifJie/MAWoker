@@ -161,6 +161,11 @@ export interface SessionRepository {
     sessionId: string,
     memoryStoreId: string,
   ): PromiseLike<void>;
+  resumeVerifiedCreateSubmission?(
+    userId: string,
+    id: string,
+    generation: number,
+  ): PromiseLike<boolean>;
   finishSubmission?(
     userId: string,
     id: string,
@@ -1360,6 +1365,33 @@ export class SessionService {
       await this.dependencies.repository.listSubmissions?.(userId, sessionId)
     )?.find((item) => item.submissionId === submissionId);
     if (!item) throw new ResourceNotFoundError();
+    // This error is emitted by finalizeCreate before submitEvent is called.
+    // It is not an unknown message POST: verify the same cloud identity with
+    // GET, then resume only this retained first submission through its job.
+    if (
+      item.status === "unknown" &&
+      session.status !== "terminated" &&
+      session.deletionState === "none" &&
+      !item.upstreamEventId &&
+      item.lastErrorCode === "ARK_SESSION_CONFIG_SNAPSHOT_INCOMPLETE" &&
+      !session.arkSessionId.startsWith("pending:") &&
+      this.dependencies.repository.resumeVerifiedCreateSubmission
+    ) {
+      await this.reconcileCreate(sessionId, {
+        userId,
+        requestId: context.requestId,
+      });
+      const events = await this.dependencies.ark.listEvents(
+        session.arkSessionId,
+        { correlationId: context.requestId },
+      );
+      if (!events.some((event) => event.type === "user.message"))
+        await this.dependencies.repository.resumeVerifiedCreateSubmission(
+          userId,
+          item.id,
+          item.leaseGeneration,
+        );
+    }
     if (
       item.status === "unknown" &&
       item.upstreamEventId &&

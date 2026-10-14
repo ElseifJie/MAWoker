@@ -805,6 +805,47 @@ describe("HttpArkGateway", () => {
     expect(JSON.stringify(session)).not.toContain("private-bucket");
   });
 
+  it("accepts an omitted Environment scope while retaining its unknown value and verified identity fields", async () => {
+    const environment = { ...arkSessionResponse.environment };
+    delete (environment as Partial<typeof environment>).scope;
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "test",
+      fetch: vi
+        .fn()
+        .mockResolvedValue(
+          Response.json({ ...arkSessionResponse, environment }),
+        ),
+    });
+    expect(
+      (await gateway.getSession("session-1")).configSnapshot,
+    ).toMatchObject({
+      completeness: "complete",
+      environment: {
+        id: environment.id,
+        type: environment.type,
+        configType: environment.config.type,
+        scope: null,
+      },
+    });
+  });
+
+  it("keeps an invalid provided Environment scope incomplete", async () => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "test",
+      fetch: vi.fn().mockResolvedValue(
+        Response.json({
+          ...arkSessionResponse,
+          environment: { ...arkSessionResponse.environment, scope: 42 },
+        }),
+      ),
+    });
+    expect(
+      (await gateway.getSession("session-1")).configSnapshot.completeness,
+    ).toBe("incomplete");
+  });
+
   it("uses the Session response parser for get snapshots", async () => {
     const fetch = vi.fn().mockResolvedValue(Response.json(arkSessionResponse));
     const gateway = new HttpArkGateway({
