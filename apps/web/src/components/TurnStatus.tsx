@@ -17,68 +17,51 @@ export function TurnStatus({
 }) {
   const syncFailed = turn.artifactState === "failed";
   const failed = turn.outcome === "failed";
+  const waiting = turn.outcome === "waiting";
+  const showNotice = syncFailed || failed || waiting;
   const label = syncFailed
     ? "结果同步异常"
-    : turn.outcome === "waiting"
-      ? "等待处理"
-      : failed
-        ? "本轮执行失败"
-        : turn.outcome === "confirming"
-          ? "正在确认本轮结果"
-          : turn.artifactState === "synced" || turn.artifactState === "none"
-            ? "本轮完成"
-            : "结果正在后台同步";
+    : failed
+      ? "本轮执行失败"
+      : "等待补充信息";
   return (
     <div className="turn-status">
-      <Alert
-        className="turn-status__alert"
-        tone={syncFailed || failed ? "warning" : "info"}
-      >
-        <div className="turn-status__row">
-          <div>
-            <strong>{label}</strong>
-            <p>
-              {syncFailed
-                ? "文件同步尚未完成，可重试同步或继续补充要求。"
-                : failed
-                  ? "本轮未能完成。可补充要求后重试，或新建后续任务。"
-                  : turn.outcome === "waiting"
-                    ? "助手正在等待你补充信息。"
-                    : turn.outcome === "confirming"
-                      ? "后台正在核对本轮结果，页面关闭后仍会继续。"
-                      : turn.artifactState === "none"
-                        ? "本轮没有生成成果文件。"
-                        : turn.artifactState === "synced"
-                          ? "本轮结果已同步。"
-                          : "后台正在核对本轮结果，页面关闭后仍会继续。"}
-            </p>
+      {showNotice ? (
+        <Alert
+          className="turn-status__alert"
+          tone={syncFailed || failed ? "warning" : "info"}
+        >
+          <div className="turn-status__row">
+            <div>
+              <strong>{label}</strong>
+              <p>
+                {syncFailed
+                  ? "部分成果文件暂不可用。"
+                  : failed
+                    ? "可补充要求后重试，或新建后续任务。"
+                    : "助手需要你补充信息。"}
+              </p>
+            </div>
+            {syncFailed ? (
+              <Button
+                variant="secondary"
+                size="compact"
+                onClick={onRecover}
+                loading={recovering}
+                disabled={disabled}
+              >
+                重试同步
+              </Button>
+            ) : null}
           </div>
-          {syncFailed ? (
-            <Button
-              variant="secondary"
-              size="compact"
-              onClick={onRecover}
-              loading={recovering}
-              disabled={disabled}
-            >
-              重试同步
-            </Button>
-          ) : null}
-        </div>
-        <details className="turn-status__details">
-          <summary>状态详情</summary>
           {turn.errorCode ? (
-            <p>
-              {failed ? "本轮未能完成，错误码：" : "错误码："}
+            <details className="turn-status__details">
+              <summary>错误详情</summary>
               <code>{turn.errorCode}</code>
-            </p>
+            </details>
           ) : null}
-          {turn.usageState === "pending" ? <p>用量统计中</p> : null}
-          <p>
-            回合编号：<code>{turn.id}</code>
-          </p>
-        </details>
-      </Alert>
+        </Alert>
+      ) : null}
       {!hasAnswer && turn.summary ? (
         <section className="turn-status__summary" aria-label="结果摘要">
           <h2>结果摘要</h2>

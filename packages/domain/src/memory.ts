@@ -263,6 +263,20 @@ function ended(events: ArkEvent[]) {
   );
 }
 
+/** GET content may omit trailing whitespace while the stored-byte hash stays
+ * exact. Never trim desired text or replay a write to make readback match. */
+function observedWrite(
+  current: (MemoryText & { contentSha256?: string }) | undefined,
+  step: MemoryStep,
+): boolean {
+  if (step.kind === "delete") return !current;
+  if (!current || current.path !== step.path || step.content === undefined)
+    return false;
+  return current.contentSha256 !== undefined
+    ? current.contentSha256 === hashMemory(step.content)
+    : current.content === step.content;
+}
+
 export class MemoryService {
   private cursor = 0;
   constructor(
@@ -699,6 +713,9 @@ export class MemoryService {
     const state = await this.status(userId);
     const run = state.run;
     if (!run || ["completed", "failed"].includes(run.stage)) return;
+    // A quarantined run waits for explicit, evidence-based recovery. Repeated
+    // polls must not overwrite its cause or churn its revision/timestamp.
+    if (run.stage === "repairing") return;
     // A crashed worker may still have an upstream request in flight: quarantine.
     if (run.pendingOperation || run.steps.some((s) => s.status === "sending")) {
       state.status = "repairing";
@@ -707,7 +724,6 @@ export class MemoryService {
       await this.save(state);
       return;
     }
-    if (run.stage === "repairing") return;
     const ark = this.dependencies.ark;
     try {
       if (run.stage === "queued") {
@@ -958,9 +974,7 @@ export class MemoryService {
           )
             throw error;
         }
-        if (
-          step.kind === "delete" ? !!result : result?.content !== step.content
-        )
+        if (!observedWrite(result, step))
           throw new MemoryError("MEMORY_REPAIR_REQUIRED", "远端内容核验失败");
         step.status = "verified";
         await this.save(state);
@@ -1029,8 +1043,9 @@ export class MemoryService {
     this.cursor = all.length ? (this.cursor + 20) % all.length : 0;
     const eligible = rotated.filter(
       (s) =>
-        activeRun(s) ||
-        (s.status === "active" &&
+        (activeRun(s) && s.run?.stage !== "repairing") ||
+        (!activeRun(s) &&
+          s.status === "active" &&
           this.now() - s.lastMonitorAt >=
             (this.dependencies.monitorIntervalMs ?? 300000)),
     );
@@ -1127,8 +1142,7 @@ export class MemoryService {
       const current = entries.find((e) => e.path === step.path);
       // Successful delete cannot fence a late competing update: absence is
       // accepted only for the exact deletion request, with user ingress closed.
-      const success =
-        step.kind === "delete" ? !current : current?.content === step.content;
+      const success = observedWrite(current, step);
       if (!success)
         throw new MemoryError(
           "MEMORY_REPAIR_REQUIRED",

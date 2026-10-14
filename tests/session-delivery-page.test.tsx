@@ -146,7 +146,7 @@ describe("background delivery page", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByText("结果同步异常")).toBeInTheDocument();
-    expect(screen.getByText("用量统计中")).toBeInTheDocument();
+    expect(screen.queryByText("用量统计中")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "重试同步" }));
     await waitFor(() => expect(retry).toHaveBeenCalledWith("session", "turn"));
     expect(

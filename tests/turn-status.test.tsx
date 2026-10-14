@@ -67,7 +67,7 @@ it("does not claim completed results while the round outcome is still confirming
       onRecover={vi.fn()}
     />,
   );
-  expect(screen.getByRole("status")).not.toHaveTextContent("本轮结果已同步。");
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.getByRole("region", { name: "结果摘要" })).toHaveTextContent(
     "尚待核对的结果",
   );
@@ -88,9 +88,32 @@ it("uses the persisted completed outcome for a round that produced no files", ()
       onRecover={vi.fn()}
     />,
   );
-  expect(screen.getByRole("status")).toHaveTextContent("本轮完成");
-  expect(screen.getByRole("status")).not.toHaveTextContent("后台同步");
+  expect(screen.queryByRole("status")).toBeNull();
   expect(screen.getByRole("region", { name: "结果摘要" })).toHaveTextContent(
     "正文结果",
+  );
+});
+
+it("keeps routine background work out of the conversation while preserving the unique answer", () => {
+  render(
+    <TurnStatus
+      turn={{
+        ...turn,
+        outcome: "completed",
+        artifactState: "pending",
+        errorCode: "ARTIFACT_SYNC_FAILED",
+        summary: "已收到的回答",
+      }}
+      hasAnswer={false}
+      recovering={false}
+      disabled={false}
+      onRecover={vi.fn()}
+    />,
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(screen.queryByText("用量统计中")).toBeNull();
+  expect(screen.queryByText("ARTIFACT_SYNC_FAILED")).toBeNull();
+  expect(screen.getByRole("region", { name: "结果摘要" })).toHaveTextContent(
+    "已收到的回答",
   );
 });

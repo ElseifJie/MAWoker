@@ -186,6 +186,88 @@ async function openDetail() {
 }
 
 describe("MemoryPage", () => {
+  it.each(["保存", "删除"])(
+    "keeps the editor and avoids false success when queued %s enters quarantine",
+    async (action) => {
+      await openDetail();
+      fireEvent.click(screen.getByRole("button", { name: "profile.md" }));
+      fireEvent.change(screen.getByLabelText("内容"), {
+        target: { value: "Unconfirmed draft" },
+      });
+      vi.useFakeTimers();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: action }));
+      });
+      currentState = {
+        ...state,
+        status: "repairing",
+        run: { ...queued.run, stage: "repairing", error: "unconfirmed write" },
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(screen.queryByText(/记忆已保存|记忆已删除/)).toBeNull();
+      expect(screen.getByLabelText("内容")).toHaveValue("Unconfirmed draft");
+      expect(screen.getByLabelText("内容")).toBeDisabled();
+      expect(
+        screen.getByText("更新结果待核验，尚未确认完成。"),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "修复" })).toBeEnabled();
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "修复" }));
+      });
+      currentState = { ...state, run: { ...queued.run, stage: "completed" } };
+      entries =
+        action === "保存"
+          ? entries.map((entry) =>
+              entry.path === "/memories/profile.md"
+                ? {
+                    ...entry,
+                    content: "Unconfirmed draft",
+                    hash: "confirmed-hash",
+                  }
+                : entry,
+            )
+          : entries.filter((entry) => entry.path !== "/memories/profile.md");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(
+        screen.getByText(action === "保存" ? "记忆已保存。" : "记忆已删除。"),
+      ).toBeInTheDocument();
+      if (action === "保存")
+        expect(screen.getByLabelText("内容")).toHaveValue("Unconfirmed draft");
+      else expect(screen.queryByLabelText("内容")).toBeNull();
+    },
+  );
+
+  it("shows quarantine as requiring verification without polling or claiming automatic processing", async () => {
+    currentState = {
+      ...state,
+      status: "repairing",
+      run: {
+        ...queued.run,
+        kind: "edit",
+        stage: "repairing",
+        error: "verification required",
+      },
+    };
+    await openDetail();
+    expect(screen.getByText("待核验")).toBeInTheDocument();
+    expect(screen.queryByText(/自动整理正在运行|正在整理记忆/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "取消操作" })).toBeNull();
+    expect(screen.getByRole("button", { name: "修复" })).toBeEnabled();
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+    });
+    expect(
+      fetchMock.mock.calls.filter(([url]) => url === "/api/v1/memory/status"),
+    ).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "profile.md" }));
+    expect(screen.getByLabelText("内容")).toBeDisabled();
+  });
+
   it("keeps long nested filenames accessible and exposes folder and selection state", async () => {
     const name = "sesn-20261011171750-7xp6r.md";
     const path = `/episodes/digest/${name}`;
@@ -199,6 +281,7 @@ describe("MemoryPage", () => {
     fireEvent.click(folder);
     const file = screen.getByRole("button", { name });
     expect(file).toHaveAttribute("title", path);
+    expect(file).toHaveTextContent("会话摘要 · 10/11 17:17");
     fireEvent.click(file);
     expect(file).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByLabelText("路径")).toHaveValue(path);
@@ -256,11 +339,7 @@ describe("MemoryPage", () => {
     // The files render and an informational banner explains the refresh;
     // only editing stays gated on the run.
     expect(screen.getByText("路径浏览")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "自动整理正在运行。当前内容可能包含整理中的变更，完成后会刷新并恢复编辑。",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText("更新中，暂不可编辑。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ 新建记忆" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "取消操作" })).toBeEnabled();
   });
@@ -388,7 +467,7 @@ describe("MemoryPage", () => {
       await vi.advanceTimersByTimeAsync(2000);
     });
     expect(screen.getByText("记忆已删除。")).toBeInTheDocument();
-    expect(screen.getByText(/选择记忆条目后查看或编辑/)).toBeInTheDocument();
+    expect(screen.getByText(/选择一条记忆/)).toBeInTheDocument();
   });
   it("shows a conflict without claiming that a save was accepted", async () => {
     await openDetail();
@@ -406,7 +485,7 @@ describe("MemoryPage", () => {
       status: "repairing",
       run: {
         kind: "dream",
-        stage: "修复中",
+        stage: "repairing",
         error: "Memory operation failed. Reload or contact support.",
         before: null,
         after: null,
@@ -415,7 +494,7 @@ describe("MemoryPage", () => {
     await openDetail();
     // The stuck store stays readable; only editing is gated on the repair.
     expect(screen.getByText("路径浏览")).toBeInTheDocument();
-    expect(screen.getByText("修复中")).toBeInTheDocument();
+    expect(screen.getByText("待核验")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "修复" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "修复" }));
     expect(await screen.findByText(/已接受修复请求/)).toBeInTheDocument();

@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool, type PoolClient } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createMemoryRepository,
   createRepositories,
   type MemoryState,
 } from "../packages/db/src/index.js";
+import { MemoryService } from "../packages/domain/src/memory.js";
+import { InMemoryArkGateway } from "../packages/ark-client/src/index.js";
 import type { SessionRecord } from "../packages/domain/src/sessions.js";
 
 const databaseUrl = process.env.TEST_POSTGRES_URL;
@@ -201,6 +203,81 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
       updatedAt: now,
     };
   }
+
+  it("recovers a hash-confirmed quarantined write with one CAS winner and no remote replay", async () => {
+    const userId = await addUser();
+    const repository = createMemoryRepository(drizzle(workerPool));
+    const ark = new InMemoryArkGateway();
+    const service = new MemoryService({ repository, ark, modelId: "model-a" });
+    const contender = new MemoryService({
+      repository: createMemoryRepository(drizzle(workerPool)),
+      ark,
+      modelId: "model-a",
+    });
+    const store = await service.ensure(userId);
+    await service.write(userId, {
+      path: "/memories/recovery.md",
+      content: "exact bytes\n",
+    });
+    const quarantined = (await repository.get(userId))!;
+    quarantined.status = "repairing";
+    quarantined.run.stage = "repairing";
+    quarantined.run.steps[0].status = "sending";
+    await repository.save(userId, quarantined.revision, quarantined);
+    const frozen = await repository.meta(userId);
+    await service.advance(userId);
+    expect(await repository.meta(userId)).toEqual(frozen);
+    await ark.createMemory(store, {
+      path: "/memories/recovery.md",
+      content: "exact bytes\n",
+    });
+    const writes = ark.calls.filter((call) =>
+      ["createMemory", "updateMemory", "deleteMemory"].includes(call.operation),
+    ).length;
+    const read = ark.listMemories.bind(ark);
+    let arrivals = 0;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi
+      .spyOn(ark, "listMemories")
+      .mockImplementation(async (...args) => {
+        const entries = await read(...args);
+        if (++arrivals === 2) release();
+        await barrier;
+        return entries.map((entry) => ({
+          ...entry,
+          content: entry.content.trimEnd(),
+        }));
+      });
+    let results: PromiseSettledResult<void>[];
+    try {
+      results = await Promise.allSettled([
+        service.recover(userId),
+        contender.recover(userId),
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(
+      results!.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      results!.find((result) => result.status === "rejected"),
+    ).toMatchObject({ reason: { code: "MEMORY_CONFLICT" } });
+    await service.advance(userId);
+    await service.advance(userId);
+    expect((await repository.get(userId))!.status).toBe("active");
+    expect((await repository.get(userId))!.run.stage).toBe("completed");
+    expect(
+      ark.calls.filter((call) =>
+        ["createMemory", "updateMemory", "deleteMemory"].includes(
+          call.operation,
+        ),
+      ),
+    ).toHaveLength(writes);
+  });
 
   it("reserves exactly one durable intent across distinct connections", async () => {
     const userId = await addUser();

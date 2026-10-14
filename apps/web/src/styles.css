@@ -1826,7 +1826,7 @@ select:not(.ui-select):hover {
   height: 100dvh;
   min-height: 0;
   margin: 0 auto;
-  padding: var(--ui-space-5) clamp(1rem, 2.5vw, 2rem);
+  padding: var(--ui-space-5) clamp(1.5rem, 5vw, 5rem);
   overflow-y: auto;
   grid-template-rows: auto minmax(8rem, 1fr) auto;
   gap: var(--ui-space-3);
@@ -4157,7 +4157,10 @@ select:not(.ui-select):hover {
   font-weight: 600;
 }
 
-.memory-detail__running {
+.memory-detail__notice {
+  margin: 0;
+  padding-block: var(--ui-space-2);
+  border-bottom: 1px solid var(--ui-color-border);
   color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-control);
 }
@@ -4184,6 +4187,21 @@ select:not(.ui-select):hover {
   width: 15px;
   height: 15px;
   margin: 0;
+}
+
+.memory-detail__store-id {
+  min-width: 0;
+  font-size: var(--ui-font-size-aux);
+}
+
+.memory-detail__store-id summary {
+  cursor: pointer;
+}
+
+.memory-detail__store-id .memory-mono {
+  display: block;
+  margin-top: var(--ui-space-1);
+  overflow-wrap: anywhere;
 }
 
 .memory-detail__meta {
@@ -4312,7 +4330,7 @@ select:not(.ui-select):hover {
   background: none;
   color: var(--ui-color-text);
   font: inherit;
-  font-size: var(--ui-font-size-control);
+  font-size: var(--ui-font-size-aux);
   text-align: left;
   cursor: pointer;
 }
@@ -4361,6 +4379,20 @@ select:not(.ui-select):hover {
   min-width: 0;
   padding: var(--ui-space-4);
   overflow-y: auto;
+}
+
+.memory-editor > .ui-empty-state {
+  min-height: 12rem;
+  justify-content: center;
+  padding: var(--ui-space-6);
+  border: 0;
+  background: transparent;
+}
+
+.memory-editor > .ui-empty-state .ui-empty-state__title {
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-control);
+  font-weight: 400;
 }
 
 .memory-editor__actions {

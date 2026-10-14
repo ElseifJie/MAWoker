@@ -8,7 +8,7 @@ import {
 } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { presentMemory } from "./memory-presentation.js";
+import { memoryFileLabel, presentMemory } from "./memory-presentation.js";
 import {
   ApiClientError,
   apiClient,
@@ -30,7 +30,10 @@ import {
 } from "./ui/index.js";
 
 function ongoing(state: MemoryState | null) {
-  return !!state?.run && !["completed", "failed"].includes(state.run.stage);
+  return (
+    !!state?.run &&
+    !["completed", "failed", "repairing"].includes(state.run.stage)
+  );
 }
 
 /**
@@ -172,6 +175,7 @@ function PathTree({
           disabled={disabled}
           style={indent(depth)}
           title={node.path}
+          aria-label={node.name}
           aria-pressed={selectedPath === node.path}
           className={
             selectedPath === node.path
@@ -181,7 +185,7 @@ function PathTree({
           onClick={() => onSelect(node)}
         >
           <FileText size={14} aria-hidden="true" />
-          <span>{node.name}</span>
+          <span>{memoryFileLabel(node.path)}</span>
         </button>
       ),
     );
@@ -443,6 +447,13 @@ function MemoryStoreDetail({
           setList(result);
           setState(result.state);
           setError(null);
+          if (next.run?.stage === "repairing") {
+            setError("更新结果待核验，尚未确认完成。");
+            setFeedback(null);
+            // Keep the draft and accepted action for explicit recovery. A
+            // quarantine is neither a successful save nor a completed delete.
+            return;
+          }
           if (next.run?.stage === "failed") {
             setError(next.run.error ?? "记忆操作失败。");
             setFeedback(null);
@@ -566,26 +577,10 @@ function MemoryStoreDetail({
       >
         ‹ 返回个人记忆
       </Button>
-      <PageHeader
-        title="编辑个人记忆"
-        description="查看与编辑已保存的记忆；原始路径和版本校验仍用于安全更新。"
-      />
+      <PageHeader title="编辑个人记忆" description="查看和编辑已保存的记忆。" />
 
       {error ? <Alert tone="danger">{error}</Alert> : null}
       {versionNotice ? <Alert tone="warning">{versionNotice}</Alert> : null}
-      {running || (state !== null && state.status !== "active") ? (
-        <Alert tone="warning">
-          记忆正在准备或维护中，暂时不能编辑。
-          <Button variant="text" onClick={() => navigate("/?temporary=true")}>
-            另开不使用记忆的任务
-          </Button>
-        </Alert>
-      ) : null}
-      {running ? (
-        <Alert tone="info">
-          自动整理正在运行。当前内容可能包含整理中的变更，完成后会刷新并恢复编辑。
-        </Alert>
-      ) : null}
       {feedback ? (
         <Alert tone={running ? "info" : "success"}>{feedback}</Alert>
       ) : null}
@@ -596,19 +591,18 @@ function MemoryStoreDetail({
         <>
           <header className="memory-detail__header">
             <div className="memory-detail__title">
-              <h2>记忆状态</h2>
-              <Badge tone={running ? "warning" : "neutral"}>
+              <h2>记忆</h2>
+              <Badge
+                tone={state.status === "repairing" ? "warning" : "neutral"}
+              >
                 {{
-                  active: "可用",
+                  active: running ? "更新中" : "可用",
                   provisioning: "准备中",
                   draining: "等待任务结束",
                   applying: "应用中",
-                  repairing: "修复中",
+                  repairing: "待核验",
                 }[state.status] ?? state.status}
               </Badge>
-              {running ? (
-                <span className="memory-detail__running">正在整理记忆…</span>
-              ) : null}
             </div>
             <div className="memory-detail__actions">
               <label className="memory-autodream">
@@ -631,7 +625,9 @@ function MemoryStoreDetail({
               >
                 刷新
               </Button>
-              {running ? (
+              {running &&
+              state.run &&
+              ["queued", "polling", "merge"].includes(state.run.stage) ? (
                 <Button
                   variant="secondary"
                   loading={cancelPending}
@@ -651,10 +647,18 @@ function MemoryStoreDetail({
               ) : null}
             </div>
           </header>
-          <p className="memory-detail__meta">
-            <span>
-              ID: <span className="memory-mono">{list?.store.id ?? "…"}</span>
-            </span>
+          {blocked ? (
+            <p className="memory-detail__notice" role="status">
+              {state.status === "repairing"
+                ? "有一项更新需要核验，当前内容可查看。"
+                : "更新中，暂不可编辑。"}
+            </p>
+          ) : null}
+          <div className="memory-detail__meta">
+            <details className="memory-detail__store-id">
+              <summary>存储信息</summary>
+              <span className="memory-mono">{list?.store.id ?? "…"}</span>
+            </details>
             {list ? (
               <>
                 <span>
@@ -665,7 +669,7 @@ function MemoryStoreDetail({
                 <span>更新于 {formatDateTime(list.store.updatedAt)}</span>
               </>
             ) : null}
-          </p>
+          </div>
         </>
       ) : null}
 
@@ -846,10 +850,7 @@ function MemoryStoreDetail({
                   </div>
                 </form>
               ) : (
-                <EmptyState
-                  title="选择记忆条目后查看或编辑"
-                  description="可从分类卡片或左侧路径浏览中选择。"
-                />
+                <EmptyState title="选择一条记忆" />
               )}
             </section>
           </div>

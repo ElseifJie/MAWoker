@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryArkGateway } from "../packages/ark-client/src/index.js";
 import {
   MemoryService,
@@ -146,6 +146,88 @@ async function reachPolling(
 }
 
 describe("personal memory coordinator", () => {
+  it("verifies an applied write using the remote hash when readback omits trailing whitespace", async () => {
+    const { service, ark } = setup();
+    await service.ensure("a");
+    const original = ark.getMemory.bind(ark);
+    vi.spyOn(ark, "getMemory").mockImplementation(async (...args) => {
+      const entry = await original(...args);
+      return { ...entry, content: entry.content.trimEnd() };
+    });
+    await service.write("a", { path: "/memories/new.md", content: "new\n" });
+    const finished = await finish(service, "a");
+    expect(finished.status).toBe("active");
+    expect(finished.run?.stage).toBe("completed");
+    expect(
+      ark.calls.filter(
+        (c) =>
+          c.operation === "createMemory" &&
+          (c.input as { path?: string }).path === "/memories/new.md",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("recovers by remote hash without replay and leaves quarantined revisions unchanged", async () => {
+    const { service, ark, states } = setup();
+    const store = await service.ensure("a");
+    await service.write("a", {
+      path: "/memories/new.md",
+      content: "late success\n",
+    });
+    const frozen = states.get("a")!;
+    frozen.run!.steps[0].status = "sending";
+    frozen.run!.stage = "repairing";
+    frozen.run!.error = "original verification failure";
+    frozen.status = "repairing";
+    const revision = frozen.revision;
+    await service.advance("a");
+    await service.runOnce();
+    expect(states.get("a")!.revision).toBe(revision);
+    expect(states.get("a")!.run!.error).toBe("original verification failure");
+    await ark.createMemory(store, {
+      path: "/memories/new.md",
+      content: "late success\n",
+    });
+    const original = ark.listMemories.bind(ark);
+    vi.spyOn(ark, "listMemories").mockImplementation(async (...args) =>
+      (await original(...args)).map((entry) => ({
+        ...entry,
+        content: entry.content.trimEnd(),
+      })),
+    );
+    const calls = ark.calls.filter(
+      (c) => c.operation === "createMemory",
+    ).length;
+    await service.recover("a");
+    await finish(service, "a");
+    expect((await service.status("a")).status).toBe("active");
+    expect(
+      ark.calls.filter((c) => c.operation === "createMemory"),
+    ).toHaveLength(calls);
+  });
+
+  it("does not accept a matching readback body when its remote hash proves different stored content", async () => {
+    const { service, ark } = setup();
+    await service.ensure("a");
+    const original = ark.getMemory.bind(ark);
+    vi.spyOn(ark, "getMemory").mockImplementation(async (...args) => ({
+      ...(await original(...args)),
+      contentSha256: "0".repeat(64),
+    }));
+    await service.write("a", { path: "/memories/new.md", content: "new" });
+    expect((await finish(service, "a")).status).toBe("repairing");
+    const list = ark.listMemories.bind(ark);
+    vi.spyOn(ark, "listMemories").mockImplementation(async (...args) =>
+      (await list(...args)).map((entry) => ({
+        ...entry,
+        contentSha256: "0".repeat(64),
+      })),
+    );
+    await expect(service.recover("a")).rejects.toMatchObject({
+      code: "MEMORY_REPAIR_REQUIRED",
+    });
+  });
+
   it("reuses one fixed Store per user and isolates all reads", async () => {
     const { service } = setup();
     const a = await service.ensure("a");
