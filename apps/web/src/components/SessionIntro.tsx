@@ -153,6 +153,7 @@ export function SessionIntro({
   const [uploads, setUploads] = useState<UploadState[]>([]);
   const [submissionStatus, setSubmissionStatus] = useState("");
   const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [memoryUnavailable, setMemoryUnavailable] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const queue = useRef(new MaterialUploadQueue());
   useEffect(() => {
@@ -316,6 +317,7 @@ export function SessionIntro({
     const signal = preparation.current.signal;
     setSubmitting(true);
     setSubmissionError(null);
+    setMemoryUnavailable(false);
     setSubmissionStatus("正在保存任务…");
     try {
       const requestHash = JSON.stringify({
@@ -371,10 +373,17 @@ export function SessionIntro({
         error instanceof ApiClientError &&
         (error.code === "QUOTA_EXCEEDED" ||
           error.code === "CONCURRENCY_LIMITED");
+      const memoryError =
+        error instanceof ApiClientError &&
+        (error.code === "MEMORY_BUSY" ||
+          error.code === "MEMORY_REPAIR_REQUIRED");
+      setMemoryUnavailable(memoryError);
       setSubmissionError(
-        quotaError
-          ? "任务额度已用完，已有结果仍可查看。"
-          : "任务无法启动，请重试。",
+        memoryError
+          ? "个人记忆暂不可用，请修复记忆或关闭个人记忆后重试。"
+          : quotaError
+            ? "任务额度已用完，已有结果仍可查看。"
+            : "任务无法启动，请重试。",
       );
       setSubmissionStatus("");
     } finally {
@@ -538,7 +547,31 @@ export function SessionIntro({
             {blocker ? (
               <Alert tone="danger">{blocker}</Alert>
             ) : submissionError ? (
-              <Alert tone="danger">{submissionError}</Alert>
+              <Alert tone="danger">
+                {submissionError}
+                {memoryUnavailable && !temporary ? (
+                  <div className="composer-controls">
+                    <Link
+                      className="ui-button ui-button--text ui-button--compact"
+                      to="/context/store"
+                    >
+                      修复个人记忆
+                    </Link>
+                    <Button
+                      variant="text"
+                      size="compact"
+                      onClick={() => {
+                        invalidateAttempt(message, true);
+                        setTemporary(true);
+                        setMemoryUnavailable(false);
+                        setSubmissionError(null);
+                      }}
+                    >
+                      关闭个人记忆
+                    </Button>
+                  </div>
+                ) : null}
+              </Alert>
             ) : (
               <span>
                 <Spinner size={15} aria-hidden="true" />
@@ -594,6 +627,10 @@ export function SessionIntro({
                     const next = !event.target.checked;
                     invalidateAttempt(message, next);
                     setTemporary(next);
+                    if (memoryUnavailable) {
+                      setMemoryUnavailable(false);
+                      setSubmissionError(null);
+                    }
                   }}
                 />
                 使用个人记忆

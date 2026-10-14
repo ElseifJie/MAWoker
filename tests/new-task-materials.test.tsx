@@ -12,7 +12,11 @@ import {
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { apiClient, type ArtifactSummary } from "../apps/web/src/api.js";
+import {
+  apiClient,
+  ApiClientError,
+  type ArtifactSummary,
+} from "../apps/web/src/api.js";
 import {
   SessionIntro,
   taskTemplates,
@@ -81,6 +85,62 @@ afterEach(() => {
 });
 
 describe("new task composer and materials", () => {
+  it.each(["MEMORY_BUSY", "MEMORY_REPAIR_REQUIRED"])(
+    "explains %s and lets the user disable memory without losing the task or silently resubmitting",
+    async (code) => {
+      vi.spyOn(apiClient, "listArtifacts").mockResolvedValue({ artifacts: [] });
+      const accepted = { id: "without-memory" };
+      const created = vi.fn();
+      const create = vi
+        .spyOn(apiClient, "createSession")
+        .mockRejectedValueOnce(
+          new ApiClientError(
+            409,
+            code as never,
+            "Memory unavailable",
+            "request",
+            true,
+          ),
+        )
+        .mockResolvedValue(accepted as never);
+      render(page("memory-unavailable", "/", created));
+      fireEvent.change(screen.getByLabelText("任务要求"), {
+        target: { value: "保留这份任务要求" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+      expect(
+        await screen.findByText(
+          "个人记忆暂不可用，请修复记忆或关闭个人记忆后重试。",
+        ),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: "修复个人记忆" }),
+      ).toHaveAttribute("href", "/context/store");
+      expect(
+        screen.getByRole("checkbox", { name: "使用个人记忆" }),
+      ).toBeChecked();
+      const attempted = create.mock.calls[0]![0];
+      expect(readDraft("memory-unavailable").attempt).toEqual(attempted);
+      fireEvent.click(screen.getByRole("button", { name: "关闭个人记忆" }));
+      expect(
+        screen.getByRole("checkbox", { name: "使用个人记忆" }),
+      ).not.toBeChecked();
+      expect(screen.getByLabelText("任务要求")).toHaveValue(attempted.content);
+      expect(create).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole("button", { name: "开始任务" }));
+      await waitFor(() =>
+        expect(created).toHaveBeenCalledWith(accepted, attempted.content),
+      );
+      const retried = create.mock.calls[1]![0];
+      expect(retried).toEqual({
+        ...attempted,
+        temporary: true,
+        submissionId: expect.any(String),
+      });
+      expect(retried.submissionId).not.toBe(attempted.submissionId);
+    },
+  );
+
   it("labels the assistant selector without repeating its selected name as a hint", () => {
     vi.spyOn(apiClient, "listArtifacts").mockResolvedValue({ artifacts: [] });
     render(page());
