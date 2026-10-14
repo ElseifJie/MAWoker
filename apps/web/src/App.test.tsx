@@ -1096,12 +1096,12 @@ describe("Session page", () => {
       "var(--ui-transcript-max-width)",
     );
     expect(transcriptRule?.style.marginInline).toBe("auto");
-    expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-large)");
+    expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-composer)");
   });
 
   it("resizes the side panel by drag and by keyboard", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
-    renderApp(`/sessions/${sessionId}`);
+    renderApp(`/sessions/${sessionId}?artifact=${artifactId}`);
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Quarterly plan" });
 
@@ -1439,7 +1439,7 @@ describe("Session page", () => {
       await screen.findByRole("heading", { name: "Quarterly plan" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Research assistant")).toBeInTheDocument();
-    expect(screen.getByText("助手版本 4")).toBeInTheDocument();
+    expect(screen.queryByText("助手版本 4")).toBeNull();
     expect(screen.getByText("brief.txt")).toBeInTheDocument();
 
     const source = MockEventSource.instances[0]!;
@@ -2113,6 +2113,18 @@ describe("command palette", () => {
 });
 
 describe("migrated CSS contracts", () => {
+  it("defines every UI token referenced without a fallback", () => {
+    const declared = new Set(
+      [...migratedCss.matchAll(/(--ui-[\w-]+)\s*:/g)].map((match) => match[1]),
+    );
+    const required = [...migratedCss.matchAll(/var\((--ui-[\w-]+)\s*\)/g)].map(
+      (match) => match[1],
+    );
+    expect([
+      ...new Set(required.filter((token) => !declared.has(token))),
+    ]).toEqual([]);
+  });
+
   it("keeps the approved radius range and typography viewport-independent", () => {
     // Approved redesign permits a 16px composer, with smaller controls/panels.
     const oversizedRadii = Array.from(
@@ -2480,6 +2492,10 @@ describe("artifact chips in replies", () => {
       await screen.findByRole("heading", { name: "Quarterly plan" }),
     ).toBeInTheDocument();
 
+    expect(
+      screen.queryByRole("complementary", { name: "Session side panel" }),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /打开成果面板/ })).toBeNull();
     await waitFor(() =>
       expect(MockEventSource.instances.length).toBeGreaterThan(0),
     );
@@ -2493,6 +2509,18 @@ describe("artifact chips in replies", () => {
       .setup()
       .click(within(timeline).getByRole("button", { name: "report.html" }));
 
+    expect(
+      await screen.findByRole("region", { name: "Preview of report.html" }),
+    ).toBeInTheDocument();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Hide side panel" }));
+    expect(
+      screen.queryByRole("complementary", { name: "Session side panel" }),
+    ).toBeNull();
+    await userEvent
+      .setup()
+      .click(within(timeline).getByRole("button", { name: "report.html" }));
     expect(
       await screen.findByRole("region", { name: "Preview of report.html" }),
     ).toBeInTheDocument();

@@ -173,7 +173,10 @@ describe("B1 task page", () => {
     });
     mount();
     await screen.findByRole("heading", { name: task.title });
-    expect(document.querySelector(".session-meta")).toHaveTextContent("确认中");
+    expect(document.querySelector(".session-meta")).not.toHaveTextContent(
+      "确认中",
+    );
+    expect(screen.queryByText("任务信息")).toBeNull();
     expect(screen.getByText(/发送结果确认中.*request/)).toBeInTheDocument();
     expect(screen.queryByText("本轮完成")).toBeNull();
   });

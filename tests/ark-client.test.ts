@@ -1144,6 +1144,43 @@ describe("HttpArkGateway", () => {
     );
   });
 
+  it("accepts the live Files endpoint's literal JSON null empty inventory", async () => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch: vi.fn().mockResolvedValue(Response.json(null)),
+      maxAttempts: 1,
+    });
+    await expect(gateway.listArtifacts("sesn-1")).resolves.toEqual([]);
+  });
+
+  it.each([null, []])(
+    "preserves a data-only empty Files envelope %j",
+    async (data) => {
+      const fetch = vi.fn().mockResolvedValue(Response.json({ data }));
+      const gateway = new HttpArkGateway({
+        baseUrl: "https://ark.example.com",
+        apiKey: "secret",
+        fetch,
+        maxAttempts: 1,
+      });
+      await expect(gateway.listArtifacts("sesn-1")).resolves.toEqual([]);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not mistake a malformed Files object for a verified empty inventory", async () => {
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch: vi.fn().mockResolvedValue(Response.json({})),
+      maxAttempts: 1,
+    });
+    await expect(gateway.listArtifacts("sesn-1")).rejects.toMatchObject({
+      category: "invalid_response",
+    });
+  });
+
   it("treats a null data field as an empty file list", async () => {
     const fetch = vi.fn().mockResolvedValue(
       Response.json({

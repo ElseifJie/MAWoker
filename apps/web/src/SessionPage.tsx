@@ -2,8 +2,6 @@ import { hasSavedTurnAnswer } from "./turn-answer.js";
 import {
   Archive,
   MoreHorizontal,
-  PanelRightClose,
-  PanelRightOpen,
   Paperclip,
   RotateCcw,
   Square,
@@ -127,7 +125,7 @@ function SessionPageContent({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
-  const [railOpen, setRailOpen] = useState(true);
+  const [railOpen, setRailOpen] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [turns, setTurns] = useState<SessionTurn[]>([]);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -312,11 +310,12 @@ function SessionPageContent({
   useEffect(() => loadArtifacts(), [artifactRefreshKey, loadArtifacts]);
 
   useEffect(() => {
-    if (selectedArtifactId) setRailOpen(true);
+    setRailOpen(Boolean(selectedArtifactId));
   }, [selectedArtifactId]);
 
   const selectArtifact = useCallback(
     (artifactId: string | null) => {
+      setRailOpen(Boolean(artifactId));
       setSearchParams(
         (current) => {
           const next = new URLSearchParams(current);
@@ -600,12 +599,6 @@ function SessionPageContent({
     )
       ? currentTurn
       : undefined;
-  const panelSummary = [
-    artifacts.length > 0 ? `${artifacts.length} 个成果` : "",
-    timeline.todos.length > 0 ? `${timeline.todos.length} 个步骤` : "",
-  ]
-    .filter((part) => part.length > 0)
-    .join(", ");
   const messageDisabled =
     session.status === "terminated" || session.deletionState !== "none";
   const connectionLabel =
@@ -642,11 +635,9 @@ function SessionPageContent({
             </h1>
             <div className="session-meta">
               <span>{session.agent.name}</span>
-              <details className="session-info">
-                <summary>任务信息</summary>
-                <span>助手版本 {session.agent.version}</span>
-              </details>
-              <Badge tone={status.tone}>{status.label}</Badge>
+              {status.label !== "确认中" ? (
+                <Badge tone={status.tone}>{status.label}</Badge>
+              ) : null}
               <span
                 className={`session-connection session-connection--${connectionTone}`}
               >
@@ -655,24 +646,6 @@ function SessionPageContent({
             </div>
           </div>
           <div className="session-header-actions">
-            <IconButton
-              className="rail-toggle"
-              label={
-                railOpen
-                  ? "收起成果面板"
-                  : panelSummary.length > 0
-                    ? `打开成果面板，${panelSummary}`
-                    : "打开成果面板"
-              }
-              aria-expanded={railOpen}
-              onClick={() => setRailOpen((open) => !open)}
-            >
-              {railOpen ? (
-                <PanelRightClose size={18} aria-hidden="true" />
-              ) : (
-                <PanelRightOpen size={18} aria-hidden="true" />
-              )}
-            </IconButton>
             {session.deletionState === "none" ? (
               <Button
                 variant="secondary"
@@ -948,7 +921,7 @@ function SessionPageContent({
           }}
           selectedArtifactId={selectedArtifactId}
           onSelectArtifact={selectArtifact}
-          onClose={() => setRailOpen(false)}
+          onClose={() => selectArtifact(null)}
           width={railWidth}
           onWidthChange={onRailWidthChange}
         />

@@ -568,18 +568,26 @@ const fileEntrySchema = z.object({
   scope: z.object({ type: z.string(), id: z.string() }).nullish(),
 });
 
-/** `data` is literally null, not an empty array, for a scope with no files. */
-const filePageSchema = z
-  .object({
-    data: z.array(fileEntrySchema).nullable(),
-    has_more: z.boolean().nullish(),
-    last_id: z.string().nullish(),
-  })
-  .transform(({ data, has_more, last_id }) => ({
-    files: data ?? [],
-    hasMore: has_more === true,
-    lastId: last_id ?? null,
-  }));
+/** Empty Files inventories can be JSON null or an envelope with data:null.
+ * Keep the page envelope so optional pagination fields remain meaningful. */
+const filePageSchema = z.union([
+  z.null().transform(() => ({
+    files: [] as z.infer<typeof fileEntrySchema>[],
+    hasMore: false,
+    lastId: null,
+  })),
+  z
+    .object({
+      data: z.array(fileEntrySchema).nullable(),
+      has_more: z.boolean().nullish(),
+      last_id: z.string().nullish(),
+    })
+    .transform(({ data, has_more, last_id }) => ({
+      files: data ?? [],
+      hasMore: has_more === true,
+      lastId: last_id ?? null,
+    })),
+]);
 
 type FileEntry = z.infer<typeof fileEntrySchema>;
 
@@ -1293,6 +1301,8 @@ export class HttpArkGateway implements ArkGateway {
         path: `/api/v3/files?${query.toString()}`,
         safe: true,
         schema: filePageSchema,
+        // Files data-only envelopes are still pages, including {data:null}.
+        unwrapData: false,
         options,
       });
       for (const entry of result.files) {
@@ -1307,7 +1317,10 @@ export class HttpArkGateway implements ArkGateway {
   }
 
   private async jsonRequest<T>(
-    definition: RequestDefinition<T> & { schema: z.ZodType<T> },
+    definition: RequestDefinition<T> & {
+      schema: z.ZodType<T>;
+      unwrapData?: boolean;
+    },
   ): Promise<T> {
     return this.request(definition, async (response) => {
       const invalidResponse = () =>
@@ -1324,6 +1337,7 @@ export class HttpArkGateway implements ArkGateway {
         throw invalidResponse();
       }
       const unwrapped =
+        definition.unwrapData !== false &&
         payload !== null &&
         typeof payload === "object" &&
         "data" in payload &&

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ArkEvent } from "../packages/ark-client/src/index.js";
+import {
+  HttpArkGateway,
+  type ArkEvent,
+} from "../packages/ark-client/src/index.js";
 import {
   observeSessionTurns,
   SessionDeliveryService,
@@ -180,6 +183,34 @@ function fixture() {
 }
 
 describe("background turn delivery", () => {
+  it("finishes an expired text-only turn without a sync error for the live JSON null Files response", async () => {
+    const f = fixture();
+    f.turn.retryUntil = new Date(time.getTime() - 1);
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example",
+      apiKey: "test",
+      fetch: vi.fn().mockResolvedValue(Response.json(null)),
+      maxAttempts: 1,
+    });
+    f.ark.listArtifacts.mockImplementation(() =>
+      gateway.listArtifacts("upstream"),
+    );
+    await expect(
+      f.service.syncArtifacts("turn", f.context),
+    ).resolves.toBeUndefined();
+    expect(f.repository.finishSync).toHaveBeenCalledWith(
+      "owner",
+      "turn",
+      "worker",
+      1,
+      expect.objectContaining({
+        artifactState: "synced",
+        artifactIds: [],
+        errorCode: null,
+      }),
+    );
+  });
+
   it("bounds discovery even if the history client ignores cancellation", async () => {
     const f = fixture();
     f.sessions.reconcileHistory.mockImplementationOnce(

@@ -1826,10 +1826,11 @@ select:not(.ui-select):hover {
   height: 100dvh;
   min-height: 0;
   margin: 0 auto;
-  padding: var(--ui-space-5) clamp(1.5rem, 5vw, 5rem);
+  padding: clamp(1.5rem, 4dvh, 3rem) clamp(1.5rem, 6%, 6rem)
+    clamp(1.5rem, 4dvh, 3rem);
   overflow-y: auto;
   grid-template-rows: auto minmax(8rem, 1fr) auto;
-  gap: var(--ui-space-3);
+  gap: var(--ui-space-6);
 }
 
 .session-header {
@@ -2020,7 +2021,7 @@ select:not(.ui-select):hover {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--ui-space-3) var(--ui-space-1);
+  padding: var(--ui-space-6) var(--ui-space-1);
 }
 
 .timeline-empty {
@@ -2048,7 +2049,7 @@ select:not(.ui-select):hover {
   margin-block: 0;
   margin-inline: auto;
   padding: 0;
-  gap: var(--ui-space-6);
+  gap: var(--ui-space-8);
   list-style: none;
 }
 
@@ -2443,7 +2444,7 @@ select:not(.ui-select):hover {
   min-width: 0;
   overflow-y: auto;
   border: 1px solid var(--ui-color-border);
-  border-radius: var(--ui-radius-large);
+  border-radius: var(--ui-radius-composer);
   background: var(--ui-color-surface);
   box-shadow: var(--ui-shadow-raised);
   grid-template-rows: minmax(4.5rem, auto) auto;
@@ -2458,7 +2459,7 @@ select:not(.ui-select):hover {
 
 .session-composer .ui-textarea {
   min-height: 4.5rem;
-  padding: var(--ui-space-4);
+  padding: var(--ui-space-6) var(--ui-space-6) var(--ui-space-3);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2475,7 +2476,7 @@ select:not(.ui-select):hover {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--ui-space-3);
-  padding: var(--ui-space-2) var(--ui-space-3);
+  padding: var(--ui-space-3) var(--ui-space-6);
   font-size: var(--ui-font-size-aux);
 }
 
@@ -3214,7 +3215,8 @@ select:not(.ui-select):hover {
 
   .session-page {
     height: calc(100dvh - 58px);
-    padding: var(--ui-space-4);
+    padding: var(--ui-space-6) var(--ui-space-4);
+    gap: var(--ui-space-4);
   }
 
   .agent-record {
