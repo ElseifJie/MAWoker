@@ -232,6 +232,29 @@ export interface TaskNotification {
 
 export type { UiEvent, UiEventType } from "@pwa/contracts";
 
+export interface SyncChange {
+  seq: number;
+  resourceType: string;
+  resourceId: string;
+  revision: number | null;
+  deleted: boolean;
+  changedAt: string;
+}
+
+export interface SyncChanges {
+  cursor: number;
+  hasMore: boolean;
+  changes: SyncChange[];
+}
+
+export interface SyncSnapshot {
+  cursor: number;
+  resources: {
+    runs: unknown[];
+    notifications: unknown[];
+  };
+}
+
 export interface AccountSession {
   id: string;
   current: boolean;
@@ -861,6 +884,11 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  getSyncSnapshot: () => request<SyncSnapshot>("/sync/snapshot"),
+  getSyncChanges: (cursor: number, limit = 100) =>
+    request<SyncChanges>(
+      `/sync/changes?cursor=${encodeURIComponent(String(cursor))}&limit=${encodeURIComponent(String(limit))}`,
+    ),
   listAccountSessions: () =>
     request<{ sessions: AccountSession[] }>("/account/sessions"),
   revokeOtherAccountSessions: () =>

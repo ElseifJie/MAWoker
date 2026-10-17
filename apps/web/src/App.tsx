@@ -1,5 +1,6 @@
 import { AccountExportButton } from "./AccountExportButton.js";
 import { AccountSessions } from "./AccountSessions.js";
+import { useAccountSync } from "./useAccountSync.js";
 import { AutomationsPage } from "./AutomationsPage.js";
 import { usePwaInstall } from "./usePwaInstall.js";
 import { clearSubmissionDrafts } from "./submission-drafts.js";
@@ -40,6 +41,7 @@ import {
   type ClientCapabilities,
   type CurrentUser,
   type SessionSummary,
+  type SyncChange,
   type UsageSummary,
 } from "./api.js";
 import { AdminWorkspace } from "./AdminPage.js";
@@ -427,6 +429,54 @@ function Workspace({
       // Keep the last snapshot; the next trigger retries.
     }
   }, []);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const [active, archived] = await Promise.all([
+        apiClient.listSessions(),
+        apiClient.listSessions(true),
+      ]);
+      setData((current) =>
+        current
+          ? {
+              ...current,
+              sessions: active.sessions,
+              archivedSessions: archived.sessions,
+            }
+          : current,
+      );
+    } catch {
+      // The next sync tick retries.
+    }
+  }, []);
+
+  const syncRefreshRef = useRef<number | null>(null);
+  const onSyncChanges = useCallback(
+    (changes: SyncChange[]) => {
+      if (!changes.some((change) => change.resourceType === "run")) return;
+      if (syncRefreshRef.current !== null) {
+        window.clearTimeout(syncRefreshRef.current);
+      }
+      syncRefreshRef.current = window.setTimeout(() => {
+        syncRefreshRef.current = null;
+        void refreshSessions();
+      }, 600);
+    },
+    [refreshSessions],
+  );
+  useAccountSync({
+    userId: user.userId,
+    enabled: data !== null,
+    onChange: onSyncChanges,
+  });
+  useEffect(
+    () => () => {
+      if (syncRefreshRef.current !== null) {
+        window.clearTimeout(syncRefreshRef.current);
+      }
+    },
+    [],
+  );
 
   // Skip the home-page trigger on the initial mount: the workspace loader
   // already fetches usage as part of its first paint.
