@@ -31,6 +31,7 @@ import {
   type AuditLogEntry,
   type AuditLogQuery,
   type AvailableAgentRecord,
+  type AssistantView,
   type DefaultAgentRecord,
   type PersonalAgentRecord,
   type PlatformAgentRecord,
@@ -551,6 +552,18 @@ export interface AuditApiService {
 
 interface BuildAppOptions {
   auth?: ApiAuthService;
+  assistant?: {
+    get(userId: string): PromiseLike<AssistantView>;
+    update(
+      userId: string,
+      input: {
+        displayName?: string;
+        persona?: string;
+        preferences?: Record<string, unknown>;
+        expectedRevision?: number;
+      },
+    ): PromiseLike<AssistantView>;
+  };
   admin?: AdminService;
   audit?: AuditApiService;
   adminUsage?: AdminUsageApiService;
@@ -662,6 +675,17 @@ const syncChangesQuerySchema = {
   properties: {
     cursor: { type: "integer", minimum: 0, default: 0 },
     limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
+  },
+} as const;
+
+const assistantProfileBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    displayName: { type: "string", maxLength: 120 },
+    persona: { type: "string", maxLength: 8_000 },
+    preferences: { type: "object" },
+    expectedRevision: { type: "integer", minimum: 1 },
   },
 } as const;
 
@@ -1162,6 +1186,30 @@ function publicRun(run: RunRecord) {
     endedAt: run.endedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+function publicAssistant(view: AssistantView) {
+  return {
+    profile: {
+      ownerUserId: view.profile.ownerUserId,
+      defaultAgentId: view.profile.defaultAgentId,
+      displayName: view.profile.displayName,
+      persona: view.profile.persona,
+      preferences: view.profile.preferences,
+      revision: view.profile.revision,
+      createdAt: view.profile.createdAt.toISOString(),
+      updatedAt: view.profile.updatedAt.toISOString(),
+    },
+    agent: view.agent
+      ? {
+          id: view.agent.id,
+          name: view.agent.name,
+          modelId: view.agent.modelId,
+          status: view.agent.status,
+          arkAgentId: view.agent.arkAgentId,
+        }
+      : null,
   };
 }
 
@@ -2717,6 +2765,50 @@ export function buildApp(options: BuildAppOptions = {}) {
             request.query.cursor,
             request.query.limit,
           ),
+      );
+    }
+
+    if (options.assistant) {
+      const assistant = options.assistant;
+      app.get("/api/v1/assistant/profile", async (request) =>
+        publicAssistant(await assistant.get(request.auth!.userId)),
+      );
+      app.patch<{
+        Body: {
+          displayName?: string;
+          persona?: string;
+          preferences?: Record<string, unknown>;
+          expectedRevision?: number;
+        };
+      }>(
+        "/api/v1/assistant/profile",
+        { schema: { body: assistantProfileBodySchema } },
+        async (request, reply) => {
+          try {
+            return reply.send(
+              publicAssistant(
+                await assistant.update(request.auth!.userId, request.body),
+              ),
+            );
+          } catch (error) {
+            if (hasErrorName(error, "AssistantProfileConflictError")) {
+              return reply
+                .code(409)
+                .send(
+                  applicationError(
+                    request.id,
+                    "ASSISTANT_PROFILE_CONFLICT",
+                    "Assistant profile changed. Reload before editing.",
+                    false,
+                  ),
+                );
+            }
+            if (hasErrorName(error, "ResourceNotFoundError")) {
+              return reply.code(404).send(resourceNotFoundError(request.id));
+            }
+            throw error;
+          }
+        },
       );
     }
 

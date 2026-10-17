@@ -285,6 +285,28 @@ export const userDefaultAgents = pgTable("user_default_agents", {
 });
 
 /**
+ * One default assistant per account. The runtime Agent stays in
+ * `personal_agents` (the auto-default row); this profile owns the editable
+ * identity, preferences, and an optimistic-concurrency revision.
+ */
+export const assistantProfiles = pgTable("assistant_profiles", {
+  ownerUserId: uuid("owner_user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  defaultAgentId: uuid("default_agent_id").references(() => personalAgents.id, {
+    onDelete: "set null",
+  }),
+  displayName: text("display_name").default("").notNull(),
+  persona: text("persona").default("").notNull(),
+  preferences: jsonb("preferences")
+    .$type<Record<string, unknown>>()
+    .default(sql`'{}'::jsonb`)
+    .notNull(),
+  revision: integer("revision").default(1).notNull(),
+  ...timestamps,
+});
+
+/**
  * A Skill package uploaded to Ark. A row with `ownerUserId` is a user's custom
  * Skill; `ownerUserId` null marks a platform preset Skill. The bytes live in
  * Ark (there is no Ark delete or update Skill API yet), so "editing" a Skill

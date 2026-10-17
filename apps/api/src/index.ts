@@ -8,6 +8,7 @@ import {
   AdminUsageService,
   AdminUserDetailService,
   ArtifactService,
+  AssistantProfileService,
   AuditService,
   DriveFileService,
   LoggingNotifier,
@@ -115,6 +116,9 @@ const sessions = new SessionService({
   memory,
 });
 const runService = new RunService({ repository: repositories.runs });
+const assistantProfile = new AssistantProfileService({
+  repository: repositories.assistantProfiles,
+});
 const syncService = new SyncService({
   repository: repositories.sync,
   runs: repositories.runs,
@@ -145,6 +149,7 @@ const artifacts = new ArtifactService({
 });
 const app = buildApp({
   auth,
+  assistant: assistantProfile,
   admin,
   audit,
   adminUsage,
