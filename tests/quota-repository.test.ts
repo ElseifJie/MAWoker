@@ -10,6 +10,8 @@ describe("quota repository", () => {
           concurrentSessionLimit: 2,
           dailySessionLimit: 25,
           monthlyTokenLimit: "1000000000",
+          mode: "enforced",
+          version: "3",
         },
       ],
     });
@@ -20,6 +22,8 @@ describe("quota repository", () => {
       concurrentSessionLimit: 2,
       dailySessionLimit: 25,
       monthlyTokenLimit: 1_000_000_000,
+      mode: "enforced",
+      version: 3,
     });
   });
 });

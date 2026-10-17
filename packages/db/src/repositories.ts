@@ -681,7 +681,7 @@ async function effectiveQuota(
     dailySessionLimit: Number(quota.dailySessionLimit),
     monthlyTokenLimit: Number(quota.monthlyTokenLimit),
     mode: quota.mode === "unlimited" ? "unlimited" : "enforced",
-    version: Number(quota.version),
+    version: Number(quota.version ?? 1),
   };
 }
 
