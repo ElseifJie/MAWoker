@@ -516,6 +516,14 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const apiClient = {
   getMe: () => request<{ user: CurrentUser }>("/me"),
+  acceptInvite: (code: string, password: string) =>
+    request<{ user: { userId: string; email: string } }>(
+      "/auth/invite/accept",
+      {
+        method: "POST",
+        body: JSON.stringify({ code, password }),
+      },
+    ),
   login: (email: string, password: string) =>
     request<void>("/auth/login", {
       method: "POST",

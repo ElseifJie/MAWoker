@@ -1,7 +1,8 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { App } from "./App.js";
+import { InvitePage } from "./InvitePage.js";
 import "./styles.css";
 import "./admin/admin.css";
 
@@ -14,7 +15,10 @@ if (!root) {
 createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <Routes>
+        <Route path="/invite" element={<InvitePage />} />
+        <Route path="*" element={<App />} />
+      </Routes>
     </BrowserRouter>
   </StrictMode>,
 );
