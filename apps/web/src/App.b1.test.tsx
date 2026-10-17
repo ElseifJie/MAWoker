@@ -93,7 +93,7 @@ describe("B1 workspace navigation", () => {
       within(primary as HTMLElement)
         .getAllByRole("link")
         .map((link) => link.textContent),
-    ).toEqual(["新任务", "历史任务", "我的文件", "设置"]);
+    ).toEqual(["新任务", "历史任务", "我的文件", "自动化", "设置"]);
     expect(
       within(primary as HTMLElement).getByRole("button", { name: "搜索" }),
     ).toBeInTheDocument();

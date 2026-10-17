@@ -129,7 +129,15 @@ export function TaskNotifications({
                       {labels[item.kind]}
                     </Link>
                   ) : (
-                    <span>{labels[item.kind]}</span>
+                    <Link
+                      to="/automations"
+                      onClick={() => {
+                        void markRead(item.id);
+                        setOpen(false);
+                      }}
+                    >
+                      {labels[item.kind]}
+                    </Link>
                   )}
                   {item.sessionId &&
                   sessions.find((session) => session.id === item.sessionId)

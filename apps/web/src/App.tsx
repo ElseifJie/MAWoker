@@ -1,3 +1,4 @@
+import { AutomationsPage } from "./AutomationsPage.js";
 import { clearSubmissionDrafts } from "./submission-drafts.js";
 import {
   Bot,
@@ -10,6 +11,7 @@ import {
   Search,
   Server,
   Settings as SettingsIcon,
+  CalendarClock,
 } from "lucide-react";
 import {
   type ReactNode,
@@ -265,6 +267,7 @@ function navigationFor(onSearch: () => void): NavigationItem[] {
     { to: "/", label: "新任务", icon: Plus },
     { to: "/history", label: "历史任务", icon: History },
     { to: "/files", label: "我的文件", icon: FolderOpen },
+    { to: "/automations", label: "自动化", icon: CalendarClock },
     { to: "/search", label: "搜索", icon: Search, onSelect: onSearch },
     { to: "/settings", label: "设置", icon: SettingsIcon },
   ];
@@ -677,6 +680,10 @@ function Workspace({
               <Navigate to="/settings" replace />
             )
           }
+        />
+        <Route
+          path="/automations"
+          element={<AutomationsPage onAuthRequired={onAuthRequired} />}
         />
         <Route
           path="/files"

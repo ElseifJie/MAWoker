@@ -232,6 +232,25 @@ export interface TaskNotification {
 
 export type { UiEvent, UiEventType } from "@pwa/contracts";
 
+export type AutomationSchedule =
+  | { type: "once"; at: string }
+  | { type: "daily"; time: string }
+  | { type: "weekly"; weekdays: number[]; time: string };
+
+export interface AutomationRecord {
+  id: string;
+  title: string;
+  kind: "reminder";
+  schedule: AutomationSchedule;
+  timezone: string;
+  nextRunAt: string;
+  enabled: boolean;
+  scheduleVersion: number;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ArtifactSummary {
   id: string;
   sessionId: string;
@@ -818,6 +837,26 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  listAutomations: () =>
+    request<{ automations: AutomationRecord[] }>("/automations"),
+  createAutomation: (input: {
+    title: string;
+    schedule: AutomationSchedule;
+    timezone: string;
+  }) =>
+    request<{ automation: AutomationRecord }>("/automations", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  setAutomationEnabled: (id: string, enabled: boolean) =>
+    request<{ automation: AutomationRecord }>(
+      `/automations/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    ),
+  deleteAutomation: (id: string) =>
+    request<void>(`/automations/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   listNotifications: () =>
     request<{ notifications: TaskNotification[] }>("/notifications"),
   markNotificationRead: (id: string) =>
