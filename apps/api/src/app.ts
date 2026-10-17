@@ -588,6 +588,9 @@ interface BuildAppOptions {
   auth?: ApiAuthService;
   invites?: InviteApiService;
   automations?: AutomationApiService;
+  accountExport?: {
+    export(userId: string): PromiseLike<Record<string, unknown>>;
+  };
   assistant?: {
     get(userId: string): PromiseLike<AssistantView>;
     update(
@@ -2928,6 +2931,18 @@ export function buildApp(options: BuildAppOptions = {}) {
             request.query.limit,
           ),
       );
+    }
+
+    if (options.accountExport) {
+      app.get("/api/v1/account/export", async (request, reply) => {
+        const data = await options.accountExport!.export(request.auth!.userId);
+        return reply
+          .header(
+            "content-disposition",
+            `attachment; filename="ma-worker-export-${request.auth!.userId}.json"`,
+          )
+          .send(data);
+      });
     }
 
     if (options.assistant) {

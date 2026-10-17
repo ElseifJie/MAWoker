@@ -837,6 +837,7 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  exportAccount: () => request<Record<string, unknown>>("/account/export"),
   listAutomations: () =>
     request<{ automations: AutomationRecord[] }>("/automations"),
   createAutomation: (input: {

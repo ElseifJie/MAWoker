@@ -1,3 +1,4 @@
+import { AccountExportButton } from "./AccountExportButton.js";
 import { AutomationsPage } from "./AutomationsPage.js";
 import { usePwaInstall } from "./usePwaInstall.js";
 import { clearSubmissionDrafts } from "./submission-drafts.js";
@@ -772,6 +773,11 @@ function SettingsPage({
           <dd>{accountHandle(user.authSubject)}</dd>
         </div>
       </dl>
+
+      <section className="settings-section" aria-labelledby="export-heading">
+        <h2 id="export-heading">我的数据</h2>
+        <AccountExportButton />
+      </section>
 
       <section className="settings-section" aria-labelledby="install-heading">
         <h2 id="install-heading">安装应用</h2>

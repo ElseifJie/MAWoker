@@ -9,6 +9,7 @@ import {
   AdminUserDetailService,
   ArtifactService,
   AssistantProfileService,
+  AccountExportService,
   AutomationService,
   InviteCodeService,
   AuditService,
@@ -118,6 +119,9 @@ const sessions = new SessionService({
   memory,
 });
 const runService = new RunService({ repository: repositories.runs });
+const accountExportService = new AccountExportService({
+  repository: repositories.accountExport,
+});
 const automationService = new AutomationService({
   repository: repositories.automations,
   createId: randomUUID,
@@ -162,6 +166,7 @@ const app = buildApp({
   auth,
   invites: inviteCodes,
   automations: automationService,
+  accountExport: accountExportService,
   assistant: assistantProfile,
   admin,
   audit,
