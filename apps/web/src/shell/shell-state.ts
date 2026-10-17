@@ -21,7 +21,7 @@ export const SHELL_STATE_KEY = "maworker.shell.v1";
 
 export const DEFAULT_SHELL_STATE: ShellState = {
   leftWidth: 280,
-  rightWidth: 380,
+  rightWidth: 648,
   leftCollapsed: false,
   rightOpen: false,
   panels: [],
