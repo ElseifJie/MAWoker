@@ -33,9 +33,13 @@ export interface Turn extends Observation, Record<string, unknown> {
 export interface Notification extends Record<string, unknown> {
   id: string;
   ownerUserId: string;
-  sessionId: string;
-  turnId: string;
-  kind: "completed" | "failed" | "needs_action" | "sync_failed";
+  sessionId: string | null;
+  turnId: string | null;
+  sourceType: string;
+  sourceId: string | null;
+  dedupeKey: string | null;
+  payload: Record<string, unknown> | null;
+  kind: "completed" | "failed" | "needs_action" | "sync_failed" | "reminder";
   readAt: Date | null;
   createdAt: Date;
 }
@@ -351,15 +355,49 @@ export function createSessionDeliveryRepository(db: Database) {
     ): Promise<Notification[]> {
       const result =
         await db.execute<Notification>(sql`select id,owner_user_id as "ownerUserId",
-        session_id as "sessionId",turn_id as "turnId",kind,read_at as "readAt",created_at as "createdAt"
+        session_id as "sessionId",turn_id as "turnId",source_type as "sourceType",
+        source_id as "sourceId",dedupe_key as "dedupeKey",payload,kind,
+        read_at as "readAt",created_at as "createdAt"
         from user_notifications where owner_user_id=${userId}
-        and exists(select 1 from sessions s where s.id=user_notifications.session_id and s.deletion_state='none')
+        and (session_id is null or exists(select 1 from sessions s where s.id=user_notifications.session_id and s.deletion_state='none'))
         order by created_at desc,id desc limit ${Math.max(1, Math.min(limit, 100))}`);
       return result.rows.map((row) => ({
         ...row,
         readAt: row.readAt ? new Date(row.readAt) : null,
         createdAt: new Date(row.createdAt),
       }));
+    },
+    async createSystemNotification(input: {
+      id: string;
+      ownerUserId: string;
+      kind: "reminder";
+      sourceType: string;
+      sourceId: string;
+      dedupeKey: string;
+      payload: Record<string, unknown>;
+      now: Date;
+    }): Promise<{ id: string; created: boolean }> {
+      const inserted = await db.execute<{ id: string }>(
+        sql`insert into user_notifications
+              (id, owner_user_id, session_id, turn_id, source_type, source_id,
+               dedupe_key, payload, kind, created_at)
+            values (
+              ${input.id}, ${input.ownerUserId}, null, null, ${input.sourceType},
+              ${input.sourceId}, ${input.dedupeKey},
+              ${JSON.stringify(input.payload)}::jsonb, ${input.kind}, ${input.now}
+            )
+            on conflict (owner_user_id, dedupe_key) do nothing
+            returning id`,
+      );
+      const created = inserted.rows[0];
+      if (created) return { id: created.id, created: true };
+      const existing = await db.execute<{ id: string }>(
+        sql`select id from user_notifications
+             where owner_user_id = ${input.ownerUserId}
+               and dedupe_key = ${input.dedupeKey}
+             limit 1`,
+      );
+      return { id: existing.rows[0]?.id ?? input.id, created: false };
     },
     async markNotificationRead(userId: string, id: string) {
       return db.transaction(async (transaction) => {

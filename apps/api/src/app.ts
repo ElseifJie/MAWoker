@@ -33,6 +33,7 @@ import {
   type AvailableAgentRecord,
   type AssistantView,
   type InviteCodeRecord,
+  type AutomationRecord,
   type DefaultAgentRecord,
   type PersonalAgentRecord,
   type PlatformAgentRecord,
@@ -556,6 +557,20 @@ export interface AuditApiService {
   }): Promise<void>;
 }
 
+export interface AutomationApiService {
+  list(ownerUserId: string): PromiseLike<AutomationRecord[]>;
+  create(
+    ownerUserId: string,
+    input: { title: string; schedule: unknown; timezone: string },
+  ): PromiseLike<AutomationRecord>;
+  setEnabled(
+    ownerUserId: string,
+    id: string,
+    enabled: boolean,
+  ): PromiseLike<AutomationRecord>;
+  delete(ownerUserId: string, id: string): PromiseLike<void>;
+}
+
 export interface InviteApiService {
   list(): PromiseLike<InviteCodeRecord[]>;
   create(
@@ -572,6 +587,7 @@ export interface InviteApiService {
 interface BuildAppOptions {
   auth?: ApiAuthService;
   invites?: InviteApiService;
+  automations?: AutomationApiService;
   assistant?: {
     get(userId: string): PromiseLike<AssistantView>;
     update(
@@ -717,6 +733,24 @@ const acceptInviteBodySchema = {
     code: { type: "string", minLength: 16, maxLength: 200 },
     password: { type: "string", minLength: 8, maxLength: 200 },
   },
+} as const;
+
+const automationBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["title", "schedule", "timezone"],
+  properties: {
+    title: { type: "string", minLength: 1, maxLength: 120 },
+    schedule: { type: "object" },
+    timezone: { type: "string", minLength: 1, maxLength: 80 },
+  },
+} as const;
+
+const automationPatchSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["enabled"],
+  properties: { enabled: { type: "boolean" } },
 } as const;
 
 const assistantProfileBodySchema = {
@@ -1227,6 +1261,22 @@ function publicRun(run: RunRecord) {
     endedAt: run.endedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+function publicAutomation(automation: AutomationRecord) {
+  return {
+    id: automation.id,
+    title: automation.title,
+    kind: automation.kind,
+    schedule: automation.schedule,
+    timezone: automation.timezone,
+    nextRunAt: automation.nextRunAt.toISOString(),
+    enabled: automation.enabled,
+    scheduleVersion: automation.scheduleVersion,
+    revision: automation.revision,
+    createdAt: automation.createdAt.toISOString(),
+    updatedAt: automation.updatedAt.toISOString(),
   };
 }
 
@@ -2920,6 +2970,86 @@ export function buildApp(options: BuildAppOptions = {}) {
             }
             throw error;
           }
+        },
+      );
+    }
+
+    if (options.automations) {
+      const automations = options.automations;
+      app.get("/api/v1/automations", async (request) => ({
+        automations: (await automations.list(request.auth!.userId)).map(
+          publicAutomation,
+        ),
+      }));
+      app.post<{
+        Body: {
+          title: string;
+          schedule: Record<string, unknown>;
+          timezone: string;
+        };
+      }>(
+        "/api/v1/automations",
+        { schema: { body: automationBodySchema } },
+        async (request, reply) => {
+          try {
+            const automation = await automations.create(
+              request.auth!.userId,
+              request.body,
+            );
+            return reply
+              .code(201)
+              .send({ automation: publicAutomation(automation) });
+          } catch (error) {
+            if (hasErrorName(error, "InvalidAutomationScheduleError")) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "VALIDATION_FAILED",
+                    error instanceof Error ? error.message : "Invalid schedule",
+                    false,
+                  ),
+                );
+            }
+            throw error;
+          }
+        },
+      );
+      app.patch<{ Params: { id: string }; Body: { enabled: boolean } }>(
+        "/api/v1/automations/:id",
+        { schema: { params: uuidParamsSchema, body: automationPatchSchema } },
+        async (request, reply) => {
+          try {
+            const automation = await automations.setEnabled(
+              request.auth!.userId,
+              request.params.id,
+              request.body.enabled,
+            );
+            return reply.send({ automation: publicAutomation(automation) });
+          } catch (error) {
+            if (hasErrorName(error, "InvalidAutomationScheduleError")) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "VALIDATION_FAILED",
+                    error instanceof Error ? error.message : "Invalid schedule",
+                    false,
+                  ),
+                );
+            }
+            throw error;
+          }
+        },
+      );
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/automations/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          await automations.delete(request.auth!.userId, request.params.id);
+          return reply.code(204).send();
         },
       );
     }

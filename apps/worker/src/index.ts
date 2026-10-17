@@ -24,6 +24,7 @@ import { createWorkerLogger, logWorkerFailure } from "./logger.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
 import { EventIngestorProcessor } from "./event-ingestor.js";
 import { startWorkerLanes } from "./lanes.js";
+import { createAutomationWorker } from "./automation.js";
 import { QuotaInterruptProcessor } from "./quota-interrupt.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
 import { SessionDeletionProcessor } from "./session-deletion.js";
@@ -38,6 +39,12 @@ const reportWorkerError = (_message: string, error: unknown) => {
 };
 const database = createDatabase(config.databaseUrl);
 const repositories = createRepositories(database.db);
+const automationWorker = createAutomationWorker({
+  repository: repositories.automations,
+  notifications: repositories.sessionDelivery,
+  createId: randomUUID,
+  logger,
+});
 const ark = new HttpArkGateway({
   baseUrl: config.ark.baseUrl,
   apiKey: config.ark.apiKey,
@@ -254,6 +261,9 @@ const scheduler = startWorkerLanes({
         usageProcessor,
         sessionHistoryProcessor,
         quotaInterruptProcessor,
+        {
+          runOnce: async () => (await automationWorker.runOnce()).claimed,
+        },
       ],
     },
     {

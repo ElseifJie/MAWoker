@@ -131,6 +131,16 @@ export const quotaReservationStatus = pgEnum("quota_reservation_status", [
   "released",
 ]);
 export const quotaMode = pgEnum("quota_mode", ["enforced", "unlimited"]);
+export const automationKind = pgEnum("automation_kind", ["reminder"]);
+export const automationStatus = pgEnum("automation_status", [
+  "active",
+  "paused",
+  "deleted",
+]);
+export const automationOccurrenceStatus = pgEnum(
+  "automation_occurrence_status",
+  ["pending", "claimed", "completed", "failed", "canceled"],
+);
 export const backgroundJobType = pgEnum("background_job_type", [
   "delete_session",
   "delete_artifact",
@@ -639,8 +649,12 @@ export const userNotifications = pgTable(
   {
     id: uuid("id").primaryKey(),
     ownerUserId: uuid("owner_user_id").notNull(),
-    sessionId: uuid("session_id").notNull(),
-    turnId: uuid("turn_id").notNull(),
+    sessionId: uuid("session_id"),
+    turnId: uuid("turn_id"),
+    sourceType: text("source_type").default("turn").notNull(),
+    sourceId: text("source_id"),
+    dedupeKey: text("dedupe_key"),
+    payload: jsonb("payload").$type<Record<string, unknown>>(),
     kind: text("kind").notNull(),
     readAt: timestamp("read_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -663,9 +677,13 @@ export const userNotifications = pgTable(
       table.turnId,
       table.kind,
     ),
+    unique("user_notifications_dedupe_key").on(
+      table.ownerUserId,
+      table.dedupeKey,
+    ),
     check(
       "user_notifications_kind_check",
-      sql`${table.kind} in ('completed','failed','needs_action','sync_failed')`,
+      sql`${table.kind} in ('completed','failed','needs_action','sync_failed','reminder')`,
     ),
     index("user_notifications_owner_created_idx").on(
       table.ownerUserId,
@@ -1280,5 +1298,71 @@ export const sessionEventConsumers = pgTable(
       foreignColumns: [sessions.ownerUserId, sessions.id],
     }).onDelete("cascade"),
     index("session_event_consumers_lease_idx").on(table.leaseUntil),
+  ],
+);
+
+/**
+ * Reminder-first automation. `schedule` is an IANA-timezone wall-clock rule;
+ * `occurrences` are pre-materialized so claiming is a normal leased job and the
+ * unique key is the idempotency key.
+ */
+export const automations = pgTable(
+  "automations",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    kind: automationKind("kind").default("reminder").notNull(),
+    schedule: jsonb("schedule").$type<Record<string, unknown>>().notNull(),
+    timezone: text("timezone").notNull(),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    scheduleVersion: integer("schedule_version").default(1).notNull(),
+    revision: integer("revision").default(1).notNull(),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    check("automations_revision_positive_check", sql`${table.revision} > 0`),
+    index("automations_owner_next_idx").on(
+      table.ownerUserId,
+      table.enabled,
+      table.nextRunAt,
+    ),
+  ],
+);
+
+export const automationOccurrences = pgTable(
+  "automation_occurrences",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    automationId: uuid("automation_id")
+      .notNull()
+      .references(() => automations.id, { onDelete: "cascade" }),
+    scheduleVersion: integer("schedule_version").notNull(),
+    scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+    status: automationOccurrenceStatus("status").default("pending").notNull(),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    leaseGeneration: integer("lease_generation").default(0).notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    errorCode: text("error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    unique("automation_occurrences_round_key").on(
+      table.automationId,
+      table.scheduleVersion,
+      table.scheduledAt,
+    ),
+    index("automation_occurrences_due_idx").on(table.status, table.scheduledAt),
+    index("automation_occurrences_owner_idx").on(
+      table.ownerUserId,
+      table.scheduledAt,
+    ),
   ],
 );

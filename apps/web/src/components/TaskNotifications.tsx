@@ -14,6 +14,7 @@ const labels: Record<TaskNotification["kind"], string> = {
   failed: "任务执行失败",
   needs_action: "任务需要处理",
   sync_failed: "结果同步异常",
+  reminder: "提醒",
 };
 
 export function TaskNotifications({
@@ -117,16 +118,21 @@ export function TaskNotifications({
             {unread.map((item) => (
               <li key={item.id}>
                 <div className="task-notifications__item-copy">
-                  <Link
-                    to={`/sessions/${item.sessionId}`}
-                    onClick={() => {
-                      void markRead(item.id);
-                      setOpen(false);
-                    }}
-                  >
-                    {labels[item.kind]}
-                  </Link>
-                  {sessions.find((session) => session.id === item.sessionId)
+                  {item.sessionId ? (
+                    <Link
+                      to={`/sessions/${item.sessionId}`}
+                      onClick={() => {
+                        void markRead(item.id);
+                        setOpen(false);
+                      }}
+                    >
+                      {labels[item.kind]}
+                    </Link>
+                  ) : (
+                    <span>{labels[item.kind]}</span>
+                  )}
+                  {item.sessionId &&
+                  sessions.find((session) => session.id === item.sessionId)
                     ?.title ? (
                     <span>
                       {
@@ -138,12 +144,23 @@ export function TaskNotifications({
                   ) : null}
                   <details className="task-notifications__details">
                     <summary>通知详情</summary>
-                    <span>
-                      任务编号：<code>{item.sessionId}</code>
-                    </span>
-                    <span>
-                      回合编号：<code>{item.turnId}</code>
-                    </span>
+                    {item.sessionId ? (
+                      <>
+                        <span>
+                          任务编号：<code>{item.sessionId}</code>
+                        </span>
+                        <span>
+                          回合编号：<code>{item.turnId}</code>
+                        </span>
+                      </>
+                    ) : (
+                      <span>
+                        提醒内容：
+                        {typeof item.payload?.title === "string"
+                          ? item.payload.title
+                          : "自动提醒"}
+                      </span>
+                    )}
                     <span>
                       完整时间：
                       {new Date(item.createdAt).toLocaleString("zh-CN")}

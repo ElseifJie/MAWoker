@@ -33,8 +33,11 @@ export interface DeliveryApiRepository {
   ): PromiseLike<
     Array<{
       id: string;
-      sessionId: string;
-      turnId: string;
+      sessionId: string | null;
+      turnId: string | null;
+      sourceType: string;
+      sourceId: string | null;
+      payload: Record<string, unknown> | null;
       kind: string;
       readAt: Date | null;
       createdAt: Date;
@@ -123,6 +126,9 @@ export function registerSessionDeliveryRoutes(
       id: item.id,
       sessionId: item.sessionId,
       turnId: item.turnId,
+      sourceType: item.sourceType,
+      sourceId: item.sourceId,
+      payload: item.payload,
       kind: item.kind,
       readAt: item.readAt,
       createdAt: item.createdAt,

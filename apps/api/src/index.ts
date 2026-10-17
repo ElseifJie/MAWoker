@@ -9,6 +9,7 @@ import {
   AdminUserDetailService,
   ArtifactService,
   AssistantProfileService,
+  AutomationService,
   InviteCodeService,
   AuditService,
   DriveFileService,
@@ -117,6 +118,10 @@ const sessions = new SessionService({
   memory,
 });
 const runService = new RunService({ repository: repositories.runs });
+const automationService = new AutomationService({
+  repository: repositories.automations,
+  createId: randomUUID,
+});
 const inviteCodes = new InviteCodeService({
   repository: repositories.inviteCodes,
   passwordHasher: { hash: hashPassword },
@@ -156,6 +161,7 @@ const artifacts = new ArtifactService({
 const app = buildApp({
   auth,
   invites: inviteCodes,
+  automations: automationService,
   assistant: assistantProfile,
   admin,
   audit,

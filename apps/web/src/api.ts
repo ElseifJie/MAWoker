@@ -220,9 +220,12 @@ export interface SessionTurn {
 
 export interface TaskNotification {
   id: string;
-  sessionId: string;
-  turnId: string;
-  kind: "completed" | "failed" | "needs_action" | "sync_failed";
+  sessionId: string | null;
+  turnId: string | null;
+  sourceType: string;
+  sourceId: string | null;
+  payload: Record<string, unknown> | null;
+  kind: "completed" | "failed" | "needs_action" | "sync_failed" | "reminder";
   readAt: string | null;
   createdAt: string;
 }
