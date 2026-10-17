@@ -13,6 +13,7 @@ import {
   AutomationService,
   InviteCodeService,
   McpServerService,
+  NotificationChannelService,
   AuditService,
   DriveFileService,
   LoggingNotifier,
@@ -135,6 +136,10 @@ const automationService = new AutomationService({
   repository: repositories.automations,
   createId: randomUUID,
 });
+const notificationChannels = new NotificationChannelService({
+  repository: repositories.notificationChannels,
+  createId: randomUUID,
+});
 const mcpServers = new McpServerService({
   repository: repositories.mcpServers,
   createId: randomUUID,
@@ -182,6 +187,7 @@ const app = buildApp({
   accountExport: accountExportService,
   adminSystem: repositories.adminSystem,
   mcpServers,
+  notificationChannels,
   accountSessions: {
     async list(userId, currentSessionId, now) {
       const rows = await repositories.authSessions.listActiveForUser(

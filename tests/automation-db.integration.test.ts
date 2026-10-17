@@ -39,17 +39,22 @@ describe("automation reminders", () => {
     expect(automation.nextRunAt.toISOString()).toBe("2026-10-17T01:00:00.000Z");
 
     now = new Date("2026-10-17T01:00:00.000Z");
+    const external: Array<{ title: string; text: string }> = [];
     const worker = createAutomationWorker({
       repository: repositories.automations,
       notifications: repositories.sessionDelivery,
       createId: id,
       now: () => now,
+      notifyExternal: async (input) => {
+        external.push({ title: input.title, text: input.text });
+      },
     });
     await expect(worker.runOnce()).resolves.toEqual({
       claimed: 1,
       notified: 1,
       failed: 0,
     });
+    expect(external).toEqual([{ title: "喝水", text: "提醒时间到了。" }]);
 
     const notification = await database.client.query<{
       kind: string;

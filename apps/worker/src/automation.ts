@@ -67,6 +67,11 @@ export interface AutomationWorkerDependencies {
     prompt: string;
     occurrenceId: string;
   }) => PromiseLike<void>;
+  notifyExternal?: (input: {
+    ownerUserId: string;
+    title: string;
+    text: string;
+  }) => PromiseLike<void>;
   now?: () => Date;
   batchSize?: number;
   leaseMs?: number;
@@ -103,6 +108,13 @@ export function createAutomationWorker(
               prompt: claim.prompt,
               occurrenceId: claim.occurrenceId,
             });
+            await Promise.resolve(
+              dependencies.notifyExternal?.({
+                ownerUserId: claim.ownerUserId,
+                title: claim.title,
+                text: "定时任务已启动。",
+              }),
+            ).catch(() => undefined);
           } else {
             const created =
               await dependencies.notifications.createSystemNotification({
@@ -120,6 +132,13 @@ export function createAutomationWorker(
                 now: at,
               });
             if (created.created) notified += 1;
+            await Promise.resolve(
+              dependencies.notifyExternal?.({
+                ownerUserId: claim.ownerUserId,
+                title: claim.title,
+                text: "提醒时间到了。",
+              }),
+            ).catch(() => undefined);
           }
 
           const schedule = parseAutomationSchedule(claim.schedule);

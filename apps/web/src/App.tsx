@@ -1,6 +1,7 @@
 import { AccountExportButton } from "./AccountExportButton.js";
 import { AccountSessions } from "./AccountSessions.js";
 import { McpServers } from "./McpServers.js";
+import { NotificationChannels } from "./NotificationChannels.js";
 import { useAccountSync } from "./useAccountSync.js";
 import { AutomationsPage } from "./AutomationsPage.js";
 import { usePwaInstall } from "./usePwaInstall.js";
@@ -832,6 +833,11 @@ function SettingsPage({
       >
         <h2 id="connectors-heading">连接器</h2>
         <McpServers />
+      </section>
+
+      <section className="settings-section" aria-labelledby="channels-heading">
+        <h2 id="channels-heading">通知渠道</h2>
+        <NotificationChannels />
       </section>
 
       <section className="settings-section" aria-labelledby="sessions-heading">

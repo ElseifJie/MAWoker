@@ -600,6 +600,42 @@ interface BuildAppOptions {
   adminSystem?: {
     snapshot(now?: Date): PromiseLike<unknown>;
   };
+  notificationChannels?: {
+    list(ownerUserId: string): PromiseLike<
+      Array<{
+        id: string;
+        name: string;
+        type: "webhook";
+        url: string;
+        enabled: boolean;
+        lastErrorCode: string | null;
+      }>
+    >;
+    create(
+      ownerUserId: string,
+      input: { name: string; url: string },
+    ): PromiseLike<{
+      id: string;
+      name: string;
+      type: "webhook";
+      url: string;
+      enabled: boolean;
+      lastErrorCode: string | null;
+    }>;
+    setEnabled(
+      ownerUserId: string,
+      id: string,
+      enabled: boolean,
+    ): PromiseLike<{
+      id: string;
+      name: string;
+      type: "webhook";
+      url: string;
+      enabled: boolean;
+      lastErrorCode: string | null;
+    }>;
+    delete(ownerUserId: string, id: string): PromiseLike<void>;
+  };
   mcpServers?: {
     list(ownerUserId: string): PromiseLike<
       Array<{
@@ -1325,6 +1361,25 @@ function publicRun(run: RunRecord) {
     endedAt: run.endedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+function publicNotificationChannel(channel: {
+  id: string;
+  name: string;
+  type: "webhook";
+  url: string;
+  enabled: boolean;
+  lastErrorCode: string | null;
+}) {
+  const parsed = new URL(channel.url);
+  return {
+    id: channel.id,
+    name: channel.name,
+    type: channel.type,
+    url: `${parsed.protocol}//${parsed.host}/…${parsed.pathname.slice(-4).padStart(4, "*")}`,
+    enabled: channel.enabled,
+    lastErrorCode: channel.lastErrorCode,
   };
 }
 
@@ -3036,6 +3091,115 @@ export function buildApp(options: BuildAppOptions = {}) {
           new Date(),
         ),
       }));
+    }
+
+    if (options.notificationChannels) {
+      const channels = options.notificationChannels;
+      app.get("/api/v1/notification-channels", async (request) => ({
+        channels: (await channels.list(request.auth!.userId)).map(
+          publicNotificationChannel,
+        ),
+      }));
+      app.post<{ Body: { name: string; url: string } }>(
+        "/api/v1/notification-channels",
+        {
+          schema: {
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["name", "url"],
+              properties: {
+                name: { type: "string", minLength: 1, maxLength: 80 },
+                url: { type: "string", minLength: 8, maxLength: 2048 },
+              },
+            },
+          },
+        },
+        async (request, reply) => {
+          try {
+            return reply.code(201).send({
+              channel: publicNotificationChannel(
+                await channels.create(request.auth!.userId, request.body),
+              ),
+            });
+          } catch (error) {
+            if (hasErrorName(error, "InvalidChannelUrlError")) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "CHANNEL_URL_UNSAFE",
+                    error instanceof Error
+                      ? error.message
+                      : "Webhook URL is not allowed",
+                    false,
+                  ),
+                );
+            }
+            if (hasErrorName(error, "NotificationChannelNameConflictError")) {
+              return reply
+                .code(409)
+                .send(
+                  applicationError(
+                    request.id,
+                    "CHANNEL_NAME_CONFLICT",
+                    "A notification channel with this name already exists",
+                    false,
+                  ),
+                );
+            }
+            throw error;
+          }
+        },
+      );
+      app.patch<{ Params: { id: string }; Body: { enabled: boolean } }>(
+        "/api/v1/notification-channels/:id",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["enabled"],
+              properties: { enabled: { type: "boolean" } },
+            },
+          },
+        },
+        async (request, reply) => {
+          try {
+            return reply.send({
+              channel: publicNotificationChannel(
+                await channels.setEnabled(
+                  request.auth!.userId,
+                  request.params.id,
+                  request.body.enabled,
+                ),
+              ),
+            });
+          } catch (error) {
+            if (hasErrorName(error, "ResourceNotFoundError")) {
+              return reply.code(404).send(resourceNotFoundError(request.id));
+            }
+            throw error;
+          }
+        },
+      );
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/notification-channels/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            await channels.delete(request.auth!.userId, request.params.id);
+            return reply.code(204).send();
+          } catch (error) {
+            if (hasErrorName(error, "ResourceNotFoundError")) {
+              return reply.code(404).send(resourceNotFoundError(request.id));
+            }
+            throw error;
+          }
+        },
+      );
     }
 
     if (options.mcpServers) {

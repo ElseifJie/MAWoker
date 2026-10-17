@@ -288,6 +288,13 @@
       "when": 1792258624054,
       "tag": "0040_brief_whiplash",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1792258871360,
+      "tag": "0041_rainy_firestar",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ import { createAutomationRepository } from "./automation-repository.js";
 import { createAccountExportRepository } from "./account-export-repository.js";
 import { createAdminSystemRepository } from "./admin-system-repository.js";
 import { createMcpServerRepository } from "./mcp-server-repository.js";
+import { createNotificationChannelRepository } from "./notification-channel-repository.js";
 import {
   appendAccountChange,
   createSyncRepository,
@@ -1026,6 +1027,7 @@ export function createRepositories(database: unknown) {
     accountExport: createAccountExportRepository(db),
     adminSystem: createAdminSystemRepository(db),
     mcpServers: createMcpServerRepository(db),
+    notificationChannels: createNotificationChannelRepository(db),
     sync: createSyncRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),

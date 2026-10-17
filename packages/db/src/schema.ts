@@ -135,6 +135,9 @@ export const mcpServerStatus = pgEnum("mcp_server_status", [
   "active",
   "disabled",
 ]);
+export const notificationChannelType = pgEnum("notification_channel_type", [
+  "webhook",
+]);
 export const automationKind = pgEnum("automation_kind", [
   "reminder",
   "execute",
@@ -1396,5 +1399,36 @@ export const mcpServers = pgTable(
   (table) => [
     unique("mcp_servers_owner_name_unique").on(table.ownerUserId, table.name),
     index("mcp_servers_owner_status_idx").on(table.ownerUserId, table.status),
+  ],
+);
+
+/**
+ * Outbound notification targets. Webhook URLs contain bearer-like tokens, so
+ * the API only returns a masked form after creation; the worker reads the full
+ * URL server-side.
+ */
+export const notificationChannels = pgTable(
+  "notification_channels",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    type: notificationChannelType("type").default("webhook").notNull(),
+    url: text("url").notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    unique("notification_channels_owner_name_unique").on(
+      table.ownerUserId,
+      table.name,
+    ),
+    index("notification_channels_owner_enabled_idx").on(
+      table.ownerUserId,
+      table.enabled,
+    ),
   ],
 );

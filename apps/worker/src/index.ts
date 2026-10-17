@@ -25,6 +25,7 @@ import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconcili
 import { EventIngestorProcessor } from "./event-ingestor.js";
 import { startWorkerLanes } from "./lanes.js";
 import { createAutomationWorker } from "./automation.js";
+import { sendWebhookNotifications } from "@pwa/domain";
 import { QuotaInterruptProcessor } from "./quota-interrupt.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
 import { SessionDeletionProcessor } from "./session-deletion.js";
@@ -54,6 +55,22 @@ const automationWorker = createAutomationWorker({
       },
       { userId: ownerUserId, requestId: `automation:${occurrenceId}` },
     );
+  },
+  notifyExternal: async ({ ownerUserId, title, text }) => {
+    const channels =
+      await repositories.notificationChannels.listEnabled(ownerUserId);
+    if (channels.length === 0) return;
+    await sendWebhookNotifications({
+      channels,
+      payload: { title, text },
+      onResult: (channel, errorCode) =>
+        repositories.notificationChannels.updateError({
+          ownerUserId,
+          id: channel.id,
+          errorCode,
+          now: new Date(),
+        }),
+    });
   },
   logger,
 });

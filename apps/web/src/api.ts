@@ -232,6 +232,15 @@ export interface TaskNotification {
 
 export type { UiEvent, UiEventType } from "@pwa/contracts";
 
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  type: "webhook";
+  url: string;
+  enabled: boolean;
+  lastErrorCode: string | null;
+}
+
 export interface McpServer {
   id: string;
   name: string;
@@ -894,6 +903,22 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  listNotificationChannels: () =>
+    request<{ channels: NotificationChannel[] }>("/notification-channels"),
+  createNotificationChannel: (name: string, url: string) =>
+    request<{ channel: NotificationChannel }>("/notification-channels", {
+      method: "POST",
+      body: JSON.stringify({ name, url }),
+    }),
+  setNotificationChannelEnabled: (id: string, enabled: boolean) =>
+    request<{ channel: NotificationChannel }>(
+      `/notification-channels/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify({ enabled }) },
+    ),
+  deleteNotificationChannel: (id: string) =>
+    request<void>(`/notification-channels/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   listMcpServers: () => request<{ servers: McpServer[] }>("/mcp-servers"),
   createMcpServer: (name: string, url: string) =>
     request<{ server: McpServer }>("/mcp-servers", {
