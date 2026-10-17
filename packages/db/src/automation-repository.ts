@@ -11,7 +11,8 @@ export interface AutomationRow extends Row {
   id: string;
   ownerUserId: string;
   title: string;
-  kind: "reminder";
+  kind: "reminder" | "execute";
+  prompt: string | null;
   schedule: Record<string, unknown>;
   timezone: string;
   nextRunAt: Date;
@@ -30,13 +31,14 @@ export interface AutomationClaim {
   scheduledAt: Date;
   leaseGeneration: number;
   title: string;
-  kind: "reminder";
+  kind: "reminder" | "execute";
+  prompt: string | null;
   schedule: Record<string, unknown>;
   timezone: string;
 }
 
 const selection = sql`id, owner_user_id as "ownerUserId", title, kind,
-  schedule, timezone, next_run_at as "nextRunAt", enabled,
+  prompt, schedule, timezone, next_run_at as "nextRunAt", enabled,
   schedule_version as "scheduleVersion", revision,
   created_at as "createdAt", updated_at as "updatedAt"`;
 
@@ -56,6 +58,8 @@ export function createAutomationRepository(db: Database) {
       occurrenceId: string;
       ownerUserId: string;
       title: string;
+      kind: "reminder" | "execute";
+      prompt: string | null;
       schedule: Record<string, unknown>;
       timezone: string;
       nextRunAt: Date;
@@ -64,13 +68,14 @@ export function createAutomationRepository(db: Database) {
       return db.transaction(async (transaction) => {
         const created = await transaction.execute<AutomationRow>(
           sql`insert into automations
-                (id, owner_user_id, title, kind, schedule, timezone,
+                (id, owner_user_id, title, kind, prompt, schedule, timezone,
                  next_run_at, enabled, schedule_version, revision,
                  created_at, updated_at)
               values (
-                ${input.id}, ${input.ownerUserId}, ${input.title}, 'reminder',
-                ${JSON.stringify(input.schedule)}::jsonb, ${input.timezone},
-                ${input.nextRunAt}, true, 1, 1, ${input.now}, ${input.now}
+                ${input.id}, ${input.ownerUserId}, ${input.title}, ${input.kind},
+                ${input.prompt}, ${JSON.stringify(input.schedule)}::jsonb,
+                ${input.timezone}, ${input.nextRunAt}, true, 1, 1,
+                ${input.now}, ${input.now}
               )
               returning ${selection}`,
         );
@@ -196,7 +201,8 @@ export function createAutomationRepository(db: Database) {
           scheduledAt: Date;
           leaseGeneration: number;
           title: string;
-          kind: "reminder";
+          kind: "reminder" | "execute";
+          prompt: string | null;
           schedule: Record<string, unknown>;
           timezone: string;
         }>(
@@ -206,8 +212,8 @@ export function createAutomationRepository(db: Database) {
                      occurrence.schedule_version as "scheduleVersion",
                      occurrence.scheduled_at as "scheduledAt",
                      occurrence.lease_generation as "leaseGeneration",
-                     automation.title, automation.kind, automation.schedule,
-                     automation.timezone
+                     automation.title, automation.kind, automation.prompt,
+                     automation.schedule, automation.timezone
                 from automation_occurrences occurrence
                 join automations automation
                   on automation.id = occurrence.automation_id
@@ -244,6 +250,7 @@ export function createAutomationRepository(db: Database) {
             leaseGeneration: Number(claim.leaseGeneration),
             title: row.title,
             kind: row.kind,
+            prompt: row.prompt,
             schedule: row.schedule,
             timezone: row.timezone,
           });

@@ -561,7 +561,13 @@ export interface AutomationApiService {
   list(ownerUserId: string): PromiseLike<AutomationRecord[]>;
   create(
     ownerUserId: string,
-    input: { title: string; schedule: unknown; timezone: string },
+    input: {
+      title: string;
+      kind?: "reminder" | "execute";
+      prompt?: string;
+      schedule: unknown;
+      timezone: string;
+    },
   ): PromiseLike<AutomationRecord>;
   setEnabled(
     ownerUserId: string,
@@ -797,6 +803,8 @@ const automationBodySchema = {
   required: ["title", "schedule", "timezone"],
   properties: {
     title: { type: "string", minLength: 1, maxLength: 120 },
+    kind: { type: "string", enum: ["reminder", "execute"] },
+    prompt: { type: "string", minLength: 1, maxLength: 8000 },
     schedule: { type: "object" },
     timezone: { type: "string", minLength: 1, maxLength: 80 },
   },
@@ -1343,6 +1351,7 @@ function publicAutomation(automation: AutomationRecord) {
     id: automation.id,
     title: automation.title,
     kind: automation.kind,
+    prompt: automation.prompt,
     schedule: automation.schedule,
     timezone: automation.timezone,
     nextRunAt: automation.nextRunAt.toISOString(),

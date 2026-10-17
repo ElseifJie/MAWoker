@@ -10,6 +10,7 @@ const reminder = {
   id: "automation-1",
   title: "喝水",
   kind: "reminder" as const,
+  prompt: null,
   schedule: { type: "daily" as const, time: "09:00" },
   timezone: "Asia/Shanghai",
   nextRunAt: "2026-10-18T01:00:00.000Z",
@@ -137,5 +138,31 @@ describe("AutomationsPage", () => {
       "/api/v1/automations/automation-1",
       expect.objectContaining({ method: "DELETE" }),
     );
+  });
+
+  it("creates an execute task with a prompt", async () => {
+    const user = userEvent.setup();
+    render(<AutomationsPage onAuthRequired={vi.fn()} />);
+    await screen.findByText("喝水");
+
+    await user.type(screen.getByLabelText("提醒内容"), "每日简报");
+    await user.selectOptions(screen.getByLabelText("类型"), "execute");
+    await user.type(
+      screen.getByLabelText("任务内容"),
+      "整理今天的待办并发给我",
+    );
+    await user.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByText("定时任务已创建。")).toBeVisible();
+    const call = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input) === "/api/v1/automations" && init?.method === "POST",
+    );
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      title: "每日简报",
+      kind: "execute",
+      prompt: "整理今天的待办并发给我",
+      schedule: { type: "daily", time: "09:00" },
+    });
   });
 });

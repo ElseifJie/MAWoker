@@ -121,4 +121,34 @@ describe("automation API", () => {
     });
     await app.close();
   });
+
+  it("accepts an execute task with a prompt", async () => {
+    const service = automations();
+    service.create.mockResolvedValueOnce({
+      ...automation,
+      kind: "execute",
+      prompt: "整理今天的待办并发给我",
+    });
+    const app = buildApp({ auth: auth(), automations: service });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/automations",
+      cookies: { [AUTH_COOKIE_NAME]: "token" },
+      payload: {
+        title: "每日简报",
+        kind: "execute",
+        prompt: "整理今天的待办并发给我",
+        schedule: { type: "daily", time: "09:00" },
+        timezone: "Asia/Shanghai",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().automation).toMatchObject({
+      kind: "execute",
+      prompt: "整理今天的待办并发给我",
+    });
+    await app.close();
+  });
 });

@@ -43,6 +43,18 @@ const automationWorker = createAutomationWorker({
   repository: repositories.automations,
   notifications: repositories.sessionDelivery,
   createId: randomUUID,
+  execute: async ({ ownerUserId, title, prompt, occurrenceId }) => {
+    const agent = await service.resolveSelection(ownerUserId);
+    await sessionService.create(
+      {
+        agentId: agent.id,
+        title,
+        content: prompt,
+        submissionId: occurrenceId,
+      },
+      { userId: ownerUserId, requestId: `automation:${occurrenceId}` },
+    );
+  },
   logger,
 });
 const ark = new HttpArkGateway({

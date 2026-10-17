@@ -8,6 +8,8 @@ interface AutomationClaim {
   scheduledAt: Date;
   leaseGeneration: number;
   title: string;
+  kind: "reminder" | "execute";
+  prompt: string | null;
   schedule: Record<string, unknown>;
   timezone: string;
 }
@@ -59,6 +61,12 @@ export interface AutomationWorkerDependencies {
     }): PromiseLike<{ id: string; created: boolean }>;
   };
   createId: () => string;
+  execute?: (input: {
+    ownerUserId: string;
+    title: string;
+    prompt: string;
+    occurrenceId: string;
+  }) => PromiseLike<void>;
   now?: () => Date;
   batchSize?: number;
   leaseMs?: number;
@@ -85,22 +93,34 @@ export function createAutomationWorker(
       let failed = 0;
       for (const claim of claims) {
         try {
-          const created =
-            await dependencies.notifications.createSystemNotification({
-              id: dependencies.createId(),
+          if (claim.kind === "execute") {
+            if (!dependencies.execute || !claim.prompt) {
+              throw new Error("Execute automation is not configured");
+            }
+            await dependencies.execute({
               ownerUserId: claim.ownerUserId,
-              kind: "reminder",
-              sourceType: "automation",
-              sourceId: claim.occurrenceId,
-              dedupeKey: `automation:${claim.occurrenceId}`,
-              payload: {
-                title: claim.title,
-                automationId: claim.automationId,
-                scheduledAt: claim.scheduledAt.toISOString(),
-              },
-              now: at,
+              title: claim.title,
+              prompt: claim.prompt,
+              occurrenceId: claim.occurrenceId,
             });
-          if (created.created) notified += 1;
+          } else {
+            const created =
+              await dependencies.notifications.createSystemNotification({
+                id: dependencies.createId(),
+                ownerUserId: claim.ownerUserId,
+                kind: "reminder",
+                sourceType: "automation",
+                sourceId: claim.occurrenceId,
+                dedupeKey: `automation:${claim.occurrenceId}`,
+                payload: {
+                  title: claim.title,
+                  automationId: claim.automationId,
+                  scheduledAt: claim.scheduledAt.toISOString(),
+                },
+                now: at,
+              });
+            if (created.created) notified += 1;
+          }
 
           const schedule = parseAutomationSchedule(claim.schedule);
           const nextRunAt = computeNextRunAt(

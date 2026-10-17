@@ -14,6 +14,7 @@ import {
   Input,
   PageHeader,
   Select,
+  Textarea,
   Spinner,
 } from "./ui/index.js";
 
@@ -73,6 +74,8 @@ export function AutomationsPage({
   const [items, setItems] = useState<AutomationRecord[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [title, setTitle] = useState("");
+  const [kind, setKind] = useState<"reminder" | "execute">("reminder");
+  const [prompt, setPrompt] = useState("");
   const [type, setType] = useState<ScheduleType>("daily");
   const [time, setTime] = useState("09:00");
   const [weekdays, setWeekdays] = useState<number[]>([1]);
@@ -129,17 +132,28 @@ export function AutomationsPage({
       setFeedback({ tone: "danger", message: "请输入提醒内容。" });
       return;
     }
+    if (kind === "execute" && !prompt.trim()) {
+      setFeedback({ tone: "danger", message: "请输入要执行的任务内容。" });
+      return;
+    }
     setPending(true);
     setFeedback(null);
     try {
       const result = await apiClient.createAutomation({
         title: title.trim(),
+        ...(kind === "execute"
+          ? { kind, prompt: prompt.trim() }
+          : { kind: "reminder" }),
         schedule,
         timezone,
       });
       setItems((current) => [result.automation, ...(current ?? [])]);
       setTitle("");
-      setFeedback({ tone: "success", message: "提醒已创建。" });
+      setPrompt("");
+      setFeedback({
+        tone: "success",
+        message: kind === "execute" ? "定时任务已创建。" : "提醒已创建。",
+      });
     } catch (error) {
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
@@ -251,6 +265,30 @@ export function AutomationsPage({
               disabled={pending}
             />
           </Field>
+          <Field label="类型">
+            <Select
+              value={kind}
+              onChange={(event) =>
+                setKind(event.target.value as "reminder" | "execute")
+              }
+              disabled={pending}
+            >
+              <option value="reminder">提醒</option>
+              <option value="execute">执行任务</option>
+            </Select>
+          </Field>
+          {kind === "execute" ? (
+            <Field label="任务内容" hint="到期后用默认助手创建并执行">
+              <Textarea
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                rows={4}
+                maxLength={8000}
+                required
+                disabled={pending}
+              />
+            </Field>
+          ) : null}
           <div className="automation-form-row">
             <Field label="重复">
               <Select
@@ -319,7 +357,7 @@ export function AutomationsPage({
           ) : null}
           <Button type="submit" loading={pending}>
             <Plus size={16} aria-hidden="true" />
-            创建提醒
+            {kind === "execute" ? "创建任务" : "创建提醒"}
           </Button>
         </form>
         {feedback ? (
@@ -336,6 +374,7 @@ export function AutomationsPage({
             <thead>
               <tr>
                 <th scope="col">内容</th>
+                <th scope="col">类型</th>
                 <th scope="col">规则</th>
                 <th scope="col">下次提醒</th>
                 <th scope="col">状态</th>
@@ -346,6 +385,7 @@ export function AutomationsPage({
               {items.map((item) => (
                 <tr key={item.id}>
                   <td>{item.title}</td>
+                  <td>{item.kind === "execute" ? "执行任务" : "提醒"}</td>
                   <td>{scheduleLabel(item.schedule)}</td>
                   <td>
                     {new Date(item.nextRunAt).toLocaleString("zh-CN")}

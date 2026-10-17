@@ -9,7 +9,8 @@ export interface AutomationRecord {
   id: string;
   ownerUserId: string;
   title: string;
-  kind: "reminder";
+  kind: "reminder" | "execute";
+  prompt: string | null;
   schedule: Record<string, unknown>;
   timezone: string;
   nextRunAt: Date;
@@ -26,6 +27,8 @@ export interface AutomationRepository {
     occurrenceId: string;
     ownerUserId: string;
     title: string;
+    kind: "reminder" | "execute";
+    prompt: string | null;
     schedule: Record<string, unknown>;
     timezone: string;
     nextRunAt: Date;
@@ -77,7 +80,13 @@ export class AutomationService {
 
   async create(
     ownerUserId: string,
-    input: { title: string; schedule: unknown; timezone: string },
+    input: {
+      title: string;
+      kind?: "reminder" | "execute";
+      prompt?: string;
+      schedule: unknown;
+      timezone: string;
+    },
   ): Promise<AutomationRecord> {
     const title = input.title.trim();
     if (title.length === 0 || title.length > 120) {
@@ -87,6 +96,16 @@ export class AutomationService {
     }
     if (typeof input.timezone !== "string" || input.timezone.length === 0) {
       throw new InvalidAutomationScheduleError("A time zone is required");
+    }
+    const kind = input.kind ?? "reminder";
+    const prompt = kind === "execute" ? (input.prompt?.trim() ?? "") : null;
+    if (
+      kind === "execute" &&
+      (prompt === null || prompt.length === 0 || prompt.length > 8_000)
+    ) {
+      throw new InvalidAutomationScheduleError(
+        "Execute automations need a prompt of 1–8000 characters",
+      );
     }
     const schedule = parseAutomationSchedule(input.schedule);
     const now = this.now();
@@ -101,6 +120,8 @@ export class AutomationService {
       occurrenceId: this.dependencies.createId(),
       ownerUserId,
       title,
+      kind,
+      prompt,
       schedule: schedule as unknown as Record<string, unknown>,
       timezone: input.timezone,
       nextRunAt,

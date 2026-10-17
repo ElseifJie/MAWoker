@@ -135,7 +135,10 @@ export const mcpServerStatus = pgEnum("mcp_server_status", [
   "active",
   "disabled",
 ]);
-export const automationKind = pgEnum("automation_kind", ["reminder"]);
+export const automationKind = pgEnum("automation_kind", [
+  "reminder",
+  "execute",
+]);
 export const automationStatus = pgEnum("automation_status", [
   "active",
   "paused",
@@ -1321,6 +1324,8 @@ export const automations = pgTable(
     kind: automationKind("kind").default("reminder").notNull(),
     schedule: jsonb("schedule").$type<Record<string, unknown>>().notNull(),
     timezone: text("timezone").notNull(),
+    /** Set for execute automations; reminder rows leave it null. */
+    prompt: text("prompt"),
     nextRunAt: timestamp("next_run_at", { withTimezone: true }).notNull(),
     enabled: boolean("enabled").default(true).notNull(),
     scheduleVersion: integer("schedule_version").default(1).notNull(),

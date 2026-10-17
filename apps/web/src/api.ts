@@ -279,7 +279,8 @@ export type AutomationSchedule =
 export interface AutomationRecord {
   id: string;
   title: string;
-  kind: "reminder";
+  kind: "reminder" | "execute";
+  prompt: string | null;
   schedule: AutomationSchedule;
   timezone: string;
   nextRunAt: string;
@@ -924,6 +925,8 @@ export const apiClient = {
     request<{ automations: AutomationRecord[] }>("/automations"),
   createAutomation: (input: {
     title: string;
+    kind?: "reminder" | "execute";
+    prompt?: string;
     schedule: AutomationSchedule;
     timezone: string;
   }) =>

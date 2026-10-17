@@ -135,4 +135,67 @@ describe("automation reminders", () => {
     ).rejects.toBeInstanceOf(InvalidAutomationScheduleError);
     await database.close();
   });
+
+  it("executes a scheduled task with the default agent instead of notifying", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const userId = await seedUser(database.client);
+    const now = new Date("2026-10-17T00:00:00.000Z");
+    const service = new AutomationService({
+      repository: repositories.automations,
+      createId: id,
+      now: () => now,
+    });
+    await expect(
+      service.create(userId, {
+        title: "缺少内容",
+        kind: "execute",
+        schedule: { type: "daily", time: "09:00" },
+        timezone: "Asia/Shanghai",
+      }),
+    ).rejects.toBeInstanceOf(InvalidAutomationScheduleError);
+
+    const automation = await service.create(userId, {
+      title: "每日简报",
+      kind: "execute",
+      prompt: "整理今天的待办并发给我",
+      schedule: { type: "daily", time: "09:00" },
+      timezone: "Asia/Shanghai",
+    });
+    const executed: Array<{ prompt: string; occurrenceId: string }> = [];
+    const worker = createAutomationWorker({
+      repository: repositories.automations,
+      notifications: repositories.sessionDelivery,
+      createId: id,
+      now: () => new Date("2026-10-17T01:00:00.000Z"),
+      execute: async (input) => {
+        executed.push(input);
+      },
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({
+      claimed: 1,
+      notified: 0,
+      failed: 0,
+    });
+    expect(executed).toEqual([
+      expect.objectContaining({
+        prompt: "整理今天的待办并发给我",
+        occurrenceId: expect.any(String),
+      }),
+    ]);
+    const notifications = await database.client.query<{ count: number }>(
+      "select count(*)::int as count from user_notifications where owner_user_id = $1",
+      [userId],
+    );
+    expect(notifications.rows[0]?.count).toBe(0);
+    const state = await database.client.query<{ next_run_at: string }>(
+      "select next_run_at from automations where id = $1",
+      [automation.id],
+    );
+    expect(new Date(state.rows[0]!.next_run_at).toISOString()).toBe(
+      "2026-10-18T01:00:00.000Z",
+    );
+    await database.close();
+  });
 });
