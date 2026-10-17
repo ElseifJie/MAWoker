@@ -1,5 +1,6 @@
 import { AccountExportButton } from "./AccountExportButton.js";
 import { AccountSessions } from "./AccountSessions.js";
+import { McpServers } from "./McpServers.js";
 import { useAccountSync } from "./useAccountSync.js";
 import { AutomationsPage } from "./AutomationsPage.js";
 import { usePwaInstall } from "./usePwaInstall.js";
@@ -824,6 +825,14 @@ function SettingsPage({
           <dd>{accountHandle(user.authSubject)}</dd>
         </div>
       </dl>
+
+      <section
+        className="settings-section"
+        aria-labelledby="connectors-heading"
+      >
+        <h2 id="connectors-heading">连接器</h2>
+        <McpServers />
+      </section>
 
       <section className="settings-section" aria-labelledby="sessions-heading">
         <h2 id="sessions-heading">登录设备</h2>

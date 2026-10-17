@@ -12,6 +12,7 @@ import {
   AccountExportService,
   AutomationService,
   InviteCodeService,
+  McpServerService,
   AuditService,
   DriveFileService,
   LoggingNotifier,
@@ -126,6 +127,10 @@ const automationService = new AutomationService({
   repository: repositories.automations,
   createId: randomUUID,
 });
+const mcpServers = new McpServerService({
+  repository: repositories.mcpServers,
+  createId: randomUUID,
+});
 const inviteCodes = new InviteCodeService({
   repository: repositories.inviteCodes,
   passwordHasher: { hash: hashPassword },
@@ -168,6 +173,7 @@ const app = buildApp({
   automations: automationService,
   accountExport: accountExportService,
   adminSystem: repositories.adminSystem,
+  mcpServers,
   accountSessions: {
     async list(userId, currentSessionId, now) {
       const rows = await repositories.authSessions.listActiveForUser(

@@ -594,6 +594,42 @@ interface BuildAppOptions {
   adminSystem?: {
     snapshot(now?: Date): PromiseLike<unknown>;
   };
+  mcpServers?: {
+    list(ownerUserId: string): PromiseLike<
+      Array<{
+        id: string;
+        name: string;
+        url: string;
+        status: "active" | "disabled";
+        createdAt: Date;
+        updatedAt: Date;
+      }>
+    >;
+    create(
+      ownerUserId: string,
+      input: { name: string; url: string },
+    ): PromiseLike<{
+      id: string;
+      name: string;
+      url: string;
+      status: "active" | "disabled";
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    setEnabled(
+      ownerUserId: string,
+      id: string,
+      enabled: boolean,
+    ): PromiseLike<{
+      id: string;
+      name: string;
+      url: string;
+      status: "active" | "disabled";
+      createdAt: Date;
+      updatedAt: Date;
+    }>;
+    delete(ownerUserId: string, id: string): PromiseLike<void>;
+  };
   accountSessions?: {
     list(
       userId: string,
@@ -1281,6 +1317,24 @@ function publicRun(run: RunRecord) {
     endedAt: run.endedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+function publicMcpServer(server: {
+  id: string;
+  name: string;
+  url: string;
+  status: "active" | "disabled";
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: server.id,
+    name: server.name,
+    url: server.url,
+    enabled: server.status === "active",
+    createdAt: server.createdAt.toISOString(),
+    updatedAt: server.updatedAt.toISOString(),
   };
 }
 
@@ -2973,6 +3027,113 @@ export function buildApp(options: BuildAppOptions = {}) {
           new Date(),
         ),
       }));
+    }
+
+    if (options.mcpServers) {
+      const mcp = options.mcpServers;
+      app.get("/api/v1/mcp-servers", async (request) => ({
+        servers: (await mcp.list(request.auth!.userId)).map(publicMcpServer),
+      }));
+      app.post<{ Body: { name: string; url: string } }>(
+        "/api/v1/mcp-servers",
+        {
+          schema: {
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["name", "url"],
+              properties: {
+                name: { type: "string", minLength: 1, maxLength: 80 },
+                url: { type: "string", minLength: 8, maxLength: 2048 },
+              },
+            },
+          },
+        },
+        async (request, reply) => {
+          try {
+            return reply.code(201).send({
+              server: publicMcpServer(
+                await mcp.create(request.auth!.userId, request.body),
+              ),
+            });
+          } catch (error) {
+            if (hasErrorName(error, "McpUrlUnsafeError")) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "MCP_URL_UNSAFE",
+                    error instanceof Error
+                      ? error.message
+                      : "MCP URL is not allowed",
+                    false,
+                  ),
+                );
+            }
+            if (hasErrorName(error, "McpServerNameConflictError")) {
+              return reply
+                .code(409)
+                .send(
+                  applicationError(
+                    request.id,
+                    "MCP_NAME_CONFLICT",
+                    "An MCP server with this name already exists",
+                    false,
+                  ),
+                );
+            }
+            throw error;
+          }
+        },
+      );
+      app.patch<{ Params: { id: string }; Body: { enabled: boolean } }>(
+        "/api/v1/mcp-servers/:id",
+        {
+          schema: {
+            params: uuidParamsSchema,
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["enabled"],
+              properties: { enabled: { type: "boolean" } },
+            },
+          },
+        },
+        async (request, reply) => {
+          try {
+            return reply.send({
+              server: publicMcpServer(
+                await mcp.setEnabled(
+                  request.auth!.userId,
+                  request.params.id,
+                  request.body.enabled,
+                ),
+              ),
+            });
+          } catch (error) {
+            if (hasErrorName(error, "ResourceNotFoundError")) {
+              return reply.code(404).send(resourceNotFoundError(request.id));
+            }
+            throw error;
+          }
+        },
+      );
+      app.delete<{ Params: { id: string } }>(
+        "/api/v1/mcp-servers/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            await mcp.delete(request.auth!.userId, request.params.id);
+            return reply.code(204).send();
+          } catch (error) {
+            if (hasErrorName(error, "ResourceNotFoundError")) {
+              return reply.code(404).send(resourceNotFoundError(request.id));
+            }
+            throw error;
+          }
+        },
+      );
     }
 
     if (options.accountExport) {

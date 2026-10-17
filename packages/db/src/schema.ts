@@ -131,6 +131,10 @@ export const quotaReservationStatus = pgEnum("quota_reservation_status", [
   "released",
 ]);
 export const quotaMode = pgEnum("quota_mode", ["enforced", "unlimited"]);
+export const mcpServerStatus = pgEnum("mcp_server_status", [
+  "active",
+  "disabled",
+]);
 export const automationKind = pgEnum("automation_kind", ["reminder"]);
 export const automationStatus = pgEnum("automation_status", [
   "active",
@@ -1364,5 +1368,28 @@ export const automationOccurrences = pgTable(
       table.ownerUserId,
       table.scheduledAt,
     ),
+  ],
+);
+
+/**
+ * User-registered remote MCP servers. URLs are validated before insert
+ * (HTTPS, no credentials, no private/link-local DNS answers); credentials live
+ * in Vault and are never stored here.
+ */
+export const mcpServers = pgTable(
+  "mcp_servers",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    url: text("url").notNull(),
+    status: mcpServerStatus("status").default("active").notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    unique("mcp_servers_owner_name_unique").on(table.ownerUserId, table.name),
+    index("mcp_servers_owner_status_idx").on(table.ownerUserId, table.status),
   ],
 );

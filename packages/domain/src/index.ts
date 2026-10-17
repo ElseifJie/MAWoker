@@ -104,3 +104,5 @@ export * from "./invites.js";
 export * from "./automation-schedule.js";
 export * from "./automations.js";
 export * from "./account-export.js";
+export * from "./mcp-url.js";
+export * from "./mcp-servers.js";

@@ -11,6 +11,7 @@ import { createInviteRepository } from "./invite-code-repository.js";
 import { createAutomationRepository } from "./automation-repository.js";
 import { createAccountExportRepository } from "./account-export-repository.js";
 import { createAdminSystemRepository } from "./admin-system-repository.js";
+import { createMcpServerRepository } from "./mcp-server-repository.js";
 import {
   appendAccountChange,
   createSyncRepository,
@@ -1024,6 +1025,7 @@ export function createRepositories(database: unknown) {
     automations: createAutomationRepository(db),
     accountExport: createAccountExportRepository(db),
     adminSystem: createAdminSystemRepository(db),
+    mcpServers: createMcpServerRepository(db),
     sync: createSyncRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),

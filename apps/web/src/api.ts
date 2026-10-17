@@ -232,6 +232,15 @@ export interface TaskNotification {
 
 export type { UiEvent, UiEventType } from "@pwa/contracts";
 
+export interface McpServer {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SyncChange {
   seq: number;
   resourceType: string;
@@ -884,6 +893,21 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  listMcpServers: () => request<{ servers: McpServer[] }>("/mcp-servers"),
+  createMcpServer: (name: string, url: string) =>
+    request<{ server: McpServer }>("/mcp-servers", {
+      method: "POST",
+      body: JSON.stringify({ name, url }),
+    }),
+  setMcpServerEnabled: (id: string, enabled: boolean) =>
+    request<{ server: McpServer }>(`/mcp-servers/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  deleteMcpServer: (id: string) =>
+    request<void>(`/mcp-servers/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
   getSyncSnapshot: () => request<SyncSnapshot>("/sync/snapshot"),
   getSyncChanges: (cursor: number, limit = 100) =>
     request<SyncChanges>(
