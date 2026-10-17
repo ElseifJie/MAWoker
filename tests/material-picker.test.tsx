@@ -46,7 +46,11 @@ const files: ArtifactSummary[] = [
   },
 ];
 
-function Harness({ onConfirm = vi.fn() }: { onConfirm?: ReturnType<typeof vi.fn> }) {
+function Harness({
+  onConfirm = vi.fn(),
+}: {
+  onConfirm?: ReturnType<typeof vi.fn>;
+}) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState(new Set([files[0]!.id]));
@@ -85,12 +89,16 @@ describe("material picker", () => {
     expect(within(dialog).getByText("same-prefix-file-one")).toBeVisible();
     expect(within(dialog).getByText("same-prefix-file-two")).toBeVisible();
     expect(within(dialog).getByText("来源任务：source-task-two")).toBeVisible();
-    expect(within(dialog).queryByText("删除中的文件.txt")).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByText("删除中的文件.txt"),
+    ).not.toBeInTheDocument();
     fireEvent.change(search, { target: { value: "  SOURCE-TASK-TWO  " } });
     expect(within(dialog).getAllByRole("checkbox")).toHaveLength(1);
     fireEvent.click(within(dialog).getByRole("checkbox"));
     expect(confirm).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("已提交的材料")).toHaveTextContent(files[0]!.id);
+    expect(screen.getByLabelText("已提交的材料")).toHaveTextContent(
+      files[0]!.id,
+    );
     fireEvent.change(search, { target: { value: "missing" } });
     expect(within(dialog).getByText("没有匹配文件")).toBeVisible();
     fireEvent.change(search, { target: { value: "报告" } });
@@ -110,8 +118,12 @@ describe("material picker", () => {
       const trigger = screen.getByRole("button", { name: "选已有文件" });
       trigger.focus();
       fireEvent.click(trigger);
-      const first = screen.getByRole("checkbox", { name: /same-prefix-file-one/ });
-      const second = screen.getByRole("checkbox", { name: /same-prefix-file-two/ });
+      const first = screen.getByRole("checkbox", {
+        name: /same-prefix-file-one/,
+      });
+      const second = screen.getByRole("checkbox", {
+        name: /same-prefix-file-two/,
+      });
       fireEvent.click(first);
       fireEvent.click(second);
       if (close === "Escape") fireEvent.keyDown(second, { key: "Escape" });
@@ -119,9 +131,15 @@ describe("material picker", () => {
       expect(confirm).not.toHaveBeenCalled();
       expect(trigger).toHaveFocus();
       fireEvent.click(trigger);
-      expect(screen.getByRole("checkbox", { name: /same-prefix-file-one/ })).toBeChecked();
-      expect(screen.getByRole("checkbox", { name: /same-prefix-file-two/ })).not.toBeChecked();
-      expect(screen.getByRole("searchbox", { name: "搜索文件" })).toHaveValue("");
+      expect(
+        screen.getByRole("checkbox", { name: /same-prefix-file-one/ }),
+      ).toBeChecked();
+      expect(
+        screen.getByRole("checkbox", { name: /same-prefix-file-two/ }),
+      ).not.toBeChecked();
+      expect(screen.getByRole("searchbox", { name: "搜索文件" })).toHaveValue(
+        "",
+      );
     },
   );
 
@@ -134,7 +152,9 @@ describe("material picker", () => {
     expect(screen.getByRole("searchbox", { name: "搜索文件" })).toHaveFocus();
     await user.tab();
     await user.keyboard(" ");
-    expect(screen.getByRole("checkbox", { name: /same-prefix-file-one/ })).not.toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /same-prefix-file-one/ }),
+    ).not.toBeChecked();
     const commit = screen.getByRole("button", { name: "确认选择" });
     commit.focus();
     await user.tab();
