@@ -168,6 +168,25 @@ const app = buildApp({
   automations: automationService,
   accountExport: accountExportService,
   adminSystem: repositories.adminSystem,
+  accountSessions: {
+    async list(userId, currentSessionId, now) {
+      const rows = await repositories.authSessions.listActiveForUser(
+        userId,
+        now,
+      );
+      return rows.map((row) => ({
+        ...row,
+        current: row.id === currentSessionId,
+      }));
+    },
+    revokeOthers(userId, currentSessionId, now) {
+      return repositories.authSessions.revokeOthersForUser(
+        userId,
+        currentSessionId,
+        now,
+      );
+    },
+  },
   assistant: assistantProfile,
   admin,
   audit,

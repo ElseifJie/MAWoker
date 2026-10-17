@@ -1059,6 +1059,44 @@ export function createRepositories(database: unknown) {
                limit 1`,
         );
       },
+      listActiveForUser(userId: string, now = new Date()) {
+        return db
+          .execute<{
+            id: string;
+            createdAt: Date;
+            expiresAt: Date;
+          }>(
+            sql`select id, created_at as "createdAt", expires_at as "expiresAt"
+                  from auth_sessions
+                 where user_id = ${userId}
+                   and revoked_at is null
+                   and expires_at > ${now}
+                 order by created_at desc, id desc`,
+          )
+          .then((result) =>
+            result.rows.map((row) => ({
+              ...row,
+              createdAt: new Date(row.createdAt),
+              expiresAt: new Date(row.expiresAt),
+            })),
+          );
+      },
+      async revokeOthersForUser(
+        userId: string,
+        currentSessionId: string,
+        now = new Date(),
+      ): Promise<number> {
+        const result = await db.execute<{ id: string }>(
+          sql`update auth_sessions
+                 set revoked_at = ${now}
+               where user_id = ${userId}
+                 and id <> ${currentSessionId}
+                 and revoked_at is null
+                 and expires_at > ${now}
+               returning id`,
+        );
+        return result.rows.length;
+      },
     },
 
     auditLogs: {

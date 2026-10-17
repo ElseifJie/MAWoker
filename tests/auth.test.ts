@@ -184,6 +184,7 @@ describe("password login", () => {
     );
     await expect(service.authenticate(issued.token)).resolves.toEqual({
       userId,
+      sessionId: expect.any(String),
       authSubject: "local:user@example.com",
       role: "user",
     });

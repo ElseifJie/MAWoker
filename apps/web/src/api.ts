@@ -232,6 +232,13 @@ export interface TaskNotification {
 
 export type { UiEvent, UiEventType } from "@pwa/contracts";
 
+export interface AccountSession {
+  id: string;
+  current: boolean;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export type AutomationSchedule =
   | { type: "once"; at: string }
   | { type: "daily"; time: string }
@@ -854,6 +861,12 @@ export const apiClient = {
       `/sessions${archived ? "?archived=true" : ""}`,
     ),
   getSession: (id: string) => request<SessionDetail>(`/sessions/${id}`),
+  listAccountSessions: () =>
+    request<{ sessions: AccountSession[] }>("/account/sessions"),
+  revokeOtherAccountSessions: () =>
+    request<{ revoked: number }>("/account/sessions/revoke", {
+      method: "POST",
+    }),
   exportAccount: () => request<Record<string, unknown>>("/account/export"),
   listAutomations: () =>
     request<{ automations: AutomationRecord[] }>("/automations"),

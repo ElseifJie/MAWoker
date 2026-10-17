@@ -1,4 +1,5 @@
 import { AccountExportButton } from "./AccountExportButton.js";
+import { AccountSessions } from "./AccountSessions.js";
 import { AutomationsPage } from "./AutomationsPage.js";
 import { usePwaInstall } from "./usePwaInstall.js";
 import { clearSubmissionDrafts } from "./submission-drafts.js";
@@ -773,6 +774,11 @@ function SettingsPage({
           <dd>{accountHandle(user.authSubject)}</dd>
         </div>
       </dl>
+
+      <section className="settings-section" aria-labelledby="sessions-heading">
+        <h2 id="sessions-heading">登录设备</h2>
+        <AccountSessions />
+      </section>
 
       <section className="settings-section" aria-labelledby="export-heading">
         <h2 id="export-heading">我的数据</h2>

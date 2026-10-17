@@ -594,6 +594,20 @@ interface BuildAppOptions {
   adminSystem?: {
     snapshot(now?: Date): PromiseLike<unknown>;
   };
+  accountSessions?: {
+    list(
+      userId: string,
+      currentSessionId: string,
+      now: Date,
+    ): PromiseLike<
+      Array<{ id: string; createdAt: Date; expiresAt: Date; current: boolean }>
+    >;
+    revokeOthers(
+      userId: string,
+      currentSessionId: string,
+      now: Date,
+    ): PromiseLike<number>;
+  };
   assistant?: {
     get(userId: string): PromiseLike<AssistantView>;
     update(
@@ -2935,6 +2949,30 @@ export function buildApp(options: BuildAppOptions = {}) {
             request.query.limit,
           ),
       );
+    }
+
+    if (options.accountSessions) {
+      app.get("/api/v1/account/sessions", async (request) => ({
+        sessions: (
+          await options.accountSessions!.list(
+            request.auth!.userId,
+            request.auth!.sessionId,
+            new Date(),
+          )
+        ).map((session) => ({
+          id: session.id,
+          current: session.current,
+          createdAt: session.createdAt.toISOString(),
+          expiresAt: session.expiresAt.toISOString(),
+        })),
+      }));
+      app.post("/api/v1/account/sessions/revoke", async (request) => ({
+        revoked: await options.accountSessions!.revokeOthers(
+          request.auth!.userId,
+          request.auth!.sessionId,
+          new Date(),
+        ),
+      }));
     }
 
     if (options.accountExport) {

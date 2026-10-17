@@ -38,6 +38,8 @@ export interface AuthSessionRecord {
 
 export interface AuthContext {
   userId: string;
+  /** The current auth_sessions row; self-service revocation keeps this one. */
+  sessionId: string;
   authSubject: string;
   role: UserRole;
 }
@@ -187,6 +189,7 @@ export class ApplicationSessionService {
     }
     return {
       userId: found.user.id,
+      sessionId: found.session.id,
       authSubject: found.user.authSubject,
       role: found.user.role,
     };
