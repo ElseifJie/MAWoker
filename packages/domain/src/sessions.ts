@@ -14,6 +14,7 @@ import {
 } from "@pwa/contracts";
 import type { AvailableAgentRecord } from "./user-agents.js";
 import { arkErrorCode, arkRequestId, isArkCategory } from "./ark-errors.js";
+import { streamStoredEvents } from "./local-events.js";
 import { ResourceNotFoundError } from "./errors.js";
 import type { SessionInputRecord } from "./session-inputs.js";
 import {
@@ -889,6 +890,39 @@ export class SessionService {
       }
       throw error;
     }
+  }
+
+  /**
+   * `EVENT_SOURCE=local` read path: the worker ingestor owns the upstream
+   * stream, so this serves the persisted log and polls for new rows. It never
+   * opens an upstream stream, avoiding a second consumer per connected client.
+   */
+  async openStoredEvents(
+    id: string,
+    context: SessionContext,
+    downstreamSignal?: AbortSignal,
+  ): Promise<{ session: SessionRecord; events: AsyncIterable<UiEvent> }> {
+    const session = await this.requireOwned(context.userId, id);
+    const listAfter = this.dependencies.repository.listEventsAfter;
+    if (!listAfter) throw new Error("Local event log unavailable");
+    return {
+      session,
+      events: streamStoredEvents({
+        reader: {
+          listEventsAfter: (userId, sessionId, after, limit) =>
+            listAfter.call(
+              this.dependencies.repository,
+              userId,
+              sessionId,
+              after,
+              limit,
+            ),
+        },
+        userId: context.userId,
+        sessionId: id,
+        ...(downstreamSignal ? { signal: downstreamSignal } : {}),
+      }),
+    };
   }
 
   async openEvents(

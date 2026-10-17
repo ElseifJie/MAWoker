@@ -177,6 +177,7 @@ const environmentSchema = z
     SESSION_HISTORY_TIMEOUT_MS: positiveInteger.max(120_000).default(30_000),
     SESSION_DELIVERY_BATCH_SIZE: positiveInteger.max(25).default(2),
     SESSION_DELIVERY_TIMEOUT_MS: positiveInteger.max(120_000).default(30_000),
+    SESSION_EVENT_SOURCE: z.enum(["upstream", "local"]).default("upstream"),
     SESSION_EVENT_INGESTOR_ENABLED: featureSwitch.default(false),
     SESSION_EVENT_INGESTOR_LEASE_MS: positiveInteger
       .max(300_000)
@@ -323,6 +324,7 @@ export function parseServerConfig(
       historyTimeoutMs: env.SESSION_HISTORY_TIMEOUT_MS,
       deliveryBatchSize: env.SESSION_DELIVERY_BATCH_SIZE,
       deliveryTimeoutMs: env.SESSION_DELIVERY_TIMEOUT_MS,
+      eventSource: env.SESSION_EVENT_SOURCE,
       eventIngestorEnabled: env.SESSION_EVENT_INGESTOR_ENABLED,
       eventIngestorLeaseMs: env.SESSION_EVENT_INGESTOR_LEASE_MS,
       eventIngestorBudgetMs: env.SESSION_EVENT_INGESTOR_BUDGET_MS,

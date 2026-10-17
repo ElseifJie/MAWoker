@@ -158,6 +158,7 @@ const app = buildApp({
   userAgents,
   skills,
   sessions,
+  eventSource: config.reliability.eventSource,
   runs: runService,
   sync: syncService,
   memory,

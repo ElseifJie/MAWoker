@@ -489,6 +489,11 @@ export interface SessionApiService {
     context: { userId: string; requestId: string },
     signal?: AbortSignal,
   ): PromiseLike<{ session: SessionRecord; events: AsyncIterable<UiEvent> }>;
+  openStoredEvents?(
+    id: string,
+    context: { userId: string; requestId: string },
+    signal?: AbortSignal,
+  ): PromiseLike<{ session: SessionRecord; events: AsyncIterable<UiEvent> }>;
   transcriptEvents(
     id: string,
     context: { userId: string; requestId: string },
@@ -584,6 +589,7 @@ interface BuildAppOptions {
     | "expedite"
   >;
   sessions?: SessionApiService;
+  eventSource?: "upstream" | "local";
   runs?: {
     get(userId: string, id: string): PromiseLike<RunRecord>;
   };
@@ -3601,11 +3607,19 @@ export function buildApp(options: BuildAppOptions = {}) {
               events: AsyncIterable<UiEvent>;
             };
             try {
-              opened = await sessions.openEvents(
-                request.params.id,
-                context(request),
-                controller.signal,
-              );
+              const eventContext = context(request);
+              opened =
+                options.eventSource === "local" && sessions.openStoredEvents
+                  ? await sessions.openStoredEvents(
+                      request.params.id,
+                      eventContext,
+                      controller.signal,
+                    )
+                  : await sessions.openEvents(
+                      request.params.id,
+                      eventContext,
+                      controller.signal,
+                    );
             } catch (error) {
               reply.raw.removeListener("close", close);
               if (!terminate()) return reply;
