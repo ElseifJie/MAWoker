@@ -1,4 +1,5 @@
 import { AutomationsPage } from "./AutomationsPage.js";
+import { usePwaInstall } from "./usePwaInstall.js";
 import { clearSubmissionDrafts } from "./submission-drafts.js";
 import {
   Bot,
@@ -759,6 +760,7 @@ function SettingsPage({
   theme: ThemeState;
   capabilities: ClientCapabilities;
 }) {
+  const pwa = usePwaInstall();
   return (
     <PageFrame
       title="设置"
@@ -770,6 +772,19 @@ function SettingsPage({
           <dd>{accountHandle(user.authSubject)}</dd>
         </div>
       </dl>
+
+      <section className="settings-section" aria-labelledby="install-heading">
+        <h2 id="install-heading">安装应用</h2>
+        {pwa.installed ? (
+          <p className="muted">已安装到桌面，可从应用列表直接打开。</p>
+        ) : pwa.canInstall ? (
+          <Button onClick={() => void pwa.install()}>安装到桌面</Button>
+        ) : (
+          <p className="muted">
+            在浏览器菜单中选择“安装应用”或“添加到主屏幕”，即可像本地应用一样打开。
+          </p>
+        )}
+      </section>
 
       <section
         className="settings-section"

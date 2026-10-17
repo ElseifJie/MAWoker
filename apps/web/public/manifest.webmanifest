@@ -1,0 +1,35 @@
+{
+  "name": "MA Worker",
+  "short_name": "MA Worker",
+  "description": "MA Worker 个人工作助手：任务、文件、提醒与连接器。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f8",
+  "theme_color": "#5e6ad2",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "新任务", "url": "/" },
+    { "name": "自动化", "url": "/automations" }
+  ]
+}

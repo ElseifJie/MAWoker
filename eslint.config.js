@@ -23,6 +23,12 @@ export default tseslint.config(
     },
   },
   {
+    files: ["apps/web/public/sw.js"],
+    languageOptions: {
+      globals: { ...globals.serviceworker },
+    },
+  },
+  {
     files: ["**/*.mjs"],
     languageOptions: {
       globals: { ...globals.node },
