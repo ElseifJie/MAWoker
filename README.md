@@ -182,6 +182,38 @@ Interactive HTML is not enabled without a separate environment free of main-site
 Real cloud attachment behavior, browser CSP rendering and visual layout/zoom acceptance still
 require isolated cloud or user verification. This stage uses non-visual automated checks.
 
+## BtoC capabilities
+
+The current product adds the following customer-facing flows on top of the Stage A/B workspace:
+
+- **Invite-only onboarding.** Administrators create one-time invite links; invitees set a password
+  at `/invite?code=…`. Only hashed codes are stored, and invite create/revoke/accept are audited.
+- **Account controls.** Settings exposes active login devices with “sign out other devices”, a
+  full owner-scoped JSON export, and self-service account deletion (password + `DELETE`
+  confirmation; the account is anonymized, sessions are revoked, and connector/memory rows are
+  removed).
+- **Automations.** Daily/weekly/once reminders and scheduled tasks. Reminders create deduplicated
+  in-app notifications; tasks run with the user's current default Agent. Optional webhook channels
+  deliver Feishu text or generic JSON payloads.
+- **Connectors.** Owner-scoped remote MCP servers with HTTPS/SSRF validation. Active servers are
+  serialized into personal Agent `mcp_servers` and `mcp_toolset` entries (always-ask) on create or
+  update.
+- **PWA and cross-browser sync.** Installable manifest/service worker, install prompt, and a
+  per-browser account cursor that polls `/sync/changes` and refreshes session lists.
+- **Operations.** Admin system status (queue/Run/reminder backlog), prompt-injection-safe audit
+  views, and `db:backup` / `db:restore` scripts with credential-redacted logs.
+
+Known gaps are tracked in the implementation plan and checkpoint appendices (git-ignored):
+
+- The Harness `WorkspaceFrame` components exist and are tested, but the existing Workspace pages
+  are not migrated to the new three-pane shell yet.
+- Ark Vault, OAuth, and the live Feishu read/write loop are not implemented; MCP registration and
+  Agent tool binding are.
+- Account deletion is an anonymizing soft delete. TOS/Ark physical purge and retention policy are
+  still pending.
+- Everything above is covered by PGlite/local tests. Real Ark cloud runs, managed PostgreSQL
+  contention tests, backup-restore drills, and visual acceptance remain operator work.
+
 ## Requirements
 
 - **Node.js >= 22.12** (the repo uses npm workspaces)
@@ -322,6 +354,8 @@ psql -d personal_work_agent -c "SELECT count(*) FROM pg_tables WHERE schemaname=
 | `npm run test:e2e`                                | Playwright end-to-end tests                                              |
 | `npm run test:acceptance`                         | End-to-end acceptance scenarios                                          |
 | `npm run db:generate` / `db:migrate` / `db:check` | Drizzle migration workflow                                               |
+| `npm run db:backup`                               | Timestamped `pg_dump` backup; see `docs/runbooks/backup-restore.md`      |
+| `npm run db:restore`                              | Guarded `pg_restore`; requires `RESTORE_CONFIRM=restore` and `--yes`     |
 | `npm run admin:seed`                              | Create or repair the administrator from `ADMIN_EMAIL` / `ADMIN_PASSWORD` |
 | `npm run data:reset`                              | **Destructive:** truncates all user-owned data; see the warning below    |
 | `npm run verify`                                  | The full gate: format + lint + typecheck + test + build                  |
@@ -350,6 +384,8 @@ tests/      unit, integration and end-to-end tests
   real credentials.
 - The session event stream is redacted, whitelisted and truncated before it reaches the browser, and is
   visible only to the session owner.
+- Webhook channel URLs are encrypted at rest with AES-256-GCM when
+  `CREDENTIAL_ENCRYPTION_KEY` (base64, 32 bytes) is configured; production should set it.
 - Test fixtures under `tests/fixtures` are synthetic: identifiers, URLs, credentials and message text
   are fabricated, with fake credential-shaped strings retained as bait for the redaction tests.
 
