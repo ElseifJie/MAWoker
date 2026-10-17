@@ -192,6 +192,33 @@ export const authSessions = pgTable(
   ],
 );
 
+/**
+ * Invite-only onboarding. Only the SHA-256 of the one-time code is stored; the
+ * plaintext is returned once when the administrator creates the invite.
+ */
+export const inviteCodes = pgTable(
+  "invite_codes",
+  {
+    id: uuid("id").primaryKey(),
+    codeHash: text("code_hash").notNull().unique(),
+    email: text("email").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "restrict" }),
+    usedByUserId: uuid("used_by_user_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [
+    index("invite_codes_email_idx").on(table.email),
+    index("invite_codes_expires_idx").on(table.expiresAt),
+  ],
+);
+
 export const userMemoryStores = pgTable("user_memory_stores", {
   userId: uuid("user_id")
     .primaryKey()

@@ -260,6 +260,13 @@
       "when": 1792251326451,
       "tag": "0036_dizzy_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792253773060,
+      "tag": "0037_talented_sersi",
+      "breakpoints": true
     }
   ]
 }

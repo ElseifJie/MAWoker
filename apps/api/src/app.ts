@@ -32,6 +32,7 @@ import {
   type AuditLogQuery,
   type AvailableAgentRecord,
   type AssistantView,
+  type InviteCodeRecord,
   type DefaultAgentRecord,
   type PersonalAgentRecord,
   type PlatformAgentRecord,
@@ -555,8 +556,22 @@ export interface AuditApiService {
   }): Promise<void>;
 }
 
+export interface InviteApiService {
+  list(): PromiseLike<InviteCodeRecord[]>;
+  create(
+    adminId: string,
+    input: { email: string; expiresInDays?: number },
+  ): PromiseLike<{ invite: InviteCodeRecord; code: string }>;
+  revoke(adminId: string, id: string): PromiseLike<InviteCodeRecord>;
+  accept(
+    code: string,
+    password: string,
+  ): PromiseLike<{ userId: string; email: string }>;
+}
+
 interface BuildAppOptions {
   auth?: ApiAuthService;
+  invites?: InviteApiService;
   assistant?: {
     get(userId: string): PromiseLike<AssistantView>;
     update(
@@ -681,6 +696,26 @@ const syncChangesQuerySchema = {
   properties: {
     cursor: { type: "integer", minimum: 0, default: 0 },
     limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
+  },
+} as const;
+
+const createInviteBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["email"],
+  properties: {
+    email: { type: "string", minLength: 3, maxLength: 320 },
+    expiresInDays: { type: "integer", minimum: 1, maximum: 30 },
+  },
+} as const;
+
+const acceptInviteBodySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["code", "password"],
+  properties: {
+    code: { type: "string", minLength: 16, maxLength: 200 },
+    password: { type: "string", minLength: 8, maxLength: 200 },
   },
 } as const;
 
@@ -1192,6 +1227,21 @@ function publicRun(run: RunRecord) {
     endedAt: run.endedAt?.toISOString() ?? null,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
+  };
+}
+
+function publicInvite(invite: InviteCodeRecord) {
+  return {
+    id: invite.id,
+    email: invite.email,
+    createdBy: invite.createdBy,
+    usedByUserId: invite.usedByUserId,
+    status: invite.status,
+    expiresAt: invite.expiresAt.toISOString(),
+    usedAt: invite.usedAt?.toISOString() ?? null,
+    revokedAt: invite.revokedAt?.toISOString() ?? null,
+    createdAt: invite.createdAt.toISOString(),
+    updatedAt: invite.updatedAt.toISOString(),
   };
 }
 
@@ -2195,6 +2245,8 @@ const ADMIN_ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
   "/api/v1/admin/users/:id/status": "USER_MANAGE",
   "/api/v1/admin/users/:id/usage": "USAGE_VIEW",
   "/api/v1/admin/users/:id/submissions/:submissionId/reconcile": "USER_MANAGE",
+  "/api/v1/admin/invites": "USER_MANAGE",
+  "/api/v1/admin/invites/:id/revoke": "USER_MANAGE",
   "/api/v1/admin/audit-logs": "AUDIT_VIEW",
   "/api/v1/admin/quota-policy": "SETTINGS_MANAGE",
   "/api/v1/admin/usage/agents": "USAGE_VIEW",
@@ -2708,6 +2760,60 @@ export function buildApp(options: BuildAppOptions = {}) {
         }
       },
     );
+
+    if (options.invites) {
+      app.post<{ Body: { code: string; password: string } }>(
+        "/api/v1/auth/invite/accept",
+        { schema: { body: acceptInviteBodySchema } },
+        async (request, reply) => {
+          try {
+            const user = await options.invites!.accept(
+              request.body.code,
+              request.body.password,
+            );
+            return reply.code(201).send({ user });
+          } catch (error) {
+            if (hasErrorName(error, "InvalidInviteError")) {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "INVITE_INVALID",
+                    "Invite code is invalid, expired, or already used",
+                    false,
+                  ),
+                );
+            }
+            if (hasErrorName(error, "UserEmailConflictError")) {
+              return reply
+                .code(409)
+                .send(
+                  applicationError(
+                    request.id,
+                    "USER_EMAIL_CONFLICT",
+                    "A user with this email already exists",
+                    false,
+                  ),
+                );
+            }
+            if (error instanceof Error && error.name === "ZodError") {
+              return reply
+                .code(400)
+                .send(
+                  applicationError(
+                    request.id,
+                    "VALIDATION_FAILED",
+                    "Invalid invite code or password",
+                    false,
+                  ),
+                );
+            }
+            throw error;
+          }
+        },
+      );
+    }
 
     app.post("/api/v1/auth/logout", async (request, reply) => {
       const token = request.cookies[AUTH_COOKIE_NAME];
@@ -4625,6 +4731,47 @@ export function buildApp(options: BuildAppOptions = {}) {
               version: result.updated.version,
               updatedBy: result.updated.updatedBy,
               updatedAt: result.updated.updatedAt.toISOString(),
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+    }
+
+    if (options.invites) {
+      const invites = options.invites;
+      app.get("/api/v1/admin/invites", async (_request, reply) => {
+        const rows = await invites.list();
+        return reply.send({ invites: rows.map(publicInvite) });
+      });
+      app.post<{ Body: { email: string; expiresInDays?: number } }>(
+        "/api/v1/admin/invites",
+        { schema: { body: createInviteBodySchema } },
+        async (request, reply) => {
+          try {
+            const result = await invites.create(
+              request.auth!.userId,
+              request.body,
+            );
+            return reply.code(201).send({
+              invite: publicInvite(result.invite),
+              code: result.code,
+            });
+          } catch (error) {
+            return sendAdminError(error, request, reply);
+          }
+        },
+      );
+      app.post<{ Params: { id: string } }>(
+        "/api/v1/admin/invites/:id/revoke",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            return reply.send({
+              invite: publicInvite(
+                await invites.revoke(request.auth!.userId, request.params.id),
+              ),
             });
           } catch (error) {
             return sendAdminError(error, request, reply);

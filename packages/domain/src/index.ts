@@ -100,3 +100,4 @@ export * from "./file-reuse.js";
 export * from "./sync.js";
 export * from "./assistant.js";
 export * from "./local-events.js";
+export * from "./invites.js";
