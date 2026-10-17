@@ -185,6 +185,8 @@ export const users = pgTable(
     status: userStatus("status").default("active").notNull(),
     /** Credential version; bumped with every admin-level session revocation. */
     authEpoch: integer("auth_epoch").default(0).notNull(),
+    /** Set once the owner self-deletes; the row stays anonymized for audits. */
+    accountDeletedAt: timestamp("account_deleted_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [uniqueIndex("users_email_unique").on(table.email)],

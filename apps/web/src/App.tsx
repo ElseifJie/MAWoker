@@ -1,3 +1,4 @@
+import { AccountDeletion } from "./AccountDeletion.js";
 import { AccountExportButton } from "./AccountExportButton.js";
 import { AccountSessions } from "./AccountSessions.js";
 import { McpServers } from "./McpServers.js";
@@ -833,6 +834,11 @@ function SettingsPage({
       >
         <h2 id="connectors-heading">连接器</h2>
         <McpServers />
+      </section>
+
+      <section className="settings-section" aria-labelledby="delete-heading">
+        <h2 id="delete-heading">注销账号</h2>
+        <AccountDeletion />
       </section>
 
       <section className="settings-section" aria-labelledby="channels-heading">

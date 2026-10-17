@@ -9,6 +9,7 @@ import {
   AdminUserDetailService,
   ArtifactService,
   AssistantProfileService,
+  AccountDeletionService,
   AccountExportService,
   AutomationService,
   InviteCodeService,
@@ -129,6 +130,9 @@ const sessions = new SessionService({
   memory,
 });
 const runService = new RunService({ repository: repositories.runs });
+const accountDeletionService = new AccountDeletionService({
+  repository: repositories.accountDeletion,
+});
 const accountExportService = new AccountExportService({
   repository: repositories.accountExport,
 });
@@ -184,6 +188,7 @@ const app = buildApp({
   auth,
   invites: inviteCodes,
   automations: automationService,
+  accountDeletion: accountDeletionService,
   accountExport: accountExportService,
   adminSystem: repositories.adminSystem,
   mcpServers,

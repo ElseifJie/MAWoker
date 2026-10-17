@@ -600,6 +600,9 @@ interface BuildAppOptions {
   adminSystem?: {
     snapshot(now?: Date): PromiseLike<unknown>;
   };
+  accountDeletion?: {
+    delete(userId: string): PromiseLike<void>;
+  };
   notificationChannels?: {
     list(ownerUserId: string): PromiseLike<
       Array<{
@@ -3066,6 +3069,68 @@ export function buildApp(options: BuildAppOptions = {}) {
             request.query.cursor,
             request.query.limit,
           ),
+      );
+    }
+
+    if (options.accountDeletion && options.auth) {
+      app.delete<{
+        Body: { password: string; confirmation: "DELETE" };
+      }>(
+        "/api/v1/account",
+        {
+          schema: {
+            body: {
+              type: "object",
+              additionalProperties: false,
+              required: ["password", "confirmation"],
+              properties: {
+                password: { type: "string", minLength: 1, maxLength: 200 },
+                confirmation: { type: "string", const: "DELETE" },
+              },
+            },
+          },
+        },
+        async (request, reply) => {
+          let issued: { token: string } | undefined;
+          try {
+            issued = await options.auth!.login(
+              request.auth!.email,
+              request.body.password,
+            );
+          } catch {
+            return reply
+              .code(401)
+              .send(
+                applicationError(
+                  request.id,
+                  "AUTH_REQUIRED",
+                  "Password is incorrect",
+                  false,
+                ),
+              );
+          } finally {
+            if (issued) await options.auth!.logout(issued.token);
+          }
+          try {
+            await options.accountDeletion!.delete(request.auth!.userId);
+          } catch (error) {
+            if (hasErrorName(error, "AccountAlreadyDeletedError")) {
+              return reply
+                .code(409)
+                .send(
+                  applicationError(
+                    request.id,
+                    "ACCOUNT_ALREADY_DELETED",
+                    "The account is already deleted",
+                    false,
+                  ),
+                );
+            }
+            throw error;
+          }
+          reply.clearCookie(AUTH_COOKIE_NAME, { path: "/" });
+          return reply.code(202).send({ deleted: true });
+        },
       );
     }
 

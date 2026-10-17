@@ -945,6 +945,11 @@ export const apiClient = {
     request<{ revoked: number }>("/account/sessions/revoke", {
       method: "POST",
     }),
+  deleteAccount: (password: string) =>
+    request<{ deleted: true }>("/account", {
+      method: "DELETE",
+      body: JSON.stringify({ password, confirmation: "DELETE" }),
+    }),
   exportAccount: () => request<Record<string, unknown>>("/account/export"),
   listAutomations: () =>
     request<{ automations: AutomationRecord[] }>("/automations"),
