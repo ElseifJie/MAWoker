@@ -34,6 +34,7 @@ import {
   type DefaultAgentRecord,
   type PersonalAgentRecord,
   type PlatformAgentRecord,
+  type RunRecord,
   type SessionRecord,
   type SessionHistoryState,
   type SessionInputRecord,
@@ -565,6 +566,9 @@ interface BuildAppOptions {
     | "expedite"
   >;
   sessions?: SessionApiService;
+  runs?: {
+    get(userId: string, id: string): PromiseLike<RunRecord>;
+  };
   inputs?: SessionInputApiService;
   artifacts?: ArtifactApiService;
   fileReuse?: {
@@ -1118,6 +1122,23 @@ function publicMemoryState(state: MemoryState) {
           after: state.run.after,
         }
       : null,
+  };
+}
+
+function publicRun(run: RunRecord) {
+  return {
+    id: run.id,
+    conversationId: run.conversationId,
+    triggerKind: run.triggerKind,
+    submissionId: run.submissionId,
+    status: run.status,
+    arkSessionId: run.arkSessionId,
+    turnId: run.turnId,
+    errorCode: run.errorCode,
+    startedAt: run.startedAt?.toISOString() ?? null,
+    endedAt: run.endedAt?.toISOString() ?? null,
+    createdAt: run.createdAt.toISOString(),
+    updatedAt: run.updatedAt.toISOString(),
   };
 }
 
@@ -2639,6 +2660,25 @@ export function buildApp(options: BuildAppOptions = {}) {
         ...(options.capabilities?.personalAgentModels ?? []),
       ],
     }));
+
+    if (options.runs) {
+      const runs = options.runs;
+      app.get<{ Params: { id: string } }>(
+        "/api/v1/runs/:id",
+        { schema: { params: uuidParamsSchema } },
+        async (request, reply) => {
+          try {
+            const run = await runs.get(request.auth!.userId, request.params.id);
+            return reply.send(publicRun(run));
+          } catch (error) {
+            if (hasErrorName(error, "ResourceNotFoundError")) {
+              return reply.code(404).send(resourceNotFoundError(request.id));
+            }
+            throw error;
+          }
+        },
+      );
+    }
 
     if (options.memory) {
       const memory = options.memory;

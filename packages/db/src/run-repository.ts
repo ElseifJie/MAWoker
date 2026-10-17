@@ -81,6 +81,50 @@ export function createRunRepository(db: Database) {
       return result.rows[0];
     },
 
+    async transition(input: {
+      ownerUserId: string;
+      id: string;
+      from: readonly RunStatus[];
+      to: RunStatus;
+      errorCode?: string | null;
+      arkSessionId?: string | null;
+      turnId?: string | null;
+      startedAt?: Date | null;
+      endedAt?: Date | null;
+      now?: Date;
+    }): Promise<RunRecord | undefined> {
+      const now = input.now ?? new Date();
+      const from = sql.join(
+        input.from.map((status) => sql`${status}::run_status`),
+        sql`, `,
+      );
+      const result = await db.execute<RunRecord>(
+        sql`update runs
+               set status = ${input.to}::run_status,
+                   error_code = ${input.errorCode ?? null}::text,
+                   ark_session_id = coalesce(
+                     ${input.arkSessionId ?? null}::text,
+                     ark_session_id
+                   ),
+                   turn_id = coalesce(
+                     ${input.turnId ?? null}::uuid,
+                     turn_id
+                   ),
+                   started_at = coalesce(
+                     ${input.startedAt ?? null}::timestamptz,
+                     started_at
+                   ),
+                   ended_at = ${input.endedAt ?? null}::timestamptz,
+                   version = version + 1,
+                   updated_at = ${now}::timestamptz
+             where owner_user_id = ${input.ownerUserId}
+               and id = ${input.id}
+               and status in (${from})
+             returning ${runSelection}`,
+      );
+      return result.rows[0];
+    },
+
     async listForConversation(
       ownerUserId: string,
       conversationId: string,

@@ -15,6 +15,7 @@ import {
   PlatformAgentService,
   QuotaPolicyService,
   QuotaUsageService,
+  RunService,
   resolveSystemAgents,
   SessionInputService,
   FileReuseService,
@@ -112,6 +113,7 @@ const sessions = new SessionService({
   createId: randomUUID,
   memory,
 });
+const runService = new RunService({ repository: repositories.runs });
 const skills = new SkillService({
   repository: repositories.skills,
   ark,
@@ -145,6 +147,7 @@ const app = buildApp({
   userAgents,
   skills,
   sessions,
+  runs: runService,
   memory,
   inputs,
   artifacts,

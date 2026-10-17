@@ -418,6 +418,41 @@ describe("repositories in PGlite", () => {
       status: "queued",
     });
 
+    const createdRun = await repositories.runs.findBySubmission(
+      ownerId,
+      submissionId,
+    );
+    if (!createdRun) throw new Error("Run was not created");
+    const running = await repositories.runs.transition({
+      ownerUserId: ownerId,
+      id: createdRun.id,
+      from: ["queued"],
+      to: "running",
+      arkSessionId: session.arkSessionId,
+      startedAt: new Date("2026-10-17T00:01:00.000Z"),
+    });
+    expect(running).toMatchObject({
+      status: "running",
+      arkSessionId: session.arkSessionId,
+      version: 2,
+    });
+    await expect(
+      repositories.runs.transition({
+        ownerUserId: ownerId,
+        id: createdRun.id,
+        from: ["queued"],
+        to: "completed",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      repositories.runs.transition({
+        ownerUserId: id(),
+        id: createdRun.id,
+        from: ["running"],
+        to: "completed",
+      }),
+    ).resolves.toBeUndefined();
+
     // Replaying the same submission ID returns the existing receipt and must
     // not create a second Run.
     await repositories.sessionLifecycle.enqueueSubmission(input);
