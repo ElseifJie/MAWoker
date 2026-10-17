@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1540 1090" font-family="Noto Sans SC, PingFang SC, sans-serif">
+  <defs>
+    <linearGradient id="d3Title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#D97706"/>
+    </linearGradient>
+    <filter id="d3Shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <text x="60" y="42" font-size="24" font-weight="700" fill="#0F172A">文件上传与产物交付 · 逻辑架构</text>
+  <text x="60" y="68" font-size="13" fill="#64748B">输入链与输出链分离 · 意向先行 · 三段式持久化复制 · 执行成功 ≠ 交付完成</text>
+  <rect x="60" y="78" width="180" height="5" rx="2.5" fill="url(#d3Title)"/>
+
+  <!-- ================= 输入链 ================= -->
+  <g filter="url(#d3Shadow)">
+    <rect x="60" y="96" width="1444" height="380" rx="14" fill="#F5F9FF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <path d="M60,110 a14,14 0 0 1 14,-14 h1416 a14,14 0 0 1 14,14 v20 h-1444 z" fill="#2563EB"/>
+  </g>
+  <text x="84" y="118" font-size="15" font-weight="700" fill="#FFFFFF">输入链：上传 → 挂载 → 沙箱读取</text>
+  <text x="330" y="118" font-size="12" fill="#DBEAFE">每一步先落本地意向，再向云端推进</text>
+
+  <g>
+    <rect x="88" y="150" width="252" height="270" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <rect x="88" y="150" width="6" height="270" rx="3" fill="#2563EB"/>
+    <circle cx="122" cy="182" r="13" fill="#DBEAFE"/><text x="122" y="187" font-size="13" font-weight="700" fill="#1D4ED8" text-anchor="middle">1</text>
+    <text x="144" y="187" font-size="13.5" font-weight="700" fill="#1E3A8A">用户选择文件</text>
+    <g font-size="12" fill="#475569">
+      <text x="108" y="220">前端逐文件独立上传</text>
+      <text x="108" y="244">每任务 ≤ 20 个</text>
+      <text x="108" y="268">单文件 ≤ 20 MiB</text>
+      <text x="108" y="292">原始文件名保留展示</text>
+      <text x="108" y="316">上传中断可重试</text>
+      <text x="108" y="352" font-size="11" fill="#94A3B8">上传完成 ≠ 已挂载</text>
+      <text x="108" y="372" font-size="11" fill="#94A3B8">状态由本地意向行跟踪</text>
+    </g>
+
+    <rect x="384" y="150" width="272" height="270" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <rect x="384" y="150" width="6" height="270" rx="3" fill="#2563EB"/>
+    <circle cx="418" cy="182" r="13" fill="#DBEAFE"/><text x="418" y="187" font-size="13" font-weight="700" fill="#1D4ED8" text-anchor="middle">2</text>
+    <text x="440" y="187" font-size="13.5" font-weight="700" fill="#1E3A8A">应用上传 API（先落后传）</text>
+    <g font-size="12" fill="#475569">
+      <text x="404" y="220">文件名 NFKC 清洗</text>
+      <text x="404" y="244">拒绝分隔符 / NUL / 点号</text>
+      <text x="404" y="268">先落意向行 uploading：</text>
+      <text x="404" y="292">owner · 挂载路径 · 过期时间</text>
+      <text x="404" y="316">云调用成功回填 file_id</text>
+      <text x="404" y="352" font-size="11" fill="#94A3B8">本地失败仍保留已知云 ID</text>
+      <text x="404" y="372" font-size="11" fill="#94A3B8">结果未知不盲重试写操作</text>
+    </g>
+
+    <rect x="700" y="150" width="252" height="270" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <rect x="700" y="150" width="6" height="270" rx="3" fill="#1D4ED8"/>
+    <circle cx="734" cy="182" r="13" fill="#DBEAFE"/><text x="734" y="187" font-size="13" font-weight="700" fill="#1D4ED8" text-anchor="middle">3</text>
+    <text x="756" y="187" font-size="13.5" font-weight="700" fill="#1E3A8A">MA Files API</text>
+    <g font-size="12" fill="#475569">
+      <text x="720" y="220">multipart 上传</text>
+      <text x="720" y="244">purpose = agent</text>
+      <text x="720" y="268">返回 file_id</text>
+      <text x="720" y="292">意向行转 uploaded</text>
+      <text x="720" y="352" font-size="11" fill="#94A3B8">未绑定上传按应用 TTL</text>
+      <text x="720" y="372" font-size="11" fill="#94A3B8">由后台 Worker 回收</text>
+    </g>
+
+    <rect x="896" y="150" width="272" height="270" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <rect x="896" y="150" width="6" height="270" rx="3" fill="#1E3A8A"/>
+    <circle cx="930" cy="182" r="13" fill="#DBEAFE"/><text x="930" y="187" font-size="13" font-weight="700" fill="#1D4ED8" text-anchor="middle">4</text>
+    <text x="952" y="187" font-size="13.5" font-weight="700" fill="#1E3A8A">创建 Session 事务</text>
+    <g font-size="12" fill="#475569">
+      <text x="916" y="220">整组校验附件：属于本人</text>
+      <text x="916" y="244">· 未绑定 · uploaded · 未过期</text>
+      <text x="916" y="268">任一无效拒绝整组</text>
+      <text x="916" y="292">resources 挂载 file_id</text>
+      <text x="916" y="316">同事务预留配额</text>
+      <text x="916" y="352" font-size="11" fill="#94A3B8">创建结果未知：保留意向</text>
+      <text x="916" y="372" font-size="11" fill="#94A3B8">由后台对账收敛</text>
+    </g>
+
+    <rect x="1212" y="150" width="264" height="270" rx="10" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.8"/>
+    <rect x="1212" y="150" width="6" height="270" rx="3" fill="#2563EB"/>
+    <circle cx="1246" cy="182" r="13" fill="#DBEAFE"/><text x="1246" y="187" font-size="13" font-weight="700" fill="#1D4ED8" text-anchor="middle">5</text>
+    <text x="1268" y="187" font-size="13.5" font-weight="700" fill="#1E3A8A">沙箱挂载读取</text>
+    <g font-size="12" fill="#475569">
+      <text x="1232" y="220">/mnt/session/inputs/</text>
+      <text x="1232" y="244">{uploadId}-{safeName}</text>
+      <text x="1232" y="268">Agent 枚举 / 搜索读取</text>
+      <text x="1232" y="292">只读副本 · 不改原件</text>
+      <text x="1232" y="316">任务提示说明输入目录</text>
+      <text x="1232" y="352" font-size="11" fill="#94A3B8">以 MA 返回的实际挂载信息</text>
+      <text x="1232" y="372" font-size="11" fill="#94A3B8">为准，不臆断沙箱路径</text>
+    </g>
+  </g>
+
+  <line x1="340" y1="285" x2="372" y2="285" stroke="#2563EB" stroke-width="2.2"/>
+  <polygon points="372,279 372,291 382,285" fill="#2563EB"/>
+  <line x1="656" y1="285" x2="688" y2="285" stroke="#2563EB" stroke-width="2.2"/>
+  <polygon points="688,279 688,291 698,285" fill="#2563EB"/>
+  <line x1="952" y1="285" x2="984" y2="285" stroke="#2563EB" stroke-width="2.2"/>
+  <polygon points="984,279 984,291 994,285" fill="#2563EB"/>
+  <line x1="1168" y1="285" x2="1200" y2="285" stroke="#2563EB" stroke-width="2.2"/>
+  <polygon points="1200,279 1200,291 1210,285" fill="#2563EB"/>
+
+  <!-- ================= 输出链 ================= -->
+  <g filter="url(#d3Shadow)">
+    <rect x="60" y="500" width="1444" height="400" rx="14" fill="#FAF5FF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <path d="M60,514 a14,14 0 0 1 14,-14 h1416 a14,14 0 0 1 14,14 v20 h-1444 z" fill="#6D28D9"/>
+  </g>
+  <text x="84" y="522" font-size="15" font-weight="700" fill="#FFFFFF">输出链：产物注册 → 查询过滤 → 三段式复制 → 代理交付</text>
+  <text x="520" y="522" font-size="12" fill="#EDE9FE">会话静止后触发同步（人工可重试）</text>
+
+  <g>
+    <rect x="88" y="556" width="216" height="300" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <rect x="88" y="556" width="6" height="300" rx="3" fill="#6D28D9"/>
+    <circle cx="122" cy="588" r="13" fill="#EDE9FE"/><text x="122" y="593" font-size="13" font-weight="700" fill="#5B21B6" text-anchor="middle">1</text>
+    <text x="144" y="593" font-size="13.5" font-weight="700" fill="#5B21B6">Agent 写产物</text>
+    <g font-size="12" fill="#475569">
+      <text x="108" y="626">交付文件写入沙箱</text>
+      <text x="108" y="650">/mnt/session/outputs/</text>
+      <text x="108" y="674">（在任务提示中明确）</text>
+      <text x="108" y="710" font-size="11" fill="#94A3B8">运行结束 ≠ 产物就绪：</text>
+      <text x="108" y="730" font-size="11" fill="#94A3B8">以 Files 列表为准</text>
+    </g>
+
+    <rect x="332" y="556" width="216" height="300" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <rect x="332" y="556" width="6" height="300" rx="3" fill="#6D28D9"/>
+    <circle cx="366" cy="588" r="13" fill="#EDE9FE"/><text x="366" y="593" font-size="13" font-weight="700" fill="#5B21B6" text-anchor="middle">2</text>
+    <text x="388" y="593" font-size="13.5" font-weight="700" fill="#5B21B6">MA 注册文件</text>
+    <g font-size="12" fill="#475569">
+      <text x="352" y="626">注册为 Session 文件</text>
+      <text x="352" y="650">purpose = agent</text>
+      <text x="352" y="674">scope = 当前 Session</text>
+      <text x="352" y="710" font-size="11" fill="#94A3B8">挂载输入的副本也会出现</text>
+      <text x="352" y="730" font-size="11" fill="#94A3B8">在列表中，需过滤</text>
+    </g>
+
+    <rect x="576" y="556" width="240" height="300" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <rect x="576" y="556" width="6" height="300" rx="3" fill="#6D28D9"/>
+    <circle cx="610" cy="588" r="13" fill="#EDE9FE"/><text x="610" y="593" font-size="13" font-weight="700" fill="#5B21B6" text-anchor="middle">3</text>
+    <text x="632" y="593" font-size="13.5" font-weight="700" fill="#5B21B6">应用查询过滤</text>
+    <g font-size="12" fill="#475569">
+      <text x="596" y="626">GET /files?scope_id=…</text>
+      <text x="596" y="650">分页 + 客户端复核</text>
+      <text x="596" y="674">scope / purpose</text>
+      <text x="596" y="698">排除已知输入 ID</text>
+      <text x="596" y="722">跳过无存储位置条目</text>
+      <text x="596" y="758" font-size="11" fill="#94A3B8">页数达上限须显式标记</text>
+      <text x="596" y="778" font-size="11" fill="#94A3B8">「分页未完成」而非静默</text>
+    </g>
+
+    <rect x="844" y="556" width="264" height="300" rx="10" fill="#F5F3FF" stroke="#A78BFA" stroke-width="2"/>
+    <rect x="844" y="556" width="6" height="300" rx="3" fill="#7C3AED"/>
+    <circle cx="878" cy="588" r="13" fill="#DDD6FE"/><text x="878" y="593" font-size="13" font-weight="700" fill="#5B21B6" text-anchor="middle">4</text>
+    <text x="900" y="593" font-size="13.5" font-weight="700" fill="#5B21B6">三段式流式复制</text>
+    <g font-size="12" fill="#4C1D95">
+      <rect x="864" y="614" width="224" height="52" rx="8" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="876" y="636" font-weight="700">stage 暂存</text>
+      <text x="876" y="656" font-size="11" fill="#6D4A9E">先落副本行 + 清理意图</text>
+      <rect x="864" y="674" width="224" height="52" rx="8" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="876" y="696" font-weight="700">copy 复制</text>
+      <text x="876" y="716" font-size="11" fill="#6D4A9E">源对象流式读 → 应用桶流式写</text>
+      <rect x="864" y="734" width="224" height="52" rx="8" fill="#FFFFFF" stroke="#C4B5FD" stroke-width="1"/>
+      <text x="876" y="756" font-weight="700">commit 提交</text>
+      <text x="876" y="776" font-size="11" fill="#6D4A9E">提交副本行 + 写产物索引</text>
+    </g>
+    <text x="864" y="810" font-size="11" fill="#7C3AED">任何一步失败：清理意图生效，不泄漏字节</text>
+    <text x="864" y="830" font-size="11" fill="#7C3AED">会话中途进入删除 → 暂存转为清理</text>
+
+    <rect x="1136" y="556" width="160" height="300" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <rect x="1136" y="556" width="6" height="300" rx="3" fill="#6D28D9"/>
+    <text x="1160" y="593" font-size="13.5" font-weight="700" fill="#5B21B6">应用对象存储</text>
+    <g font-size="11.5" fill="#475569">
+      <text x="1156" y="626">tenants/{userId}/</text>
+      <text x="1156" y="646">drive/artifact/</text>
+      <text x="1156" y="666">{fileId}/{safeName}</text>
+      <text x="1156" y="702" font-size="11" fill="#94A3B8">业务持久副本：</text>
+      <text x="1156" y="722" font-size="11" fill="#94A3B8">生命周期自管</text>
+      <text x="1156" y="742" font-size="11" fill="#94A3B8">不依赖临时签名 URL</text>
+    </g>
+
+    <rect x="1324" y="556" width="152" height="300" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <rect x="1324" y="556" width="6" height="300" rx="3" fill="#5B21B6"/>
+    <text x="1348" y="593" font-size="13.5" font-weight="700" fill="#5B21B6">预览与下载</text>
+    <g font-size="11.5" fill="#475569">
+      <text x="1344" y="626">下载重验 owner</text>
+      <text x="1344" y="646">代理字节 · MIME</text>
+      <text x="1344" y="666">越权返回 404</text>
+      <text x="1344" y="702" font-size="11" fill="#94A3B8">HTML 预览隔离 iframe</text>
+      <text x="1344" y="722" font-size="11" fill="#94A3B8">Office 预览禁脚本</text>
+      <text x="1344" y="742" font-size="11" fill="#94A3B8">不暴露桶凭证</text>
+    </g>
+  </g>
+
+  <line x1="304" y1="706" x2="322" y2="706" stroke="#7C3AED" stroke-width="2.2"/>
+  <polygon points="322,700 322,712 332,706" fill="#7C3AED"/>
+  <line x1="548" y1="706" x2="566" y2="706" stroke="#7C3AED" stroke-width="2.2"/>
+  <polygon points="566,700 566,712 576,706" fill="#7C3AED"/>
+  <line x1="816" y1="706" x2="834" y2="706" stroke="#7C3AED" stroke-width="2.2"/>
+  <polygon points="834,700 834,712 844,706" fill="#7C3AED"/>
+  <line x1="1108" y1="706" x2="1126" y2="706" stroke="#7C3AED" stroke-width="2.2"/>
+  <polygon points="1126,700 1126,712 1136,706" fill="#7C3AED"/>
+  <line x1="1296" y1="706" x2="1314" y2="706" stroke="#7C3AED" stroke-width="2.2"/>
+  <polygon points="1314,700 1314,712 1324,706" fill="#7C3AED"/>
+
+  <!-- 输入→输出 转折箭头（沙箱内：读取输入 → 生成输出） -->
+  <polyline points="1344,420 1344,460 214,460 214,556" fill="none" stroke="#94A3B8" stroke-width="2" stroke-dasharray="6 4"/>
+  <polygon points="208,556 220,556 214,566" fill="#94A3B8"/>
+  <text x="780" y="452" font-size="12" fill="#64748B" text-anchor="middle">Agent 在同一沙箱内读取输入并生成输出（每 Session 独立实例）</text>
+
+  <!-- ================= 底部要点 ================= -->
+  <g filter="url(#d3Shadow)">
+    <rect x="60" y="924" width="468" height="130" rx="14" fill="#3B2A06"/>
+  </g>
+  <text x="84" y="954" font-size="14" font-weight="700" fill="#FDE68A">交付语义</text>
+  <g font-size="12" fill="#EFE3BF">
+    <text x="84" y="982">执行成功 ≠ 交付完成；同步成功才进入产物列表</text>
+    <text x="84" y="1006">失败可重试；晚到产物应在有界窗口内持续核对</text>
+    <text x="84" y="1030">空列表 / 关页不代表交付失败，由后台收敛</text>
+  </g>
+
+  <g filter="url(#d3Shadow)">
+    <rect x="548" y="924" width="468" height="130" rx="14" fill="#0F2B5B"/>
+  </g>
+  <text x="572" y="954" font-size="14" font-weight="700" fill="#7DD3FC">存储边界（官方）</text>
+  <g font-size="12" fill="#C7D7F0">
+    <text x="572" y="982">默认公共 TOS：有平台 TTL，删 Session 清理关联产物</text>
+    <text x="572" y="1006">自有桶：{prefix}outputs/{env-id}/{session-id}/{file}</text>
+    <text x="572" y="1030">删 Session 不删对象，生命周期由业务管理</text>
+  </g>
+
+  <g filter="url(#d3Shadow)">
+    <rect x="1036" y="924" width="468" height="130" rx="14" fill="#123A5F"/>
+  </g>
+  <text x="1060" y="954" font-size="14" font-weight="700" fill="#86EFAC">安全边界</text>
+  <g font-size="12" fill="#C7D7F0">
+    <text x="1060" y="982">download_url 为服务端签名地址，具时效性</text>
+    <text x="1060" y="1006">前端只用本地产物 ID，下载经应用代理重验 owner</text>
+    <text x="1060" y="1030">桶凭证只在服务端；跨用户访问一律 404 防探测</text>
+  </g>
+</svg>

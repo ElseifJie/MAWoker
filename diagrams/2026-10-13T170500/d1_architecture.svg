@@ -1,0 +1,279 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1540 1170" font-family="Noto Sans SC, PingFang SC, sans-serif">
+  <defs>
+    <linearGradient id="hdrViolet" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6D28D9"/><stop offset="1" stop-color="#A78BFA"/>
+    </linearGradient>
+    <linearGradient id="titleBar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0F2B5B"/><stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.14"/>
+    </filter>
+  </defs>
+
+  <!-- ===================== 标题 ===================== -->
+  <text x="60" y="42" font-size="24" font-weight="700" fill="#0F172A">整体解决方案架构</text>
+  <text x="60" y="68" font-size="13" fill="#64748B">基于火山方舟 Managed Agents（MA）的通用个人助手 · 应用与平台的责任边界</text>
+  <rect x="60" y="78" width="180" height="5" rx="2.5" fill="url(#titleBar)"/>
+
+  <!-- ===================== 主流程箭头（画在容器下层） ===================== -->
+  <!-- B: 前端 -> 应用层 HTTP/SSE -->
+  <line x1="341" y1="266" x2="341" y2="286" stroke="#2563EB" stroke-width="2.5"/>
+  <polygon points="335,286 347,286 341,296" fill="#2563EB"/>
+  <text x="353" y="285" font-size="12" font-weight="600" fill="#2563EB">HTTP / SSE 事件流</text>
+
+  <!-- C: 应用层 -> 前端 下载代理（虚线向上） -->
+  <line x1="871" y1="292" x2="871" y2="302" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="865,302 877,302 871,292" fill="#94A3B8"/>
+  <text x="883" y="285" font-size="12" fill="#64748B">产物下载代理（重验 owner）</text>
+
+  <!-- D: 应用层 -> 适配层 -->
+  <line x1="599" y1="574" x2="599" y2="590" stroke="#475569" stroke-width="2.5"/>
+  <polygon points="593,590 605,590 599,600" fill="#475569"/>
+  <text x="611" y="592" font-size="12" fill="#475569">全部云调用收敛于此</text>
+
+  <!-- E: 适配层 -> MA -->
+  <line x1="599" y1="698" x2="599" y2="714" stroke="#475569" stroke-width="2.5"/>
+  <polygon points="593,714 605,714 599,724" fill="#475569"/>
+  <text x="611" y="716" font-size="12" fill="#475569">标准化云调用</text>
+
+  <!-- F: MA -> 对象存储 虚线 -->
+  <line x1="871" y1="922" x2="871" y2="986" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="865,986 877,986 871,996" fill="#94A3B8"/>
+  <text x="883" y="958" font-size="12" fill="#64748B">产物字节流式复制</text>
+
+  <!-- G: 左侧边距 应用层 -> 数据库 -->
+  <polyline points="60,512 34,512 34,1053 88,1053" fill="none" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="88,1047 88,1059 98,1053" fill="#94A3B8"/>
+  <text x="22" y="790" font-size="12" fill="#64748B" transform="rotate(-90 22 790)" text-anchor="middle">领域状态 · 任务检查点读写</text>
+
+  <!-- H: 右侧边距 应用层 -> 对象存储 -->
+  <polyline points="1152,512 1172,512 1172,1053 1124,1053" fill="none" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="1124,1047 1124,1059 1114,1053" fill="#94A3B8"/>
+  <text x="1186" y="790" font-size="12" fill="#64748B" transform="rotate(-90 1186 790)" text-anchor="middle">同步写入（stage → commit）</text>
+
+  <!-- ===================== Band 1 接入层 ===================== -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="96" width="1092" height="168" rx="14" fill="#F5F9FF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <path d="M60,110 a14,14 0 0 1 14,-14 h1064 a14,14 0 0 1 14,14 v20 h-1092 z" fill="#2563EB"/>
+  </g>
+  <circle cx="86" cy="113" r="5" fill="#FFFFFF"/>
+  <circle cx="86" cy="105" r="3.5" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+  <text x="102" y="118" font-size="15" font-weight="700" fill="#FFFFFF">接入层</text>
+  <text x="170" y="118" font-size="12" fill="#DBEAFE">浏览器全程不持有任何云凭据</text>
+
+  <!-- 角色胶囊 -->
+  <g>
+    <rect x="96" y="170" width="118" height="38" rx="19" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.5"/>
+    <circle cx="118" cy="189" r="7" fill="#DBEAFE"/>
+    <circle cx="118" cy="186.5" r="2.6" fill="#1D4ED8"/>
+    <path d="M112.5,196 a5.5,4.5 0 0 1 11,0" fill="none" stroke="#1D4ED8" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="132" y="194" font-size="13" font-weight="600" fill="#1E3A8A">C 端用户</text>
+    <rect x="96" y="218" width="118" height="38" rx="19" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.5"/>
+    <circle cx="118" cy="237" r="7" fill="#DBEAFE"/>
+    <circle cx="118" cy="234.5" r="2.6" fill="#1D4ED8"/>
+    <path d="M112.5,244 a5.5,4.5 0 0 1 11,0" fill="none" stroke="#1D4ED8" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="132" y="242" font-size="13" font-weight="600" fill="#1E3A8A">管理员</text>
+  </g>
+  <line x1="214" y1="189" x2="288" y2="189" stroke="#475569" stroke-width="2"/>
+  <polygon points="288,183 288,195 298,189" fill="#475569"/>
+  <line x1="214" y1="237" x2="288" y2="237" stroke="#475569" stroke-width="2"/>
+  <polygon points="288,231 288,243 298,237" fill="#475569"/>
+
+  <!-- 前端卡片 -->
+  <g filter="url(#softShadow)">
+    <rect x="300" y="150" width="816" height="96" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <rect x="300" y="150" width="6" height="96" rx="3" fill="#2563EB"/>
+  </g>
+  <text x="324" y="176" font-size="15" font-weight="700" fill="#1E3A8A">Web 前端（SPA）</text>
+  <text x="470" y="176" font-size="12" fill="#64748B">只与自有 API 通信 · 只使用本地资源 ID</text>
+  <g font-size="12.5" font-weight="600">
+    <rect x="324" y="192" width="96" height="34" rx="17" fill="#DBEAFE"/><text x="372" y="214" text-anchor="middle" fill="#1D4ED8">会话时间线</text>
+    <rect x="432" y="192" width="96" height="34" rx="17" fill="#DBEAFE"/><text x="480" y="214" text-anchor="middle" fill="#1D4ED8">输入上传</text>
+    <rect x="540" y="192" width="128" height="34" rx="17" fill="#DBEAFE"/><text x="604" y="214" text-anchor="middle" fill="#1D4ED8">产物预览下载</text>
+    <rect x="680" y="192" width="128" height="34" rx="17" fill="#DBEAFE"/><text x="744" y="214" text-anchor="middle" fill="#1D4ED8">记忆 / 文件管理</text>
+    <rect x="820" y="192" width="96" height="34" rx="17" fill="#DBEAFE"/><text x="868" y="214" text-anchor="middle" fill="#1D4ED8">管理控制台</text>
+    <rect x="928" y="192" width="164" height="34" rx="17" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1" stroke-dasharray="4 3"/><text x="1010" y="214" text-anchor="middle" fill="#3B82F6">SSE 实时事件流</text>
+  </g>
+
+  <!-- ===================== Band 2 应用层 ===================== -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="292" width="1092" height="280" rx="14" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.5"/>
+    <path d="M60,306 a14,14 0 0 1 14,-14 h1064 a14,14 0 0 1 14,14 v20 h-1092 z" fill="#0F766E"/>
+  </g>
+  <rect x="76" y="302" width="28" height="6" rx="2" fill="#FFFFFF" opacity="0.9"/>
+  <rect x="76" y="311" width="28" height="6" rx="2" fill="#FFFFFF" opacity="0.6"/>
+  <text x="118" y="318" font-size="15" font-weight="700" fill="#FFFFFF">应用层</text>
+  <text x="186" y="318" font-size="12" fill="#CCFBF1">API 与 Worker 复用同一套领域服务 · 数据库任务租约协作</text>
+
+  <!-- API 卡片 -->
+  <g filter="url(#softShadow)">
+    <rect x="96" y="344" width="490" height="150" rx="10" fill="#FFFFFF" stroke="#CCFBF1" stroke-width="1.5"/>
+    <rect x="96" y="344" width="6" height="150" rx="3" fill="#0F766E"/>
+  </g>
+  <text x="122" y="372" font-size="15" font-weight="700" fill="#0F766E">应用 API 服务</text>
+  <text x="260" y="372" font-size="12" fill="#94A3B8">在线请求入口</text>
+  <g font-size="13" fill="#334155">
+    <circle cx="128" cy="397" r="3" fill="#0F766E"/><text x="140" y="401">认证与归属校验 · 配额准入</text>
+    <circle cx="128" cy="425" r="3" fill="#0F766E"/><text x="140" y="429">SSE 网关：事件先持久化再转发</text>
+    <circle cx="128" cy="453" r="3" fill="#0F766E"/><text x="140" y="457">上传接收与产物下载代理</text>
+    <circle cx="128" cy="481" r="3" fill="#0F766E"/><text x="140" y="485">202 受理回执 · 结果未知不重发</text>
+  </g>
+
+  <!-- Worker 卡片 -->
+  <g filter="url(#softShadow)">
+    <rect x="626" y="344" width="490" height="150" rx="10" fill="#FFFFFF" stroke="#CCFBF1" stroke-width="1.5"/>
+    <rect x="626" y="344" width="6" height="150" rx="3" fill="#0D9488"/>
+  </g>
+  <text x="652" y="372" font-size="15" font-weight="700" fill="#0F766E">后台 Worker</text>
+  <text x="776" y="372" font-size="12" fill="#94A3B8">离线治理入口</text>
+  <g font-size="13" fill="#334155">
+    <circle cx="658" cy="397" r="3" fill="#0D9488"/><text x="670" y="401">创建对账 · 消息安全投递</text>
+    <circle cx="658" cy="425" r="3" fill="#0D9488"/><text x="670" y="429">产物同步 · 用量对账</text>
+    <circle cx="658" cy="453" r="3" fill="#0D9488"/><text x="670" y="457">记忆整理（Dream 维护）</text>
+    <circle cx="658" cy="481" r="3" fill="#0D9488"/><text x="670" y="485">删除流程 · 孤立对象回收</text>
+  </g>
+
+  <!-- 共享条 -->
+  <rect x="96" y="512" width="1020" height="36" rx="8" fill="#CCFBF1"/>
+  <text x="606" y="535" font-size="12.5" font-weight="600" fill="#115E59" text-anchor="middle">共享领域服务：会话 · 输入 · 产物 · 记忆 · 配额 —— 全部业务规则集中于此，状态持久化、重启可续</text>
+
+  <!-- ===================== Band 3 适配层 ===================== -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="600" width="1092" height="96" rx="14" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1.5"/>
+    <path d="M60,614 a14,14 0 0 1 14,-14 h1064 a14,14 0 0 1 14,14 v18 h-1092 z" fill="#B45309"/>
+  </g>
+  <path d="M80,622 l10,-8 10,8 v10 h-20 z" fill="#FFFFFF" opacity="0.95"/>
+  <text x="110" y="626" font-size="15" font-weight="700" fill="#FFFFFF">MA 网关适配层</text>
+  <g font-size="12.5" font-weight="600">
+    <rect x="84" y="644" width="118" height="34" rx="17" fill="#FEF3C7"/><text x="143" y="666" text-anchor="middle" fill="#92400E">响应再校验</text>
+    <rect x="214" y="644" width="330" height="34" rx="17" fill="#FEF3C7"/><text x="379" y="666" text-anchor="middle" fill="#92400E">错误分类：安全可重试 · 写结果未知不重试</text>
+    <rect x="556" y="644" width="104" height="34" rx="17" fill="#FEF3C7"/><text x="608" y="666" text-anchor="middle" fill="#92400E">幂等键</text>
+    <rect x="672" y="644" width="118" height="34" rx="17" fill="#FEF3C7"/><text x="731" y="666" text-anchor="middle" fill="#92400E">关联 ID 追踪</text>
+    <rect x="802" y="644" width="314" height="34" rx="17" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1" stroke-dasharray="4 3"/><text x="959" y="666" text-anchor="middle" fill="#B45309">超时控制 · 退避重试（仅安全操作）</text>
+  </g>
+
+  <!-- ===================== Band 4 平台层 MA ===================== -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="724" width="1092" height="196" rx="14" fill="#FAF5FF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <path d="M60,738 a14,14 0 0 1 14,-14 h1064 a14,14 0 0 1 14,14 v20 h-1092 z" fill="url(#hdrViolet)"/>
+  </g>
+  <path d="M84,748 a7,6 0 0 1 7,-6 h6 a7,6 0 0 1 7,6 a7,6 0 0 1 0,0 a10,8 0 0 1 6,8 a8,7 0 0 1 -8,7 h-12 a8,7 0 0 1 -8,-7 a10,8 0 0 1 6,-8 z" fill="#FFFFFF" opacity="0.95"/>
+  <text x="116" y="750" font-size="15" font-weight="700" fill="#FFFFFF">平台层 —— 火山方舟 MA（Managed Agents）</text>
+  <text x="470" y="750" font-size="12" fill="#EDE9FE">官方构建块：执行 · 沙箱 · 记忆 · 文件</text>
+
+  <g>
+    <rect x="96" y="772" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <text x="261" y="797" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Agent 配置与版本</text>
+    <text x="261" y="817" font-size="12" fill="#7C6BA8" text-anchor="middle">可共享模板 · 会话保存创建时快照</text>
+
+    <rect x="441" y="772" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <text x="606" y="797" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Session 执行与事件流</text>
+    <text x="606" y="817" font-size="12" fill="#7C6BA8" text-anchor="middle">执行状态以 MA 为准（事实源）</text>
+
+    <rect x="786" y="772" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <text x="951" y="797" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">独立沙箱</text>
+    <text x="951" y="817" font-size="12" fill="#7C6BA8" text-anchor="middle">同一 Environment · 每 Session 独立实例</text>
+
+    <rect x="96" y="842" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <text x="261" y="867" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Memory Store 与 Dream</text>
+    <text x="261" y="887" font-size="12" fill="#7C6BA8" text-anchor="middle">跨会话长期记忆 · 异步整理</text>
+
+    <rect x="441" y="842" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+    <text x="606" y="867" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Files 文件服务</text>
+    <text x="606" y="887" font-size="12" fill="#7C6BA8" text-anchor="middle">输入注册（purpose=agent）· 产物落盘</text>
+
+    <rect x="786" y="842" width="330" height="58" rx="10" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="951" y="867" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Vault（按用户第三方凭据）</text>
+    <text x="951" y="887" font-size="12" fill="#7C6BA8" text-anchor="middle">官方扩展 · 按需接入</text>
+  </g>
+
+  <!-- ===================== Band 5 存储层 ===================== -->
+  <g filter="url(#softShadow)">
+    <rect x="60" y="948" width="1092" height="182" rx="14" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+    <path d="M60,962 a14,14 0 0 1 14,-14 h1064 a14,14 0 0 1 14,14 v20 h-1092 z" fill="#475569"/>
+  </g>
+  <ellipse cx="88" cy="965" rx="9" ry="4" fill="none" stroke="#FFFFFF" stroke-width="1.8"/>
+  <text x="118" y="972" font-size="15" font-weight="700" fill="#FFFFFF">存储层</text>
+  <text x="176" y="972" font-size="12" fill="#E2E8F0">业务状态与产物字节由应用掌控</text>
+
+  <!-- 数据库卡片 -->
+  <g filter="url(#softShadow)">
+    <rect x="96" y="996" width="490" height="114" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+    <rect x="96" y="996" width="6" height="114" rx="3" fill="#475569"/>
+  </g>
+  <ellipse cx="126" cy="1030" rx="12" ry="5" fill="#CBD5E1" stroke="#64748B" stroke-width="1.5"/>
+  <path d="M114,1030 v22 a12,5 0 0 0 24,0 v-22" fill="#E2E8F0" stroke="#64748B" stroke-width="1.5"/>
+  <ellipse cx="126" cy="1030" rx="12" ry="5" fill="#F1F5F9"/>
+  <text x="152" y="1026" font-size="14.5" font-weight="700" fill="#334155">应用数据库</text>
+  <text x="152" y="1046" font-size="12.5" fill="#64748B">用户与登录态 · owner 关系 · 云资源 ID 映射</text>
+  <text x="152" y="1066" font-size="12.5" fill="#64748B">事件投影 · 配额账本 · 后台任务检查点</text>
+  <text x="152" y="1090" font-size="11.5" fill="#94A3B8">（如 PostgreSQL，业务状态事实源）</text>
+
+  <!-- 对象存储卡片 -->
+  <g filter="url(#softShadow)">
+    <rect x="626" y="996" width="490" height="114" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+    <rect x="626" y="996" width="6" height="114" rx="3" fill="#D97706"/>
+  </g>
+  <g>
+    <rect x="652" y="1022" width="30" height="22" rx="3" fill="#FEF3C7" stroke="#D97706" stroke-width="1.5"/>
+    <line x1="652" y1="1033" x2="682" y2="1033" stroke="#D97706" stroke-width="1.5"/>
+    <rect x="646" y="1017" width="42" height="7" rx="2" fill="#FDE68A" stroke="#D97706" stroke-width="1.5"/>
+  </g>
+  <text x="702" y="1026" font-size="14.5" font-weight="700" fill="#92400E">应用对象存储</text>
+  <text x="702" y="1046" font-size="12.5" fill="#64748B">业务可控的产物持久副本（如 TOS）</text>
+  <text x="702" y="1066" font-size="12.5" fill="#64748B">对象键按用户前缀组织：tenants/{userId}/…</text>
+  <text x="702" y="1090" font-size="11.5" fill="#94A3B8">下载一律经应用后端代理并重新鉴权</text>
+
+  <!-- ===================== 右侧要点面板 ===================== -->
+  <g filter="url(#softShadow)">
+    <rect x="1196" y="96" width="308" height="328" rx="14" fill="#0F2B5B"/>
+  </g>
+  <path d="M1236,146 l16,-7 16,7 v14 c0,11 -8,17 -16,21 c-8,-4 -16,-10 -16,-21 z" fill="none" stroke="#7DD3FC" stroke-width="2.5"/>
+  <path d="M1229,152 l6,6 12,-12" fill="none" stroke="#7DD3FC" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="1226" y="212" font-size="16" font-weight="700" fill="#FFFFFF">信任边界</text>
+  <g font-size="12.5" fill="#C7D7F0">
+    <text x="1226" y="242">浏览器全程不持有 Ark / TOS</text>
+    <text x="1226" y="264">凭据，前端只与自有 API 通信</text>
+    <text x="1226" y="286">并只使用本地资源 ID；</text>
+    <text x="1226" y="312">云凭据与 ID 映射解析</text>
+    <text x="1226" y="334">只存在于服务端。</text>
+    <text x="1226" y="366">API Key 是整个方案的信任锚点，</text>
+    <text x="1226" y="388">绝不下发到浏览器。</text>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="1196" y="446" width="308" height="328" rx="14" fill="#123A5F"/>
+  </g>
+  <g>
+    <polygon points="1240,494 1276,478 1312,494 1276,510" fill="none" stroke="#86EFAC" stroke-width="2.2"/>
+    <polyline points="1240,508 1276,524 1312,508" fill="none" stroke="#86EFAC" stroke-width="2.2" opacity="0.7"/>
+    <polyline points="1240,522 1276,538 1312,522" fill="none" stroke="#86EFAC" stroke-width="2.2" opacity="0.45"/>
+  </g>
+  <text x="1226" y="572" font-size="16" font-weight="700" fill="#FFFFFF">状态归属</text>
+  <g font-size="12.5" fill="#C7D7F0">
+    <text x="1226" y="602">执行状态 —— 在 MA（事实源）</text>
+    <text x="1226" y="630">业务状态 —— 在应用数据库</text>
+    <text x="1226" y="652">（账号 · 归属 · 配额 · 审计）</text>
+    <text x="1226" y="680">产物字节 —— 在应用对象存储</text>
+    <text x="1226" y="702">（持久副本，生命周期自管）</text>
+    <text x="1226" y="734">三者各司其职，互不混存。</text>
+  </g>
+
+  <g filter="url(#softShadow)">
+    <rect x="1196" y="796" width="308" height="334" rx="14" fill="#3B2A06"/>
+  </g>
+  <g>
+    <circle cx="1250" cy="846" r="17" fill="none" stroke="#FDE68A" stroke-width="2.2"/>
+    <path d="M1242,846 l6,6 12,-12" fill="none" stroke="#FDE68A" stroke-width="2.5" stroke-linecap="round"/>
+  </g>
+  <text x="1226" y="900" font-size="16" font-weight="700" fill="#FFFFFF">交付原则</text>
+  <g font-size="12.5" fill="#EFE3BF">
+    <text x="1226" y="930">执行成功 ≠ 交付完成；</text>
+    <text x="1226" y="958">产物同步成功才进入列表。</text>
+    <text x="1226" y="986">写结果未知不盲目重试，</text>
+    <text x="1226" y="1014">以云端观察到为准、对账兜底。</text>
+    <text x="1226" y="1042">关闭页面不影响后台治理，</text>
+    <text x="1226" y="1070">用量与记忆持续推进。</text>
+  </g>
+</svg>

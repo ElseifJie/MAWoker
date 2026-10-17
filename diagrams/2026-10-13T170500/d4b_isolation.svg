@@ -1,0 +1,187 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1540 1170" font-family="Noto Sans SC, PingFang SC, sans-serif">
+  <defs>
+    <linearGradient id="d4Title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2563EB"/><stop offset="1" stop-color="#0F766E"/>
+    </linearGradient>
+    <filter id="d4Shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.13"/>
+    </filter>
+  </defs>
+
+  <!-- 标题 -->
+  <text x="60" y="42" font-size="24" font-weight="700" fill="#0F172A">多用户隔离 · 逻辑架构</text>
+  <text x="60" y="68" font-size="13" fill="#64748B">运行数据按用户隔离，能力模板全员共享 · 跨泳道访问全部在应用后端被 owner 校验拦截</text>
+  <rect x="60" y="78" width="180" height="5" rx="2.5" fill="url(#d4Title)"/>
+
+  <!-- ================= 泳道 A ================= -->
+  <g filter="url(#d4Shadow)">
+    <rect x="60" y="96" width="680" height="470" rx="14" fill="#F5F9FF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <path d="M60,110 a14,14 0 0 1 14,-14 h652 a14,14 0 0 1 14,14 v20 h-680 z" fill="#2563EB"/>
+  </g>
+  <circle cx="92" cy="113" r="8" fill="#DBEAFE"/>
+  <circle cx="92" cy="110" r="3" fill="#1D4ED8"/>
+  <path d="M85,119 a7,6 0 0 1 14,0" fill="none" stroke="#1D4ED8" stroke-width="1.8"/>
+  <text x="114" y="118" font-size="15" font-weight="700" fill="#FFFFFF">用户 A 泳道</text>
+  <text x="240" y="118" font-size="12" fill="#DBEAFE">资源彼此关联 · 同 owner 约束</text>
+  <g>
+    <rect x="84" y="146" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <text x="104" y="172" font-size="13.5" font-weight="700" fill="#1E3A8A">本地账号 + 登录会话</text>
+    <text x="104" y="196" font-size="11.5" fill="#64748B">密码慢哈希 · Cookie HttpOnly</text>
+    <text x="104" y="218" font-size="11.5" fill="#64748B">纪元号一次性吊销全部旧会话</text>
+    <rect x="410" y="146" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <text x="430" y="172" font-size="13.5" font-weight="700" fill="#1E3A8A">Session（会话）</text>
+    <text x="430" y="196" font-size="11.5" fill="#64748B">本地 ID ↔ 云端 ID 映射</text>
+    <text x="430" y="218" font-size="11.5" fill="#64748B">事件为该会话子资源 · 带 owner</text>
+    <rect x="84" y="248" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <text x="104" y="274" font-size="13.5" font-weight="700" fill="#1E3A8A">固定 Memory Store</text>
+    <text x="104" y="298" font-size="11.5" fill="#64748B">个人长期记忆 · 一个用户一个库</text>
+    <text x="104" y="320" font-size="11.5" fill="#64748B">从登录身份解析，不靠名称猜测</text>
+    <rect x="410" y="248" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <text x="430" y="274" font-size="13.5" font-weight="700" fill="#1E3A8A">个人 Agent / Skill</text>
+    <text x="430" y="298" font-size="11.5" fill="#64748B">按 owner 创建 · 配额与版本比对</text>
+    <text x="430" y="320" font-size="11.5" fill="#64748B">Skill 变更只影响新会话</text>
+    <rect x="84" y="350" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <text x="104" y="376" font-size="13.5" font-weight="700" fill="#1E3A8A">输入文件</text>
+    <text x="104" y="400" font-size="11.5" fill="#64748B">上传意向行 · 绑定同 owner 会话</text>
+    <text x="104" y="422" font-size="11.5" fill="#64748B">不接受任意云 file_id</text>
+    <rect x="410" y="350" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+    <text x="430" y="376" font-size="13.5" font-weight="700" fill="#1E3A8A">产物副本</text>
+    <text x="430" y="400" font-size="11.5" fill="#64748B">tenants/{userId}/ 前缀组织</text>
+    <text x="430" y="422" font-size="11.5" fill="#64748B">下载再鉴权 · 前缀≠桶内 IAM</text>
+    <rect x="84" y="452" width="632" height="44" rx="10" fill="#DBEAFE"/>
+    <text x="400" y="479" font-size="12" font-weight="600" fill="#1E3A8A" text-anchor="middle">前端只使用本地资源 ID —— 云端 ID 只在服务端解析，浏览器不可见</text>
+  </g>
+
+  <!-- ================= 泳道 B ================= -->
+  <g filter="url(#d4Shadow)">
+    <rect x="800" y="96" width="680" height="470" rx="14" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.5"/>
+    <path d="M800,110 a14,14 0 0 1 14,-14 h652 a14,14 0 0 1 14,14 v20 h-680 z" fill="#0D9488"/>
+  </g>
+  <circle cx="832" cy="113" r="8" fill="#CCFBF1"/>
+  <circle cx="832" cy="110" r="3" fill="#0F766E"/>
+  <path d="M825,119 a7,6 0 0 1 14,0" fill="none" stroke="#0F766E" stroke-width="1.8"/>
+  <text x="854" y="118" font-size="15" font-weight="700" fill="#FFFFFF">用户 B 泳道</text>
+  <text x="980" y="118" font-size="12" fill="#CCFBF1">与 A 完全同构 · 数据互不可见</text>
+  <g>
+    <rect x="824" y="146" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <text x="844" y="172" font-size="13.5" font-weight="700" fill="#115E59">本地账号 + 登录会话</text>
+    <text x="844" y="196" font-size="11.5" fill="#64748B">独立登录态 · 滑动续期</text>
+    <text x="844" y="218" font-size="11.5" fill="#64748B">登出 / 禁用即吊销</text>
+    <rect x="1150" y="146" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <text x="1170" y="172" font-size="13.5" font-weight="700" fill="#115E59">Session（会话）</text>
+    <text x="1170" y="196" font-size="11.5" fill="#64748B">独立沙箱实例 · 状态不共享</text>
+    <text x="1170" y="218" font-size="11.5" fill="#64748B">SSE 建连鉴权 · 周期复核</text>
+    <rect x="824" y="248" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <text x="844" y="274" font-size="13.5" font-weight="700" fill="#115E59">固定 Memory Store</text>
+    <text x="844" y="298" font-size="11.5" fill="#64748B">B 自己的记忆库</text>
+    <text x="844" y="320" font-size="11.5" fill="#64748B">与 A 的库毫无关联</text>
+    <rect x="1150" y="248" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <text x="1170" y="274" font-size="13.5" font-weight="700" fill="#115E59">个人 Agent / Skill</text>
+    <text x="1170" y="298" font-size="11.5" fill="#64748B">B 的自定义模板</text>
+    <text x="1170" y="320" font-size="11.5" fill="#64748B">后台对账保持一致</text>
+    <rect x="824" y="350" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <text x="844" y="376" font-size="13.5" font-weight="700" fill="#115E59">输入文件</text>
+    <text x="844" y="400" font-size="11.5" fill="#64748B">B 的上传与绑定</text>
+    <text x="844" y="422" font-size="11.5" fill="#64748B">挂载路径逐文件清洗</text>
+    <rect x="1150" y="350" width="306" height="88" rx="10" fill="#FFFFFF" stroke="#99F6E4" stroke-width="1.5"/>
+    <text x="1170" y="376" font-size="13.5" font-weight="700" fill="#115E59">产物副本</text>
+    <text x="1170" y="400" font-size="11.5" fill="#64748B">tenants/{userId}/ 前缀隔离</text>
+    <text x="1170" y="422" font-size="11.5" fill="#64748B">清理时复核前缀归属</text>
+    <rect x="824" y="452" width="632" height="44" rx="10" fill="#CCFBF1"/>
+    <text x="1140" y="479" font-size="12" font-weight="600" fill="#115E59" text-anchor="middle">所有读写路径先查本地 owner —— 领域层 requireOwned，越权一律 ResourceNotFound</text>
+  </g>
+
+  <!-- ================= 中央隔离边界 ================= -->
+  <g filter="url(#d4Shadow)">
+    <rect x="740" y="96" width="60" height="470" rx="12" fill="#0F2B5B"/>
+  </g>
+  <text x="770" y="152" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">隔离</text>
+  <text x="770" y="172" font-size="13" font-weight="700" fill="#FFFFFF" text-anchor="middle">边界</text>
+  <polygon points="757,224 770,218 783,224 783,236 770,248 757,236" fill="none" stroke="#7DD3FC" stroke-width="2.4"/>
+  <polyline points="764,231 769,236 777,226" fill="none" stroke="#7DD3FC" stroke-width="2.4" stroke-linecap="round"/>
+  <text x="770" y="330" font-size="11" fill="#C7D7F0" text-anchor="middle">owner</text>
+  <text x="770" y="350" font-size="11" fill="#C7D7F0" text-anchor="middle">校验</text>
+  <text x="770" y="448" font-size="11" fill="#C7D7F0" text-anchor="middle">重鉴权</text>
+
+  <!-- 跨泳道访问被拦截 -->
+  <line x1="716" y1="520" x2="740" y2="520" stroke="#EF4444" stroke-width="2.4"/>
+  <g stroke="#EF4444" stroke-width="3" stroke-linecap="round">
+    <line x1="722" y1="512" x2="734" y2="528"/>
+    <line x1="734" y1="512" x2="722" y2="528"/>
+  </g>
+  <text x="770" y="548" font-size="12" font-weight="700" fill="#EF4444" text-anchor="middle">404</text>
+
+  <!-- ================= 共享层 ================= -->
+  <g filter="url(#d4Shadow)">
+    <rect x="60" y="592" width="1420" height="240" rx="14" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+    <path d="M60,606 a14,14 0 0 1 14,-14 h1392 a14,14 0 0 1 14,14 v20 h-1420 z" fill="#475569"/>
+  </g>
+  <text x="84" y="610" font-size="15" font-weight="700" fill="#FFFFFF">共享层（全员可用，不含用户数据）</text>
+  <text x="360" y="610" font-size="12" fill="#E2E8F0">模板与凭据共享 · 运行状态永不共享</text>
+  <g>
+    <rect x="88" y="646" width="330" height="110" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+    <rect x="88" y="646" width="6" height="110" rx="3" fill="#475569"/>
+    <text x="112" y="672" font-size="13.5" font-weight="700" fill="#334155">平台 Agent 模板</text>
+    <text x="112" y="696" font-size="11.5" fill="#64748B">管理员维护 · 普通用户只读</text>
+    <text x="112" y="718" font-size="11.5" fill="#64748B">会话保存创建时配置快照</text>
+    <text x="112" y="740" font-size="11.5" fill="#94A3B8">A 与 B 可用同一「研究助手」</text>
+
+    <rect x="440" y="646" width="330" height="110" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+    <rect x="440" y="646" width="6" height="110" rx="3" fill="#475569"/>
+    <text x="464" y="672" font-size="13.5" font-weight="700" fill="#334155">共享 Environment</text>
+    <text x="464" y="696" font-size="11.5" fill="#64748B">沙箱模板 · 预装包 / 环境变量</text>
+    <text x="464" y="718" font-size="11.5" fill="#64748B">每 Session 独立实例互不共享</text>
+    <text x="464" y="740" font-size="11.5" fill="#94A3B8">模板不放用户敏感参数</text>
+
+    <rect x="792" y="646" width="330" height="110" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+    <rect x="792" y="646" width="6" height="110" rx="3" fill="#B45309"/>
+    <text x="816" y="672" font-size="13.5" font-weight="700" fill="#92400E">MA API 凭据</text>
+    <text x="816" y="696" font-size="11.5" fill="#64748B">仅服务端持有 · 绝不下发浏览器</text>
+    <text x="816" y="718" font-size="11.5" fill="#64748B">整个方案的信任锚点</text>
+    <text x="816" y="740" font-size="11.5" fill="#94A3B8">MA 不感知应用 Cookie 对应谁</text>
+
+    <rect x="1144" y="646" width="308" height="110" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+    <rect x="1144" y="646" width="6" height="110" rx="3" fill="#475569"/>
+    <text x="1168" y="672" font-size="13.5" font-weight="700" fill="#334155">应用数据库 / 应用桶</text>
+    <text x="1168" y="696" font-size="11.5" fill="#64748B">业务状态按 owner 行组织</text>
+    <text x="1168" y="718" font-size="11.5" fill="#64748B">配额 / 审计按用户计量</text>
+    <text x="1168" y="740" font-size="11.5" fill="#94A3B8">共享的是设施，不是数据</text>
+  </g>
+  <rect x="88" y="772" width="1364" height="40" rx="8" fill="#E2E8F0"/>
+  <text x="770" y="797" font-size="12" font-weight="600" fill="#334155" text-anchor="middle">跨泳道访问被 owner 校验拦截（越权一律 404）· 云端 ID 仅服务端解析 · 下载重新鉴权 —— Worker 后台动作同样携带 ownerUserId 过同一套校验</text>
+
+  <!-- 泳道 -> 共享层 虚线 -->
+  <line x1="400" y1="566" x2="400" y2="592" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="394,592 406,592 400,602" fill="#94A3B8"/>
+  <line x1="1140" y1="566" x2="1140" y2="592" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="1134,592 1146,592 1140,602" fill="#94A3B8"/>
+
+  <!-- ================= Vault 扩展（虚线，未接入） ================= -->
+  <g filter="url(#d4Shadow)">
+    <rect x="240" y="872" width="1060" height="130" rx="14" fill="#FFFBEB" stroke="#F59E0B" stroke-width="1.8" stroke-dasharray="8 5"/>
+  </g>
+  <rect x="268" y="910" width="32" height="40" rx="5" fill="none" stroke="#B45309" stroke-width="2.2"/>
+  <circle cx="284" cy="922" r="4.5" fill="none" stroke="#B45309" stroke-width="2"/>
+  <rect x="274" y="934" width="20" height="9" rx="4.5" fill="none" stroke="#B45309" stroke-width="2"/>
+  <text x="330" y="908" font-size="14.5" font-weight="700" fill="#92400E">Volcano Ark Vault（官方能力 · 推荐接入，虚线表示当前未绑定）</text>
+  <g font-size="12" fill="#78716C">
+    <text x="330" y="938">每用户第三方凭据：应用保存 user → vault_id 映射，创建 Session 时传入 vault_ids；</text>
+    <text x="330" y="962">同一个 Agent 即可分别使用 A / B 各自的第三方授权（mcp_oauth · static_bearer · env 等）；</text>
+    <text x="330" y="986">敏感字段只写不读；密钥放 Vault —— 不放提示词、记忆或共享环境变量。</text>
+  </g>
+  <line x1="400" y1="832" x2="400" y2="872" stroke="#D97706" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="394,872 406,872 400,882" fill="#D97706"/>
+  <line x1="1140" y1="832" x2="1140" y2="872" stroke="#D97706" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="1134,872 1146,872 1140,882" fill="#D97706"/>
+
+  <!-- ================= 底部要点 ================= -->
+  <g font-size="12.5">
+    <rect x="60" y="1032" width="464" height="44" rx="10" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.2"/>
+    <text x="292" y="1059" fill="#1E3A8A" text-anchor="middle" font-weight="600">每个 Session 沙箱状态互相独立</text>
+    <rect x="544" y="1032" width="464" height="44" rx="10" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.2"/>
+    <text x="776" y="1059" fill="#1E3A8A" text-anchor="middle" font-weight="600">长期记忆按用户共享给自己的全部会话</text>
+    <rect x="1028" y="1032" width="452" height="44" rx="10" fill="#EFF6FF" stroke="#BFDBFE" stroke-width="1.2"/>
+    <text x="1254" y="1059" fill="#1E3A8A" text-anchor="middle" font-weight="600">SSE 建连鉴权 + 周期复核，失效即断流</text>
+  </g>
+  <text x="770" y="1120" font-size="12" fill="#94A3B8" text-anchor="middle">多建一个 Agent 不能替代四条边界：业务身份 / 数据库关联 / 沙箱运行状态 / 云存储与凭据</text>
+</svg>

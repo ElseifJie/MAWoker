@@ -1,0 +1,317 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1640 1072" width="1640" height="1072">
+  <defs>
+    <linearGradient id="gradBlue" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#4C8FD6"/>
+      <stop offset="1" stop-color="#2D67AD"/>
+    </linearGradient>
+    <linearGradient id="gradIndigo" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#6E66E8"/>
+      <stop offset="1" stop-color="#4B41C4"/>
+    </linearGradient>
+    <filter id="ds" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#8FA3BF"/>
+    </filter>
+  </defs>
+
+  <!-- ======== 背景 ======== -->
+  <rect x="0" y="0" width="1640" height="1072" fill="#F5F7FB"/>
+  <circle cx="1600" cy="50" r="140" fill="#EAEFF8"/>
+
+  <!-- ======== 标题 ======== -->
+  <text x="48" y="62" font-size="28" font-weight="700" fill="#17203A">记忆系统逻辑架构</text>
+  <rect x="48" y="72" width="64" height="6" rx="3" fill="url(#gradBlue)"/>
+  <text x="48" y="96" font-size="14" fill="#5A6478">基于火山方舟 Managed Agents 的通用个人助手 · 2.1.4 最终方案实现</text>
+
+  <rect x="1074" y="40" width="228" height="34" rx="17" fill="#E8F1FB" stroke="#A9CDEF" stroke-width="1"/>
+  <circle cx="1094" cy="57" r="5" fill="#3E7BC0"/>
+  <text x="1108" y="61.5" font-size="12" fill="#2B5E93">主线一 · 在线读写链路</text>
+  <rect x="1318" y="40" width="228" height="34" rx="17" fill="#EDEBFB" stroke="#BBB4EE" stroke-width="1"/>
+  <circle cx="1338" cy="57" r="5" fill="#5B5BD6"/>
+  <text x="1352" y="61.5" font-size="12" fill="#4A44A8">主线二 · 后台整理状态机</text>
+
+  <!-- ================= 左侧面板：在线读写链路 ================= -->
+  <rect x="44" y="120" width="560" height="820" rx="16" fill="#FFFFFF" stroke="#D8DFEA" stroke-width="1.5" filter="url(#ds)"/>
+  <path d="M60,120 h528 a16,16 0 0 1 16,16 v46 h-560 v-46 a16,16 0 0 1 16,-16 z" fill="url(#gradBlue)"/>
+  <line x1="44" y1="182" x2="604" y2="182" stroke="#2A639F" stroke-width="1"/>
+  <path d="M76,134 h30 a6,6 0 0 1 6,6 v13 a6,6 0 0 1 -6,6 h-18 l-9,8 v-8 h-3 a6,6 0 0 1 -6,-6 v-13 a6,6 0 0 1 6,-6 z" fill="#FFFFFF"/>
+  <circle cx="90" cy="146" r="2" fill="#3E7BC0"/>
+  <circle cx="99" cy="146" r="2" fill="#3E7BC0"/>
+  <circle cx="108" cy="146" r="2" fill="#3E7BC0"/>
+  <text x="122" y="150" font-size="16.5" font-weight="700" fill="#FFFFFF">在线读写链路</text>
+  <text x="122" y="169" font-size="11" fill="#D2E4F8">前台 · Agent 会话内原生读写固定库</text>
+
+  <!-- 非临时 Session 卡片 -->
+  <rect x="72" y="204" width="504" height="136" rx="10" fill="#F8FBFF" stroke="#B9D2EC" stroke-width="1.5"/>
+  <rect x="74" y="208" width="5" height="128" rx="2.5" fill="#3E7BC0"/>
+  <text x="92" y="232" font-size="15" font-weight="700" fill="#1F3B5C">非临时 Session</text>
+  <rect x="400" y="216" width="160" height="26" rx="13" fill="#FFF3D9" stroke="#E8C57A" stroke-width="1"/>
+  <text x="480" y="233.5" font-size="11.5" font-weight="700" fill="#96690F" text-anchor="middle">创建时挂载 read_write</text>
+  <line x1="92" y1="246" x2="556" y2="246" stroke="#E2EAF4" stroke-width="1"/>
+  <text x="92" y="268" font-size="12" fill="#44536B">Agent 原生记忆工具直接读写固定库</text>
+  <text x="92" y="290" font-size="12" fill="#44536B">提示约定：先读 handoff 与 .index，再按任务读取</text>
+  <text x="92" y="312" font-size="12" fill="#44536B">写入按类型选目录，并保留来源</text>
+
+  <!-- 标注框 -->
+  <rect x="72" y="350" width="504" height="68" rx="8" fill="#FBFDFE" stroke="#A9BED6" stroke-width="1.3" stroke-dasharray="6,4"/>
+  <rect x="84" y="356" width="64" height="17" rx="8.5" fill="#3E7BC0"/>
+  <text x="116" y="368.5" font-size="10.5" fill="#FFFFFF" text-anchor="middle">标注</text>
+  <text x="96" y="392" font-size="11.5" fill="#5A6B84">读写以 agent.tool_use / agent.tool_result 出现在事件流中</text>
+  <text x="96" y="410" font-size="11.5" fill="#5A6B84">后端发消息不预取记忆正文</text>
+
+  <!-- Session 与固定库之间的双向箭头 -->
+  <line x1="324" y1="426" x2="324" y2="442" stroke="#3E7BC0" stroke-width="2"/>
+  <polygon points="318,434 330,434 324,424" fill="#3E7BC0"/>
+  <polygon points="318,442 330,442 324,452" fill="#3E7BC0"/>
+  <text x="338" y="440" font-size="10.5" fill="#5E7CA0">read_write 读写直连</text>
+
+  <!-- 用户固定库（Memory Store）目录树 -->
+  <rect x="72" y="458" width="504" height="460" rx="10" fill="#FFFFFF" stroke="#C6D4E6" stroke-width="1.5"/>
+  <path d="M82,458 h484 a10,10 0 0 1 10,10 v32 h-504 v-32 a10,10 0 0 1 10,-10 z" fill="#EFF5FC"/>
+  <line x1="72" y1="500" x2="576" y2="500" stroke="#D7E3F2" stroke-width="1"/>
+  <path d="M92,472 h13 l3,3 h14 a3,3 0 0 1 3,3 v11 a3,3 0 0 1 -3,3 h-30 a3,3 0 0 1 -3,-3 v-14 a3,3 0 0 1 3,-3 z" fill="#3E7BC0"/>
+  <text x="136" y="487" font-size="15" font-weight="700" fill="#1F3B5C">用户固定库（Memory Store）</text>
+  <text x="560" y="487" font-size="10.5" fill="#8296AD" text-anchor="end">目录树</text>
+
+  <!-- /memories -->
+  <line x1="106" y1="556" x2="106" y2="624" stroke="#C9D6E6" stroke-width="1" stroke-dasharray="2,3"/>
+  <rect x="96" y="536" width="8" height="4" rx="1.5" fill="#2F6DAE"/>
+  <rect x="96" y="539" width="20" height="13" rx="2" fill="#2F6DAE"/>
+  <text x="124" y="553" font-size="13.5" font-weight="700" fill="#2F6DAE">/memories</text>
+  <path d="M118,570 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="581" font-size="12.5" fill="#2D3B4E">profile.md</text>
+  <text x="300" y="581" font-size="11" fill="#7C8CA0">个人背景</text>
+  <path d="M118,594 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="605" font-size="12.5" fill="#2D3B4E">preferences.md</text>
+  <text x="300" y="605" font-size="11" fill="#7C8CA0">偏好</text>
+  <path d="M118,618 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="629" font-size="12.5" fill="#2D3B4E">.index.md</text>
+  <text x="300" y="629" font-size="11" fill="#7C8CA0">全库导航</text>
+
+  <!-- /procedures -->
+  <line x1="106" y1="666" x2="106" y2="686" stroke="#C9D6E6" stroke-width="1" stroke-dasharray="2,3"/>
+  <rect x="96" y="646" width="8" height="4" rx="1.5" fill="#7C5CBF"/>
+  <rect x="96" y="649" width="20" height="13" rx="2" fill="#7C5CBF"/>
+  <text x="124" y="663" font-size="13.5" font-weight="700" fill="#7C5CBF">/procedures</text>
+  <path d="M118,680 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="691" font-size="12.5" fill="#2D3B4E">conventions.md</text>
+  <text x="300" y="691" font-size="11" fill="#7C8CA0">协作惯例</text>
+
+  <!-- /episodes -->
+  <line x1="106" y1="728" x2="106" y2="772" stroke="#C9D6E6" stroke-width="1" stroke-dasharray="2,3"/>
+  <rect x="96" y="708" width="8" height="4" rx="1.5" fill="#1F8A70"/>
+  <rect x="96" y="711" width="20" height="13" rx="2" fill="#1F8A70"/>
+  <text x="124" y="725" font-size="13.5" font-weight="700" fill="#1F8A70">/episodes</text>
+  <path d="M118,742 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="753" font-size="12.5" fill="#2D3B4E">handoff.md</text>
+  <text x="300" y="753" font-size="11" fill="#7C8CA0">未完成事项</text>
+  <path d="M118,766 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="777" font-size="12.5" fill="#2D3B4E">digest/{sessionId}.md</text>
+  <text x="300" y="777" font-size="11" fill="#7C8CA0">会话沉淀</text>
+
+  <!-- /resources -->
+  <line x1="106" y1="814" x2="106" y2="838" stroke="#C9D6E6" stroke-width="1" stroke-dasharray="2,3"/>
+  <rect x="96" y="794" width="8" height="4" rx="1.5" fill="#C2703D"/>
+  <rect x="96" y="797" width="20" height="13" rx="2" fill="#C2703D"/>
+  <text x="124" y="811" font-size="13.5" font-weight="700" fill="#C2703D">/resources</text>
+  <path d="M118,832 h7 l4,4 v10 h-11 z" fill="#F2F6FB" stroke="#9FB6D0" stroke-width="1"/>
+  <text x="136" y="843" font-size="12.5" fill="#2D3B4E">README.md</text>
+  <text x="300" y="843" font-size="11" fill="#7C8CA0">外部资料</text>
+
+  <!-- 固定库不变性 -->
+  <rect x="88" y="866" width="472" height="44" rx="8" fill="#EAF3FD" stroke="#A5C8EA" stroke-width="1"/>
+  <rect x="104" y="882" width="11" height="9" rx="1.5" fill="#2F6DAE"/>
+  <path d="M106,882 v-3 a3.5,3.5 0 0 1 7,0 v3" fill="none" stroke="#2F6DAE" stroke-width="1.8"/>
+  <text x="324" y="893" font-size="12.5" font-weight="700" fill="#2B5E93" text-anchor="middle">每用户一个固定库 · 固定库 ID 始终不变</text>
+
+  <!-- ================= 右侧面板：后台整理状态机 ================= -->
+  <rect x="724" y="120" width="872" height="820" rx="16" fill="#FFFFFF" stroke="#D8DFEA" stroke-width="1.5" filter="url(#ds)"/>
+  <path d="M740,120 h840 a16,16 0 0 1 16,16 v46 h-872 v-46 a16,16 0 0 1 16,-16 z" fill="url(#gradIndigo)"/>
+  <line x1="724" y1="182" x2="1596" y2="182" stroke="#473FC0" stroke-width="1"/>
+  <path d="M76,140 l9,9 -9,9 z" fill="#FFFFFF"/>
+  <path d="M92,140 l9,9 -9,9 z" fill="#FFFFFF"/>
+  <path d="M108,140 l9,9 -9,9 z" fill="#FFFFFF"/>
+  <text x="134" y="150" font-size="16.5" font-weight="700" fill="#FFFFFF">后台整理状态机</text>
+  <text x="134" y="169" font-size="11" fill="#D9D5F9">后台 · 整理流水线：七状态顺序流转 + 修复隔离</text>
+
+  <!-- 触发入口 -->
+  <rect x="748" y="204" width="258" height="104" rx="10" fill="#FFFBEA" stroke="#EACB78" stroke-width="1.5"/>
+  <circle cx="772" cy="240" r="10" fill="none" stroke="#C48A1F" stroke-width="2.2"/>
+  <line x1="772" y1="240" x2="779" y2="233" stroke="#C48A1F" stroke-width="2.2"/>
+  <circle cx="772" cy="240" r="1.8" fill="#C48A1F"/>
+  <text x="794" y="238" font-size="13.5" font-weight="700" fill="#8A5B10">容量监控</text>
+  <text x="794" y="262" font-size="11.5" fill="#8F7A45">定时触发</text>
+  <text x="794" y="282" font-size="11.5" fill="#8F7A45">容量分级 normal → full</text>
+
+  <rect x="1031" y="204" width="258" height="104" rx="10" fill="#FFFBEA" stroke="#EACB78" stroke-width="1.5"/>
+  <path d="M1036,230 h11 v18 l-5.5,-4.5 -5.5,4.5 z" fill="#C48A1F"/>
+  <text x="1077" y="238" font-size="13.5" font-weight="700" fill="#8A5B10">显式「记住」</text>
+  <text x="1077" y="262" font-size="11.5" fill="#8F7A45">证据捕获</text>
+  <text x="1077" y="282" font-size="11.5" fill="#8F7A45">优先确定性</text>
+
+  <rect x="1314" y="204" width="258" height="104" rx="10" fill="#FFFBEA" stroke="#EACB78" stroke-width="1.5"/>
+  <circle cx="1338" cy="240" r="9.5" fill="none" stroke="#C48A1F" stroke-width="2"/>
+  <line x1="1338" y1="240" x2="1338" y2="233" stroke="#C48A1F" stroke-width="2"/>
+  <line x1="1338" y1="240" x2="1343.5" y2="242.5" stroke="#C48A1F" stroke-width="2"/>
+  <text x="1360" y="238" font-size="13.5" font-weight="700" fill="#8A5B10">轮次结束 / 归档 / 登出</text>
+  <text x="1360" y="262" font-size="11.5" fill="#8F7A45">打上加速标记</text>
+
+  <!-- 触发总线 -->
+  <line x1="877" y1="308" x2="877" y2="332" stroke="#D9A93C" stroke-width="2"/>
+  <line x1="1160" y1="308" x2="1160" y2="332" stroke="#D9A93C" stroke-width="2"/>
+  <line x1="1443" y1="308" x2="1443" y2="332" stroke="#D9A93C" stroke-width="2"/>
+  <line x1="842" y1="332" x2="1443" y2="332" stroke="#D9A93C" stroke-width="2"/>
+  <line x1="842" y1="332" x2="842" y2="346" stroke="#D9A93C" stroke-width="2"/>
+  <polygon points="836,346 848,346 842,357" fill="#D9A93C"/>
+  <text x="990" y="326" font-size="10.5" fill="#A87E22">触发整理</text>
+
+  <!-- 状态机第一行 -->
+  <rect x="748" y="358" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="754" y="358" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="775" cy="389" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="775" y="393.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">1</text>
+  <text x="795" y="386" font-size="13" font-weight="700" fill="#322D63">queued</text>
+  <text x="795" y="404" font-size="11.5" font-weight="700" fill="#6A6FA8">排队等待</text>
+  <line x1="762" y1="416" x2="922" y2="416" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="764" y="440" font-size="11.5" fill="#4A5266">库置 draining</text>
+  <text x="764" y="462" font-size="11.5" fill="#4A5266">会话静止检查</text>
+
+  <rect x="960" y="358" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="966" y="358" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="987" cy="389" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="987" y="393.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">2</text>
+  <text x="1007" y="386" font-size="13" font-weight="700" fill="#322D63">snapshot</text>
+  <text x="1007" y="404" font-size="11.5" font-weight="700" fill="#6A6FA8">基线快照</text>
+  <line x1="974" y1="416" x2="1134" y2="416" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="976" y="440" font-size="11.5" fill="#4A5266">基线复制到临时快照库</text>
+  <text x="976" y="462" font-size="11.5" fill="#4A5266">完成即恢复 active</text>
+
+  <rect x="1172" y="358" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="1178" y="358" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="1199" cy="389" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="1199" y="393.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">3</text>
+  <text x="1219" y="386" font-size="13" font-weight="700" fill="#322D63">submit</text>
+  <text x="1219" y="404" font-size="11.5" font-weight="700" fill="#6A6FA8">提交 Dream</text>
+  <line x1="1186" y1="416" x2="1346" y2="416" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="1188" y="440" font-size="11.5" fill="#4A5266">快照库 + 历史 Session</text>
+  <text x="1188" y="462" font-size="11.5" fill="#4A5266">+ instructions</text>
+  <text x="1188" y="484" font-size="11.5" fill="#4A5266">→ 产出独立候选库</text>
+
+  <rect x="1384" y="358" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="1390" y="358" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="1411" cy="389" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="1411" y="393.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">4</text>
+  <text x="1431" y="386" font-size="13" font-weight="700" fill="#322D63">polling</text>
+  <text x="1431" y="404" font-size="11.5" font-weight="700" fill="#6A6FA8">轮询等待</text>
+  <line x1="1398" y1="416" x2="1558" y2="416" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="1400" y="440" font-size="11.5" fill="#4A5266">轮询至 completed</text>
+  <text x="1400" y="462" font-size="11.5" fill="#4A5266">应用等待预算 30 分钟</text>
+  <text x="1400" y="484" font-size="11.5" fill="#4A5266">官方时限 48 小时</text>
+
+  <!-- 第一行箭头 -->
+  <line x1="938" y1="451" x2="951" y2="451" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="951,446 951,456 960,451" fill="#5B5BD6"/>
+  <line x1="1150" y1="451" x2="1163" y2="451" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="1163,446 1163,456 1172,451" fill="#5B5BD6"/>
+  <line x1="1362" y1="451" x2="1375" y2="451" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="1375,446 1375,456 1384,451" fill="#5B5BD6"/>
+
+  <!-- polling → merge 换行连接线 -->
+  <polyline points="1440,544 1440,570 842,570 842,588" fill="none" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="836,588 848,588 842,598" fill="#5B5BD6"/>
+  <text x="1250" y="564" font-size="10" fill="#6B72C9">completed 后进入合并</text>
+
+  <!-- 固定库 ⇄ 整理流水线 双向箭头 -->
+  <line x1="592" y1="571" x2="726" y2="571" stroke="#3E7BC0" stroke-width="2"/>
+  <polygon points="592,565 592,577 581,571" fill="#3E7BC0"/>
+  <polygon points="726,565 726,577 737,571" fill="#3E7BC0"/>
+  <text x="664" y="560" font-size="10.5" fill="#4A6E9E" text-anchor="middle">基线复制 · 读</text>
+  <text x="664" y="590" font-size="10.5" fill="#4A6E9E" text-anchor="middle">CAS 发布 · 写</text>
+
+  <!-- 状态机第二行 -->
+  <rect x="748" y="600" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="754" y="600" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="775" cy="631" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="775" y="635.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">5</text>
+  <text x="795" y="628" font-size="13" font-weight="700" fill="#322D63">merge</text>
+  <text x="795" y="646" font-size="11.5" font-weight="700" fill="#6A6FA8">三方比对</text>
+  <line x1="762" y1="658" x2="922" y2="658" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="764" y="682" font-size="11.5" fill="#4A5266">基线 / 候选 / 当前固定库</text>
+  <text x="764" y="704" font-size="11.5" fill="#4A5266">逐字来源证据校验</text>
+  <text x="764" y="726" font-size="11.5" fill="#4A5266">候选缺失 ≠ 删除</text>
+
+  <rect x="960" y="600" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="966" y="600" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="987" cy="631" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="987" y="635.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">6</text>
+  <text x="1007" y="628" font-size="13" font-weight="700" fill="#322D63">apply</text>
+  <text x="1007" y="646" font-size="11.5" font-weight="700" fill="#6A6FA8">CAS 发布</text>
+  <line x1="974" y1="658" x2="1134" y2="658" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="976" y="682" font-size="11.5" fill="#4A5266">逐条发布：核对旧哈希</text>
+  <text x="976" y="704" font-size="11.5" fill="#4A5266">→ 写入</text>
+  <text x="976" y="726" font-size="11.5" fill="#4A5266">→ 回读验证</text>
+
+  <rect x="1172" y="600" width="188" height="186" rx="10" fill="#FFFFFF" stroke="#C9D2EE" stroke-width="1.5"/>
+  <rect x="1178" y="600" width="176" height="6" rx="3" fill="#5B5BD6"/>
+  <circle cx="1199" cy="631" r="12.5" fill="#EDEBFB" stroke="#B9B3EE" stroke-width="1"/>
+  <text x="1199" y="635.5" font-size="12.5" font-weight="700" fill="#4F46C5" text-anchor="middle">7</text>
+  <text x="1219" y="628" font-size="13" font-weight="700" fill="#322D63">cleanup</text>
+  <text x="1219" y="646" font-size="11.5" font-weight="700" fill="#6A6FA8">清理收尾</text>
+  <line x1="1186" y1="658" x2="1346" y2="658" stroke="#E4E7F5" stroke-width="1"/>
+  <text x="1188" y="682" font-size="11.5" fill="#4A5266">删除快照与候选临时库</text>
+  <text x="1188" y="704" font-size="11.5" fill="#4A5266">记录来源指纹</text>
+
+  <!-- 修复隔离 -->
+  <rect x="1384" y="600" width="188" height="186" rx="10" fill="#FFF7F7" stroke="#E05252" stroke-width="1.8" stroke-dasharray="7,5"/>
+  <circle cx="1411" cy="631" r="12.5" fill="#FDECEC" stroke="#F2B3B3" stroke-width="1"/>
+  <text x="1411" y="636.5" font-size="14" font-weight="700" fill="#C03030" text-anchor="middle">!</text>
+  <text x="1431" y="628" font-size="13" font-weight="700" fill="#B02A2A">修复隔离</text>
+  <text x="1431" y="646" font-size="10.5" fill="#C98484">quarantine</text>
+  <line x1="1398" y1="658" x2="1558" y2="658" stroke="#F2D7D7" stroke-width="1"/>
+  <text x="1400" y="682" font-size="11.5" fill="#8A4A4A">失败 / 未决进入</text>
+  <text x="1400" y="704" font-size="11.5" fill="#8A4A4A">只在回读观察到</text>
+  <text x="1400" y="726" font-size="11.5" fill="#8A4A4A">目标结果时恢复</text>
+
+  <!-- 第二行箭头 -->
+  <line x1="938" y1="693" x2="951" y2="693" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="951,688 951,698 960,693" fill="#5B5BD6"/>
+  <line x1="1150" y1="693" x2="1163" y2="693" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="1163,688 1163,698 1172,693" fill="#5B5BD6"/>
+
+  <!-- 失败/未决 → 修复隔离（虚线） -->
+  <line x1="1516" y1="544" x2="1516" y2="588" stroke="#DC6060" stroke-width="1.8" stroke-dasharray="6,4"/>
+  <polygon points="1510,588 1522,588 1516,598" fill="#DC6060"/>
+  <polyline points="842,786 842,810 1478,810 1478,794" fill="none" stroke="#DC6060" stroke-width="1.8" stroke-dasharray="6,4"/>
+  <polygon points="1472,794 1484,794 1478,784" fill="#DC6060"/>
+  <line x1="1054" y1="786" x2="1054" y2="810" stroke="#DC6060" stroke-width="1.8" stroke-dasharray="6,4"/>
+  <text x="1150" y="804" font-size="10.5" fill="#C05050">失败 / 未决</text>
+
+  <!-- 图例 -->
+  <line x1="748" y1="856" x2="786" y2="856" stroke="#5B5BD6" stroke-width="2"/>
+  <polygon points="786,851 786,861 795,856" fill="#5B5BD6"/>
+  <text x="802" y="860" font-size="11" fill="#5E6577">正常流转</text>
+  <line x1="880" y1="856" x2="918" y2="856" stroke="#DC6060" stroke-width="1.8" stroke-dasharray="6,4"/>
+  <text x="934" y="860" font-size="11" fill="#5E6577">失败 / 未决</text>
+  <line x1="1032" y1="856" x2="1086" y2="856" stroke="#3E7BC0" stroke-width="2"/>
+  <polygon points="1032,850 1032,862 1023,856" fill="#3E7BC0"/>
+  <polygon points="1086,850 1086,862 1095,856" fill="#3E7BC0"/>
+  <text x="1102" y="860" font-size="11" fill="#5E6577">固定库 读 / 写</text>
+  <rect x="1230" y="848" width="16" height="16" rx="4" fill="#FFFBEA" stroke="#EACB78" stroke-width="1.5"/>
+  <text x="1254" y="860" font-size="11" fill="#5E6577">触发入口</text>
+  <rect x="1346" y="848" width="16" height="18" rx="4" fill="#EEF9F1" stroke="#9AD1B0" stroke-width="1.5"/>
+  <text x="1370" y="860" font-size="11" fill="#5E6577">护栏见下方</text>
+
+  <!-- ================= 底部护栏带 ================= -->
+  <rect x="44" y="964" width="1512" height="86" rx="14" fill="#F1FAF4" stroke="#A9DCBB" stroke-width="1.5"/>
+  <path d="M92,978 l17,6 v13 c0,10 -7.5,17 -17,21 c-9.5,-4 -17,-11 -17,-21 v-13 z" fill="#2F9E5F"/>
+  <text x="122" y="1000" font-size="14" font-weight="700" fill="#1E7A45">护栏</text>
+  <text x="122" y="1020" font-size="10.5" fill="#4E8B66">贯穿两条链路</text>
+  <line x1="320" y1="976" x2="320" y2="1038" stroke="#CBE8D6" stroke-width="1"/>
+  <rect x="360" y="990" width="110" height="34" rx="17" fill="#FFFFFF" stroke="#7FC79B" stroke-width="1.3"/>
+  <text x="415" y="1011.5" font-size="12" font-weight="700" fill="#22703F" text-anchor="middle">版本号 CAS</text>
+  <rect x="640" y="990" width="244" height="34" rx="17" fill="#FFFFFF" stroke="#7FC79B" stroke-width="1.3"/>
+  <text x="762" y="1011.5" font-size="12" font-weight="700" fill="#22703F" text-anchor="middle">策略 epoch · 用户保护 / 撤销规则版本</text>
+  <rect x="1000" y="990" width="182" height="34" rx="17" fill="#FFFFFF" stroke="#7FC79B" stroke-width="1.3"/>
+  <text x="1091" y="1011.5" font-size="12" font-weight="700" fill="#22703F" text-anchor="middle">会话事件指纹（SHA-256）</text>
+  <rect x="1300" y="990" width="136" height="34" rx="17" fill="#FFFFFF" stroke="#7FC79B" stroke-width="1.3"/>
+  <text x="1368" y="1011.5" font-size="12" font-weight="700" fill="#22703F" text-anchor="middle">用户保护路径列表</text>
+</svg>

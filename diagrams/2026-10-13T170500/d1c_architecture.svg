@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1540 1170" font-family="Noto Sans SC, PingFang SC, sans-serif">
+
+  <!-- ============ 标题 ============ -->
+  <text x="60" y="42" font-size="24" font-weight="700" fill="#0F172A">整体解决方案架构</text>
+  <text x="60" y="68" font-size="13" fill="#64748B">基于火山方舟 Managed Agents（MA）的通用个人助手 · 应用与平台的责任边界</text>
+  <rect x="60" y="78" width="180" height="6" rx="3" fill="#2563EB"/>
+
+  <!-- ============ 层间主流箭头 ============ -->
+  <line x1="341" y1="266" x2="341" y2="286" stroke="#2563EB" stroke-width="2.5"/>
+  <polygon points="335,286 347,286 341,296" fill="#2563EB"/>
+  <text x="353" y="285" font-size="12" font-weight="600" fill="#2563EB">HTTP / SSE 事件流</text>
+
+  <line x1="871" y1="292" x2="871" y2="302" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="865,302 877,302 871,292" fill="#94A3B8"/>
+  <text x="883" y="285" font-size="12" fill="#64748B">产物下载代理（重验 owner）</text>
+
+  <line x1="599" y1="574" x2="599" y2="590" stroke="#475569" stroke-width="2.5"/>
+  <polygon points="593,590 605,590 599,600" fill="#475569"/>
+  <text x="611" y="592" font-size="12" fill="#475569">全部云调用收敛于此</text>
+
+  <line x1="599" y1="698" x2="599" y2="714" stroke="#475569" stroke-width="2.5"/>
+  <polygon points="593,714 605,714 599,724" fill="#475569"/>
+  <text x="611" y="716" font-size="12" fill="#475569">标准化云调用</text>
+
+  <line x1="871" y1="922" x2="871" y2="986" stroke="#94A3B8" stroke-width="2" stroke-dasharray="5 4"/>
+  <polygon points="865,986 877,986 871,996" fill="#94A3B8"/>
+  <text x="883" y="958" font-size="12" fill="#64748B">产物字节流式复制</text>
+
+  <!-- ============ Band 1 接入层 ============ -->
+  <rect x="60" y="96" width="1092" height="168" rx="14" fill="#F5F9FF" stroke="#BFDBFE" stroke-width="1.5"/>
+  <rect x="61" y="97" width="1090" height="34" fill="#2563EB"/>
+  <rect x="61" y="126" width="1090" height="5" fill="#2563EB"/>
+  <text x="84" y="119" font-size="15" font-weight="700" fill="#FFFFFF">接入层</text>
+  <text x="160" y="119" font-size="12" fill="#DBEAFE">浏览器全程不持有任何云凭据</text>
+
+  <rect x="96" y="170" width="118" height="38" rx="19" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.5"/>
+  <circle cx="118" cy="189" r="8" fill="#DBEAFE"/>
+  <circle cx="118" cy="186" r="2.8" fill="#1D4ED8"/>
+  <text x="132" y="194" font-size="13" font-weight="600" fill="#1E3A8A">C 端用户</text>
+  <rect x="96" y="218" width="118" height="38" rx="19" fill="#FFFFFF" stroke="#2563EB" stroke-width="1.5"/>
+  <circle cx="118" cy="237" r="8" fill="#DBEAFE"/>
+  <circle cx="118" cy="234" r="2.8" fill="#1D4ED8"/>
+  <text x="132" y="242" font-size="13" font-weight="600" fill="#1E3A8A">管理员</text>
+  <line x1="214" y1="189" x2="288" y2="189" stroke="#475569" stroke-width="2"/>
+  <polygon points="288,183 288,195 298,189" fill="#475569"/>
+  <line x1="214" y1="237" x2="288" y2="237" stroke="#475569" stroke-width="2"/>
+  <polygon points="288,231 288,243 298,237" fill="#475569"/>
+
+  <rect x="300" y="150" width="816" height="96" rx="10" fill="#FFFFFF" stroke="#BFDBFE" stroke-width="1.5"/>
+  <rect x="300" y="150" width="6" height="96" rx="3" fill="#2563EB"/>
+  <text x="324" y="176" font-size="15" font-weight="700" fill="#1E3A8A">Web 前端（SPA）</text>
+  <text x="470" y="176" font-size="12" fill="#64748B">只与自有 API 通信 · 只使用本地资源 ID</text>
+  <g font-size="12.5" font-weight="600">
+    <rect x="324" y="192" width="96" height="34" rx="17" fill="#DBEAFE"/><text x="372" y="214" text-anchor="middle" fill="#1D4ED8">会话时间线</text>
+    <rect x="432" y="192" width="96" height="34" rx="17" fill="#DBEAFE"/><text x="480" y="214" text-anchor="middle" fill="#1D4ED8">输入上传</text>
+    <rect x="540" y="192" width="128" height="34" rx="17" fill="#DBEAFE"/><text x="604" y="214" text-anchor="middle" fill="#1D4ED8">产物预览下载</text>
+    <rect x="680" y="192" width="128" height="34" rx="17" fill="#DBEAFE"/><text x="744" y="214" text-anchor="middle" fill="#1D4ED8">记忆 / 文件管理</text>
+    <rect x="820" y="192" width="96" height="34" rx="17" fill="#DBEAFE"/><text x="868" y="214" text-anchor="middle" fill="#1D4ED8">管理控制台</text>
+    <rect x="928" y="192" width="164" height="34" rx="17" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1" stroke-dasharray="4 3"/><text x="1010" y="214" text-anchor="middle" fill="#3B82F6">SSE 实时事件流</text>
+  </g>
+
+  <!-- ============ Band 2 应用层 ============ -->
+  <rect x="60" y="292" width="1092" height="280" rx="14" fill="#F0FDFA" stroke="#99F6E4" stroke-width="1.5"/>
+  <rect x="61" y="293" width="1090" height="34" fill="#0F766E"/>
+  <rect x="61" y="322" width="1090" height="5" fill="#0F766E"/>
+  <text x="84" y="315" font-size="15" font-weight="700" fill="#FFFFFF">应用层</text>
+  <text x="160" y="315" font-size="12" fill="#CCFBF1">API 与 Worker 复用同一套领域服务 · 数据库任务租约协作</text>
+
+  <rect x="96" y="344" width="490" height="150" rx="10" fill="#FFFFFF" stroke="#CCFBF1" stroke-width="1.5"/>
+  <rect x="96" y="344" width="6" height="150" rx="3" fill="#0F766E"/>
+  <text x="122" y="372" font-size="15" font-weight="700" fill="#0F766E">应用 API 服务</text>
+  <text x="260" y="372" font-size="12" fill="#94A3B8">在线请求入口</text>
+  <g font-size="13" fill="#334155">
+    <circle cx="128" cy="397" r="3" fill="#0F766E"/><text x="140" y="401">认证与归属校验 · 配额准入</text>
+    <circle cx="128" cy="425" r="3" fill="#0F766E"/><text x="140" y="429">SSE 网关：事件先持久化再转发</text>
+    <circle cx="128" cy="453" r="3" fill="#0F766E"/><text x="140" y="457">上传接收与产物下载代理</text>
+    <circle cx="128" cy="481" r="3" fill="#0F766E"/><text x="140" y="485">202 受理回执 · 结果未知不重发</text>
+  </g>
+
+  <rect x="626" y="344" width="490" height="150" rx="10" fill="#FFFFFF" stroke="#CCFBF1" stroke-width="1.5"/>
+  <rect x="626" y="344" width="6" height="150" rx="3" fill="#0D9488"/>
+  <text x="652" y="372" font-size="15" font-weight="700" fill="#0F766E">后台 Worker</text>
+  <text x="776" y="372" font-size="12" fill="#94A3B8">离线治理入口</text>
+  <g font-size="13" fill="#334155">
+    <circle cx="658" cy="397" r="3" fill="#0D9488"/><text x="670" y="401">创建对账 · 消息安全投递</text>
+    <circle cx="658" cy="425" r="3" fill="#0D9488"/><text x="670" y="429">产物同步 · 用量对账</text>
+    <circle cx="658" cy="453" r="3" fill="#0D9488"/><text x="670" y="457">记忆整理（Dream 维护）</text>
+    <circle cx="658" cy="481" r="3" fill="#0D9488"/><text x="670" y="485">删除流程 · 孤立对象回收</text>
+  </g>
+
+  <rect x="96" y="512" width="1020" height="36" rx="8" fill="#CCFBF1"/>
+  <text x="606" y="535" font-size="12.5" font-weight="600" fill="#115E59" text-anchor="middle">共享领域服务：会话 · 输入 · 产物 · 记忆 · 配额 —— 全部业务规则集中于此，状态持久化、重启可续</text>
+
+  <!-- ============ Band 3 适配层 ============ -->
+  <rect x="60" y="600" width="1092" height="96" rx="14" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1.5"/>
+  <rect x="61" y="601" width="1090" height="34" fill="#B45309"/>
+  <rect x="61" y="630" width="1090" height="5" fill="#B45309"/>
+  <text x="84" y="623" font-size="15" font-weight="700" fill="#FFFFFF">MA 网关适配层</text>
+  <text x="240" y="623" font-size="12" fill="#FEF3C7">所有云调用的统一出口</text>
+  <g font-size="12.5" font-weight="600">
+    <rect x="84" y="644" width="118" height="34" rx="17" fill="#FEF3C7"/><text x="143" y="666" text-anchor="middle" fill="#92400E">响应再校验</text>
+    <rect x="214" y="644" width="330" height="34" rx="17" fill="#FEF3C7"/><text x="379" y="666" text-anchor="middle" fill="#92400E">错误分类：安全可重试 · 写结果未知不重试</text>
+    <rect x="556" y="644" width="104" height="34" rx="17" fill="#FEF3C7"/><text x="608" y="666" text-anchor="middle" fill="#92400E">幂等键</text>
+    <rect x="672" y="644" width="118" height="34" rx="17" fill="#FEF3C7"/><text x="731" y="666" text-anchor="middle" fill="#92400E">关联 ID 追踪</text>
+    <rect x="802" y="644" width="314" height="34" rx="17" fill="#FFF7ED" stroke="#FDBA74" stroke-width="1" stroke-dasharray="4 3"/><text x="959" y="666" text-anchor="middle" fill="#B45309">超时控制 · 退避重试（仅安全操作）</text>
+  </g>
+
+  <!-- ============ Band 4 平台层 MA ============ -->
+  <rect x="60" y="724" width="1092" height="196" rx="14" fill="#FAF5FF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <rect x="61" y="725" width="1090" height="34" fill="#6D28D9"/>
+  <rect x="61" y="754" width="1090" height="5" fill="#6D28D9"/>
+  <text x="84" y="747" font-size="15" font-weight="700" fill="#FFFFFF">平台层 —— 火山方舟 MA（Managed Agents）</text>
+  <text x="470" y="747" font-size="12" fill="#EDE9FE">官方构建块：执行 · 沙箱 · 记忆 · 文件</text>
+
+  <rect x="96" y="772" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <text x="261" y="797" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Agent 配置与版本</text>
+  <text x="261" y="817" font-size="12" fill="#7C6BA8" text-anchor="middle">可共享模板 · 会话保存创建时快照</text>
+
+  <rect x="441" y="772" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <text x="606" y="797" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Session 执行与事件流</text>
+  <text x="606" y="817" font-size="12" fill="#7C6BA8" text-anchor="middle">执行状态以 MA 为准（事实源）</text>
+
+  <rect x="786" y="772" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <text x="951" y="797" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">独立沙箱</text>
+  <text x="951" y="817" font-size="12" fill="#7C6BA8" text-anchor="middle">同一 Environment · 每 Session 独立实例</text>
+
+  <rect x="96" y="842" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <text x="261" y="867" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Memory Store 与 Dream</text>
+  <text x="261" y="887" font-size="12" fill="#7C6BA8" text-anchor="middle">跨会话长期记忆 · 异步整理</text>
+
+  <rect x="441" y="842" width="330" height="58" rx="10" fill="#FFFFFF" stroke="#DDD6FE" stroke-width="1.5"/>
+  <text x="606" y="867" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Files 文件服务</text>
+  <text x="606" y="887" font-size="12" fill="#7C6BA8" text-anchor="middle">输入注册（purpose=agent）· 产物落盘</text>
+
+  <rect x="786" y="842" width="330" height="58" rx="10" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="951" y="867" font-size="13.5" font-weight="700" fill="#5B21B6" text-anchor="middle">Vault（按用户第三方凭据）</text>
+  <text x="951" y="887" font-size="12" fill="#7C6BA8" text-anchor="middle">官方扩展 · 按需接入</text>
+
+  <!-- ============ Band 5 存储层 ============ -->
+  <rect x="60" y="948" width="1092" height="182" rx="14" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+  <rect x="61" y="949" width="1090" height="34" fill="#475569"/>
+  <rect x="61" y="978" width="1090" height="5" fill="#475569"/>
+  <text x="84" y="971" font-size="15" font-weight="700" fill="#FFFFFF">存储层</text>
+  <text x="160" y="971" font-size="12" fill="#E2E8F0">业务状态与产物字节由应用掌控</text>
+
+  <rect x="96" y="996" width="490" height="114" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <rect x="96" y="996" width="6" height="114" rx="3" fill="#475569"/>
+  <rect x="114" y="1022" width="28" height="9" rx="4.5" fill="#E2E8F0" stroke="#64748B" stroke-width="1.5"/>
+  <rect x="114" y="1036" width="28" height="9" rx="4.5" fill="#E2E8F0" stroke="#64748B" stroke-width="1.5"/>
+  <rect x="114" y="1050" width="28" height="9" rx="4.5" fill="#E2E8F0" stroke="#64748B" stroke-width="1.5"/>
+  <text x="152" y="1026" font-size="14.5" font-weight="700" fill="#334155">应用数据库</text>
+  <text x="152" y="1046" font-size="12.5" fill="#64748B">用户与登录态 · owner 关系 · 云资源 ID 映射</text>
+  <text x="152" y="1066" font-size="12.5" fill="#64748B">事件投影 · 配额账本 · 后台任务检查点</text>
+  <text x="152" y="1090" font-size="11.5" fill="#94A3B8">（如 PostgreSQL，业务状态事实源）</text>
+
+  <rect x="626" y="996" width="490" height="114" rx="10" fill="#FFFFFF" stroke="#E2E8F0" stroke-width="1.5"/>
+  <rect x="626" y="996" width="6" height="114" rx="3" fill="#D97706"/>
+  <rect x="652" y="1022" width="30" height="24" rx="3" fill="#FEF3C7" stroke="#D97706" stroke-width="1.5"/>
+  <rect x="646" y="1017" width="42" height="7" rx="2" fill="#FDE68A" stroke="#D97706" stroke-width="1.5"/>
+  <text x="702" y="1026" font-size="14.5" font-weight="700" fill="#92400E">应用对象存储</text>
+  <text x="702" y="1046" font-size="12.5" fill="#64748B">业务可控的产物持久副本（如 TOS）</text>
+  <text x="702" y="1066" font-size="12.5" fill="#64748B">对象键按用户前缀组织：tenants/{userId}/…</text>
+  <text x="702" y="1090" font-size="11.5" fill="#94A3B8">下载一律经应用后端代理并重新鉴权</text>
+
+  <!-- ============ 右侧要点面板 ============ -->
+  <rect x="1196" y="96" width="308" height="328" rx="14" fill="#0F2B5B"/>
+  <polygon points="1252,132 1268,125 1284,132 1284,148 1268,162 1252,148" fill="none" stroke="#7DD3FC" stroke-width="2.4"/>
+  <text x="1226" y="196" font-size="16" font-weight="700" fill="#FFFFFF">信任边界</text>
+  <g font-size="12.5" fill="#C7D7F0">
+    <text x="1226" y="226">浏览器全程不持有 Ark / TOS</text>
+    <text x="1226" y="248">凭据，前端只与自有 API 通信</text>
+    <text x="1226" y="270">并只使用本地资源 ID；</text>
+    <text x="1226" y="296">云凭据与 ID 映射解析</text>
+    <text x="1226" y="318">只存在于服务端。</text>
+    <text x="1226" y="350">API Key 是整个方案的信任锚点，</text>
+    <text x="1226" y="372">绝不下发到浏览器。</text>
+  </g>
+
+  <rect x="1196" y="446" width="308" height="328" rx="14" fill="#123A5F"/>
+  <polygon points="1240,504 1276,488 1312,504 1276,520" fill="none" stroke="#86EFAC" stroke-width="2.2"/>
+  <polyline points="1240,512 1276,528 1312,512" fill="none" stroke="#86EFAC" stroke-width="2.2" opacity="0.7"/>
+  <polyline points="1240,520 1276,536 1312,520" fill="none" stroke="#86EFAC" stroke-width="2.2" opacity="0.45"/>
+  <text x="1226" y="566" font-size="16" font-weight="700" fill="#FFFFFF">状态归属</text>
+  <g font-size="12.5" fill="#C7D7F0">
+    <text x="1226" y="596">执行状态 —— 在 MA（事实源）</text>
+    <text x="1226" y="624">业务状态 —— 在应用数据库</text>
+    <text x="1226" y="646">（账号 · 归属 · 配额 · 审计）</text>
+    <text x="1226" y="674">产物字节 —— 在应用对象存储</text>
+    <text x="1226" y="696">（持久副本，生命周期自管）</text>
+    <text x="1226" y="728">三者各司其职，互不混存。</text>
+  </g>
+
+  <rect x="1196" y="796" width="308" height="334" rx="14" fill="#3B2A06"/>
+  <circle cx="1252" cy="846" r="17" fill="none" stroke="#FDE68A" stroke-width="2.2"/>
+  <polyline points="1243,846 1249,852 1261,840" fill="none" stroke="#FDE68A" stroke-width="2.5"/>
+  <text x="1226" y="900" font-size="16" font-weight="700" fill="#FFFFFF">交付原则</text>
+  <g font-size="12.5" fill="#EFE3BF">
+    <text x="1226" y="930">执行成功 ≠ 交付完成；</text>
+    <text x="1226" y="958">产物同步成功才进入列表。</text>
+    <text x="1226" y="986">写结果未知不盲目重试，</text>
+    <text x="1226" y="1014">以云端观察到为准、对账兜底。</text>
+    <text x="1226" y="1042">关闭页面不影响后台治理，</text>
+    <text x="1226" y="1070">用量与记忆持续推进。</text>
+  </g>
+</svg>
