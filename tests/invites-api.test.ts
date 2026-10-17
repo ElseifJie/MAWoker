@@ -52,7 +52,8 @@ function invites() {
 describe("invite API", () => {
   it("creates, lists, and revokes invites for an administrator", async () => {
     const service = invites();
-    const app = buildApp({ auth: auth(), invites: service });
+    const audit = { recordInvite: vi.fn(async () => undefined) };
+    const app = buildApp({ auth: auth(), invites: service, audit });
 
     const created = await app.inject({
       method: "POST",
@@ -69,6 +70,9 @@ describe("invite API", () => {
       email: "invitee@example.com",
       expiresInDays: 7,
     });
+    expect(audit.recordInvite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "invite.create", inviteId }),
+    );
 
     const listed = await app.inject({
       method: "GET",
@@ -85,12 +89,16 @@ describe("invite API", () => {
     });
     expect(revoked.statusCode).toBe(200);
     expect(revoked.json().invite.status).toBe("revoked");
+    expect(audit.recordInvite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "invite.revoke", inviteId }),
+    );
     await app.close();
   });
 
   it("accepts an invite without a session", async () => {
     const service = invites();
-    const app = buildApp({ auth: auth(), invites: service });
+    const audit = { recordInvite: vi.fn(async () => undefined) };
+    const app = buildApp({ auth: auth(), invites: service, audit });
 
     const response = await app.inject({
       method: "POST",
@@ -108,6 +116,9 @@ describe("invite API", () => {
     expect(service.accept).toHaveBeenCalledWith(
       "plaintext-code-123456",
       "password123",
+    );
+    expect(audit.recordInvite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "invite.accept" }),
     );
     await app.close();
   });

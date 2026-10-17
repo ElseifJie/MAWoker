@@ -555,6 +555,13 @@ export interface AuditApiService {
     userId: string;
     requestId: string;
   }): Promise<void>;
+  recordInvite(input: {
+    actorUserId: string;
+    ownerUserId: string;
+    action: "invite.create" | "invite.revoke" | "invite.accept";
+    inviteId: string;
+    requestId: string;
+  }): Promise<void>;
 }
 
 export interface AutomationApiService {
@@ -2963,6 +2970,13 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.body.code,
               request.body.password,
             );
+            await options.audit?.recordInvite({
+              actorUserId: user.userId,
+              ownerUserId: user.userId,
+              action: "invite.accept",
+              inviteId: user.userId,
+              requestId: request.id,
+            });
             return reply.code(201).send({ user });
           } catch (error) {
             if (hasErrorName(error, "InvalidInviteError")) {
@@ -5340,6 +5354,13 @@ export function buildApp(options: BuildAppOptions = {}) {
               request.auth!.userId,
               request.body,
             );
+            await options.audit?.recordInvite({
+              actorUserId: request.auth!.userId,
+              ownerUserId: request.auth!.userId,
+              action: "invite.create",
+              inviteId: result.invite.id,
+              requestId: request.id,
+            });
             return reply.code(201).send({
               invite: publicInvite(result.invite),
               code: result.code,
@@ -5354,11 +5375,18 @@ export function buildApp(options: BuildAppOptions = {}) {
         { schema: { params: uuidParamsSchema } },
         async (request, reply) => {
           try {
-            return reply.send({
-              invite: publicInvite(
-                await invites.revoke(request.auth!.userId, request.params.id),
-              ),
+            const invite = await invites.revoke(
+              request.auth!.userId,
+              request.params.id,
+            );
+            await options.audit?.recordInvite({
+              actorUserId: request.auth!.userId,
+              ownerUserId: request.auth!.userId,
+              action: "invite.revoke",
+              inviteId: invite.id,
+              requestId: request.id,
             });
+            return reply.send({ invite: publicInvite(invite) });
           } catch (error) {
             return sendAdminError(error, request, reply);
           }

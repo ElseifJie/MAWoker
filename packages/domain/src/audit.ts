@@ -116,4 +116,22 @@ export class AuditService {
       requestId: input.requestId,
     });
   }
+
+  async recordInvite(input: {
+    actorUserId: string;
+    ownerUserId: string;
+    action: "invite.create" | "invite.revoke" | "invite.accept";
+    inviteId: string;
+    requestId: string;
+  }): Promise<void> {
+    await this.dependencies.repository.record({
+      actorUserId: input.actorUserId,
+      ownerUserId: input.ownerUserId,
+      action: input.action,
+      resourceType: "invite",
+      resourceId: input.inviteId,
+      result: "succeeded",
+      requestId: input.requestId,
+    });
+  }
 }
