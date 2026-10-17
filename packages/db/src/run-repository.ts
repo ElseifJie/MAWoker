@@ -47,6 +47,21 @@ const runSelection = sql`id, owner_user_id as "ownerUserId",
   created_at as "createdAt", updated_at as "updatedAt"`;
 
 /**
+ * PGlite returns `timestamptz` values as strings while `pg` returns Dates.
+ * Normalize at the repository boundary so callers and the API can rely on
+ * Date methods.
+ */
+function dates(run: RunRecord): RunRecord {
+  return {
+    ...run,
+    startedAt: run.startedAt ? new Date(run.startedAt) : null,
+    endedAt: run.endedAt ? new Date(run.endedAt) : null,
+    createdAt: new Date(run.createdAt),
+    updatedAt: new Date(run.updatedAt),
+  };
+}
+
+/**
  * Runs are created inside the durable-submission transaction so a replayed
  * submission can never produce a second Run. This repository exposes read
  * paths; state transitions are added with the execution service.
@@ -64,7 +79,8 @@ export function createRunRepository(db: Database) {
                and id = ${id}
              limit 1`,
       );
-      return result.rows[0];
+      const row = result.rows[0];
+      return row ? dates(row) : undefined;
     },
 
     async findBySubmission(
@@ -78,7 +94,8 @@ export function createRunRepository(db: Database) {
                and submission_id = ${submissionId}
              limit 1`,
       );
-      return result.rows[0];
+      const row = result.rows[0];
+      return row ? dates(row) : undefined;
     },
 
     async transition(input: {
@@ -122,7 +139,8 @@ export function createRunRepository(db: Database) {
                and status in (${from})
              returning ${runSelection}`,
       );
-      return result.rows[0];
+      const row = result.rows[0];
+      return row ? dates(row) : undefined;
     },
 
     async listForConversation(
@@ -138,7 +156,7 @@ export function createRunRepository(db: Database) {
              order by created_at desc
              limit ${limit}`,
       );
-      return result.rows;
+      return result.rows.map(dates);
     },
   };
 }

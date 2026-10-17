@@ -232,6 +232,45 @@ export function createSessionDeliveryRepository(db: Database) {
               summary=excluded.summary,expected_names=excluded.expected_names
             returning ${turnSelection}`);
           const turn = dates(result.rows[0]!);
+          // Link the observed turn back to the Run created with its durable
+          // submission. The status guard prevents a repeated discovery scan
+          // from bumping the version once the Run already reached the target.
+          await transaction.execute(sql`update runs r
+            set turn_id = ${turn.id},
+                started_at = coalesce(r.started_at, ${turn.startedAt}::timestamptz),
+                ended_at = case
+                  when ${turn.outcome}::text in ('completed','failed')
+                    then coalesce(r.ended_at, ${turn.endedAt}::timestamptz)
+                  else r.ended_at
+                end,
+                status = case
+                  when r.status in ('completed','failed','canceled') then r.status
+                  when ${turn.outcome}::text = 'completed' then 'completed'::run_status
+                  when ${turn.outcome}::text = 'failed' then 'failed'::run_status
+                  when ${turn.outcome}::text = 'waiting' then 'waiting_user'::run_status
+                  else r.status
+                end,
+                version = r.version + 1,
+                updated_at = ${input.now}
+            where r.owner_user_id = ${userId}
+              and r.submission_id = (
+                select ms.submission_id from message_submissions ms
+                 where ms.owner_user_id = ${userId}
+                   and ms.upstream_event_id = ${turn.inputEventId}
+                 limit 1
+              )
+              and (
+                r.turn_id is distinct from ${turn.id}
+                or (
+                  r.status not in ('completed','failed','canceled')
+                  and ${turn.outcome}::text in ('completed','failed','waiting')
+                  and r.status <> case
+                        when ${turn.outcome}::text = 'completed' then 'completed'::run_status
+                        when ${turn.outcome}::text = 'failed' then 'failed'::run_status
+                        else 'waiting_user'::run_status
+                      end
+                )
+              )`);
           if (
             turn.outcome === "completed" &&
             turn.artifactState === "pending"

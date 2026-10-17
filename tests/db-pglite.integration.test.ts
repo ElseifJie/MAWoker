@@ -453,6 +453,54 @@ describe("repositories in PGlite", () => {
       }),
     ).resolves.toBeUndefined();
 
+    await database.client.query(
+      `update message_submissions set upstream_event_id = $1
+        where owner_user_id = $2 and submission_id = $3`,
+      ["event-input-run", ownerId, submissionId],
+    );
+    const observation = {
+      boundaryEventId: "event-boundary-run",
+      inputEventId: "event-input-run",
+      outcome: "completed" as const,
+      summary: "done",
+      expectedNames: [],
+      startedAt: new Date("2026-10-17T00:00:30.000Z"),
+      endedAt: new Date("2026-10-17T00:04:30.000Z"),
+      usageState: "complete" as const,
+    };
+    const deliveryInput = {
+      upstreamStatus: "idle",
+      now: new Date("2026-10-17T00:05:00.000Z"),
+      retryWindowMs: 60_000,
+    };
+    await repositories.sessionDelivery.recordObservations(
+      ownerId,
+      session.sessionId,
+      [observation],
+      deliveryInput,
+    );
+    const completed = await repositories.runs.findBySubmission(
+      ownerId,
+      submissionId,
+    );
+    expect(completed).toMatchObject({
+      status: "completed",
+      endedAt: new Date("2026-10-17T00:04:30.000Z"),
+      turnId: expect.any(String),
+    });
+    const completedVersion = completed?.version;
+
+    // A repeated discovery scan of the same boundary must not bump the Run.
+    await repositories.sessionDelivery.recordObservations(
+      ownerId,
+      session.sessionId,
+      [observation],
+      deliveryInput,
+    );
+    await expect(
+      repositories.runs.findBySubmission(ownerId, submissionId),
+    ).resolves.toMatchObject({ version: completedVersion });
+
     // Replaying the same submission ID returns the existing receipt and must
     // not create a second Run.
     await repositories.sessionLifecycle.enqueueSubmission(input);
