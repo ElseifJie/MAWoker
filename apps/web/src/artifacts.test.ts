@@ -80,6 +80,18 @@ describe("canPreview", () => {
     ).toBe(false);
   });
 
+  it("previews images up to the binary cap, not the text cap", () => {
+    expect(
+      canPreview({ ...file("long.jpg", "image/jpeg"), sizeBytes: 4_383_029 }),
+    ).toBe(true);
+    expect(
+      canPreview({
+        ...file("huge.png", "image/png"),
+        sizeBytes: DOCUMENT_PREVIEW_MAX_BYTES + 1,
+      }),
+    ).toBe(false);
+  });
+
   it("never previews unknown types", () => {
     expect(canPreview(file("archive.zip", "application/zip"))).toBe(false);
     expect(canPreview(file("brief.doc", "application/msword"))).toBe(false);

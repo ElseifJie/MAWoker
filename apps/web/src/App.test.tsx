@@ -1828,8 +1828,13 @@ describe("artifact management", () => {
       "ui-icon-button",
       "ui-icon-button--small",
     );
-    const mimeType = screen.getByText(longDocumentMimeType);
-    expect(mimeType.parentElement).toHaveClass("artifact-record__details");
+    // Each task's outputs collapse into one expandable record.
+    const group = document.querySelector("details.artifact-group");
+    expect(group).not.toBeNull();
+    expect(group).not.toHaveAttribute("open");
+    const groupSummary = within(group as HTMLElement).getByText(/个文件/);
+    await user.click(groupSummary);
+    expect(group).toHaveAttribute("open");
     const [metadataRule] = findStyleRules(".artifact-record__metadata");
     const [metadataItemRule] = findStyleRules(
       ".artifact-record__metadata > span",

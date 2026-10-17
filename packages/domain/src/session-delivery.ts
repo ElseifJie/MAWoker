@@ -84,8 +84,12 @@ export interface SessionDeliveryRepository {
 }
 
 function outputNames(content: string): string[] {
+  // `<` is excluded so an Agent's `<display>/mnt/.../x.jpg</display>` wrapper
+  // ends the path: swallowing `</display` made the last path segment — the
+  // expected artifact name — literally "display", which no real file matches,
+  // and the turn settled as ARTIFACTS_NOT_VISIBLE.
   const matches = content.matchAll(
-    /(?:sandbox:)?\/mnt\/(?:data|session\/outputs)\/([^\s)\]>"`]+)|sandbox:\/([^\s)\]>"`]+)/g,
+    /(?:sandbox:)?\/mnt\/(?:data|session\/outputs)\/([^\s)\]>"`<]+)|sandbox:\/([^\s)\]>"`<]+)/g,
   );
   const names = new Set<string>();
   for (const match of matches) {

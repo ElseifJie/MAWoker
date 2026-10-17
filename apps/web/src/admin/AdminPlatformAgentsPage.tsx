@@ -6,7 +6,7 @@ import {
   type AdminUserAgent,
 } from "../api.js";
 import {
-  Alert,
+  Button,
   Badge,
   DataTable,
   EmptyState,
@@ -14,6 +14,9 @@ import {
   Spinner,
   type BadgeTone,
 } from "../ui/index.js";
+
+import { AdminTabs } from "./AdminTabs.js";
+import { statusLabel } from "./presentation.js";
 
 function platformAgentStatusTone(
   status: AdminPlatformAgent["status"],
@@ -34,9 +37,12 @@ function userAgentStatusTone(status: AdminUserAgent["status"]): BadgeTone {
 function UserAgentsPanel({ onAuthRequired }: { onAuthRequired: () => void }) {
   const [agents, setAgents] = useState<AdminUserAgent[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     let active = true;
+    setFailed(false);
+    setAgents(null);
     apiClient
       .listAdminUserAgents()
       .then((result) => {
@@ -53,55 +59,64 @@ function UserAgentsPanel({ onAuthRequired }: { onAuthRequired: () => void }) {
     return () => {
       active = false;
     };
-  }, [onAuthRequired]);
+  }, [onAuthRequired, revision]);
 
   if (failed) {
-    return <Alert tone="danger">User Agents could not be loaded.</Alert>;
+    return (
+      <EmptyState
+        title="个人助手暂时无法加载"
+        description="加载失败，请重试。"
+        action={
+          <Button
+            variant="secondary"
+            onClick={() => setRevision((value) => value + 1)}
+          >
+            重试
+          </Button>
+        }
+      />
+    );
   }
   if (agents === null) {
     return (
       <div className="skills-loading" aria-busy="true">
-        <Spinner label="Loading user Agents" />
+        <Spinner label="正在加载个人助手" />
       </div>
     );
   }
   if (agents.length === 0) {
-    return <EmptyState title="No user Agents exist yet." />;
+    return <EmptyState title="还没有个人助手" />;
   }
   return (
-    <DataTable
-      caption="User Agents"
-      className="admin-agent-table"
-      minWidth="wide"
-    >
+    <DataTable caption="个人助手" className="admin-agent-table" minWidth="wide">
       <thead>
         <tr>
-          <th scope="col">Agent</th>
-          <th scope="col">Owner</th>
-          <th scope="col">Type</th>
-          <th scope="col">Skills</th>
-          <th scope="col">Status</th>
+          <th scope="col">助手</th>
+          <th scope="col">所属账号</th>
+          <th scope="col">类型</th>
+          <th scope="col">技能</th>
+          <th scope="col">状态</th>
         </tr>
       </thead>
       <tbody>
         {agents.map((agent) => (
           <tr key={agent.id}>
-            <th scope="row" data-label="Agent">
+            <th scope="row" data-label="助手">
               <div className="admin-agent-summary">
                 <strong>{agent.name}</strong>
-                <span>{agent.description || "No description"}</span>
+                <span>{agent.description || "暂无说明"}</span>
                 <span>{agent.modelId}</span>
               </div>
             </th>
-            <td data-label="Owner">{agent.ownerEmail}</td>
-            <td data-label="Type">
+            <td data-label="所属账号">{agent.ownerEmail}</td>
+            <td data-label="类型">
               {agent.isAutoDefault ? (
-                <Badge tone="info">Default for user</Badge>
+                <Badge tone="info">账号默认助手</Badge>
               ) : (
-                <Badge tone="neutral">Personal</Badge>
+                <Badge tone="neutral">个人助手</Badge>
               )}
             </td>
-            <td data-label="Skills">
+            <td data-label="技能">
               {agent.skills.length === 0 ? (
                 <span className="admin-agent-model">—</span>
               ) : (
@@ -114,9 +129,9 @@ function UserAgentsPanel({ onAuthRequired }: { onAuthRequired: () => void }) {
                 </div>
               )}
             </td>
-            <td data-label="Status">
+            <td data-label="状态">
               <Badge tone={userAgentStatusTone(agent.status)}>
-                {agent.status}
+                {statusLabel(agent.status)}
               </Badge>
             </td>
           </tr>
@@ -129,7 +144,13 @@ function UserAgentsPanel({ onAuthRequired }: { onAuthRequired: () => void }) {
 export function AdminPlatformAgentsPage({
   agents,
   onAuthRequired,
+  loading,
+  loadError,
+  onRetry,
 }: {
+  loading: boolean;
+  loadError: boolean;
+  onRetry: () => void;
   agents: AdminPlatformAgent[];
   onAuthRequired: () => void;
 }) {
@@ -138,87 +159,99 @@ export function AdminPlatformAgentsPage({
   return (
     <div className="page admin-page">
       <PageHeader
-        title="Agents"
+        title="助手管理"
         description={
           tab === "system"
-            ? "System Agents are configured through SYSTEM_AGENT_IDS in .env. Restart the API after changing the configuration."
-            : "View user Agents and their current status."
+            ? "查看平台助手的模型、版本与可用状态。"
+            : "查看个人助手的所属账号、技能和可用状态。"
         }
       />
 
-      <div
-        className="skills-tabs admin-agent-tabs"
-        role="tablist"
-        aria-label="Agent scope"
+      <AdminTabs
+        label="助手范围"
+        tabs={[
+          { id: "system", label: "平台助手" },
+          { id: "user", label: "个人助手" },
+        ]}
+        value={tab}
+        onChange={setTab}
       >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "system"}
-          className={tab === "system" ? "is-active" : undefined}
-          onClick={() => setTab("system")}
-        >
-          System Agents
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "user"}
-          className={tab === "user" ? "is-active" : undefined}
-          onClick={() => setTab("user")}
-        >
-          User Agents
-        </button>
-      </div>
-
-      {tab === "user" ? (
-        <UserAgentsPanel onAuthRequired={onAuthRequired} />
-      ) : agents.length === 0 ? (
-        <EmptyState title="No System Agents configured." />
-      ) : (
-        <DataTable
-          caption="Platform Agents"
-          className="admin-agent-table"
-          minWidth="wide"
-        >
-          <thead>
-            <tr>
-              <th scope="col">Agent</th>
-              <th scope="col">Model</th>
-              <th scope="col">Current Ark version</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {agents.map((agent) => (
-              <tr key={agent.id}>
-                <th scope="row" data-label="Agent">
-                  <div className="admin-agent-summary">
-                    <strong>{agent.name}</strong>
-                    <span>{agent.description || "No description"}</span>
-                  </div>
-                </th>
-                <td className="admin-agent-model" data-label="Model">
-                  <span>{agent.modelId}</span>
-                </td>
-                <td data-label="Current Ark version">
-                  <span>{agent.arkVersion}</span>
-                </td>
-                <td data-label="Status">
-                  <div className="admin-status-stack">
-                    <Badge tone={platformAgentStatusTone(agent.status)}>
-                      {agent.status}
-                    </Badge>
-                    {agent.lastErrorCode ? (
-                      <Badge tone="danger">Sync needs attention</Badge>
-                    ) : null}
-                  </div>
-                </td>
+        {tab === "user" ? (
+          <UserAgentsPanel onAuthRequired={onAuthRequired} />
+        ) : loading ? (
+          <div className="admin-loading" aria-busy="true">
+            <Spinner label="正在加载平台助手" />
+            正在加载平台助手…
+          </div>
+        ) : loadError ? (
+          <EmptyState
+            title="平台助手暂时无法加载"
+            description="请重试，其他管理页面仍可使用。"
+            action={
+              <Button variant="secondary" onClick={onRetry}>
+                重试
+              </Button>
+            }
+          />
+        ) : agents.length === 0 ? (
+          <EmptyState
+            title="还没有配置平台助手"
+            description="配置平台助手后，才能为个人账号分配默认助手。"
+          />
+        ) : (
+          <DataTable
+            caption="平台助手列表"
+            className="admin-agent-table"
+            minWidth="wide"
+          >
+            <thead>
+              <tr>
+                <th scope="col">助手</th>
+                <th scope="col">模型</th>
+                <th scope="col">当前版本</th>
+                <th scope="col">状态</th>
               </tr>
-            ))}
-          </tbody>
-        </DataTable>
-      )}
+            </thead>
+            <tbody>
+              {agents.map((agent) => (
+                <tr key={agent.id}>
+                  <th scope="row" data-label="助手">
+                    <div className="admin-agent-summary">
+                      <strong>{agent.name}</strong>
+                      <span>{agent.description || "暂无说明"}</span>
+                    </div>
+                  </th>
+                  <td className="admin-agent-model" data-label="模型">
+                    <span>{agent.modelId}</span>
+                  </td>
+                  <td data-label="当前版本">
+                    <span>{agent.arkVersion}</span>
+                  </td>
+                  <td data-label="状态">
+                    <div className="admin-status-stack">
+                      <Badge tone={platformAgentStatusTone(agent.status)}>
+                        {statusLabel(agent.status)}
+                      </Badge>
+                      {agent.lastErrorCode ? (
+                        <Badge tone="danger">同步异常</Badge>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+        {tab === "system" ? (
+          <details className="admin-configuration-note">
+            <summary>如何配置平台助手</summary>
+            <p>
+              平台助手通过 .env 中的 SYSTEM_AGENT_IDS 配置。修改后需重启 API
+              服务。
+            </p>
+          </details>
+        ) : null}
+      </AdminTabs>
     </div>
   );
 }

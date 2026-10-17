@@ -23,7 +23,7 @@ interface DeletionLogStorage {
   write(
     objectKey: string,
     stream: Readable,
-    metadata: { contentType: string },
+    metadata: { contentType: string; contentLength: number },
   ): PromiseLike<void>;
   openRead(objectKey: string): PromiseLike<Readable>;
 }
@@ -51,10 +51,16 @@ export class DeletionLogStore {
   ): Promise<{ confirmed: true } | { confirmed: false; reason: string }> {
     const body = JSON.stringify(intent);
     try {
+      // The byte length must travel with the body: the S3-compatible client
+      // cannot PUT a length-less stream (it signs an empty
+      // x-amz-decoded-content-length header and refuses to send).
       await this.dependencies.storage.write(
         this.key(intent.deletionRequestId),
         Readable.from([body]),
-        { contentType: "application/json" },
+        {
+          contentType: "application/json",
+          contentLength: Buffer.byteLength(body),
+        },
       );
       const readBack = await this.read(intent.deletionRequestId);
       if (!readBack) {

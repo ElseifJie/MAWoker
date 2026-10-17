@@ -1,5 +1,5 @@
 import { LogOut, Power, ShieldCheck, ShieldOff, UserRound } from "lucide-react";
-import { type SyntheticEvent, useEffect, useRef, useState } from "react";
+import { type SyntheticEvent, useCallback, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { PASSWORD_MIN_LENGTH } from "@pwa/contracts";
 import {
@@ -25,6 +25,10 @@ import {
   Spinner,
   type BadgeTone,
 } from "../ui/index.js";
+import { AdminPagination } from "./AdminPagination.js";
+import { useAdminCollection } from "./useAdminCollection.js";
+import { useAdminLifetime } from "./useAdminLifetime.js";
+import { statusLabel } from "./presentation.js";
 import { formatDate } from "./format.js";
 
 const PAGE_SIZE = 50;
@@ -65,33 +69,30 @@ function lifecycleCopy(action: LifecycleAction): {
   switch (action.kind) {
     case "disable":
       return {
-        title: "Disable account",
-        body: `Disabling ${action.user.email} signs out all of its active sessions immediately. The account can no longer sign in until it is re-enabled. Its sessions, Agents, and artifacts are kept.`,
-        confirm: "Disable account",
+        title: "停用账号",
+        body: `停用 ${action.user.email} 将立即退出该账号的所有登录。重新启用后才能登录，任务、助手和文件会保留。`,
+        confirm: "停用账号",
       };
     case "enable":
       return {
-        title: "Enable account",
-        body: `${action.user.email} will be able to sign in again with its existing password.`,
-        confirm: "Enable account",
+        title: "启用账号",
+        body: `${action.user.email} 将可以使用现有密码重新登录。`,
+        confirm: "启用账号",
       };
     case "signout":
       return {
-        title: "Force sign-out",
-        body: `All active sessions for ${action.user.email} are revoked immediately. The account status is not changed.`,
-        confirm: "Force sign-out",
+        title: "强制退出登录",
+        body: `${action.user.email} 的所有登录将立即失效，账号状态保持不变。`,
+        confirm: "强制退出登录",
       };
     case "role":
       return {
-        title: "Change role",
+        title: "更改角色",
         body:
           action.role === "admin"
-            ? `${action.user.email} becomes an administrator with full console access. Its sessions are revoked so the new role applies immediately.`
-            : `${action.user.email} loses administrator access and keeps regular user capabilities. Its sessions are revoked so the new role applies immediately.`,
-        confirm:
-          action.role === "admin"
-            ? "Grant administrator"
-            : "Revoke administrator",
+            ? `${action.user.email} 将获得全部管理权限，现有登录将失效。`
+            : `${action.user.email} 将失去管理权限，保留个人用户能力，现有登录将失效。`,
+        confirm: action.role === "admin" ? "授予管理员权限" : "撤销管理员权限",
       };
   }
 }
@@ -106,15 +107,10 @@ export function AdminUsersPage({
   onUserMutated: () => void;
 }) {
   const navigate = useNavigate();
-  const [users, setUsers] = useState<AdminUserSummary[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "disabled"
   >("all");
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<CreateUserDraft>(emptyUserDraft);
   const [pending, setPending] = useState(false);
@@ -124,65 +120,35 @@ export function AdminUsersPage({
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const capture = useAdminLifetime();
+  const mutationLock = useRef(false);
+  const [success, setSuccess] = useState<string | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    const timer = setTimeout(
-      () => {
-        setLoading(true);
-        setLoadError(false);
-        apiClient
-          .listAdminUsers({ limit: PAGE_SIZE, q: search || undefined })
-          .then((page) => {
-            if (!active) return;
-            const filtered =
-              statusFilter === "all"
-                ? page.users
-                : page.users.filter((user) => user.status === statusFilter);
-            setUsers(filtered);
-            setNextCursor(page.nextCursor);
-          })
-          .catch((error: unknown) => {
-            if (!active) return;
-            if (error instanceof ApiClientError && error.isAuthRequired) {
-              onAuthRequired();
-              return;
-            }
-            setLoadError(true);
-          })
-          .finally(() => {
-            if (active) setLoading(false);
-          });
-      },
-      search ? 300 : 0,
-    );
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [search, statusFilter, reloadKey, onAuthRequired]);
-
-  function loadMore() {
-    if (!nextCursor) return;
-    apiClient
-      .listAdminUsers({
+  const fetchUsers = useCallback(
+    async (cursor?: string) => {
+      const page = await apiClient.listAdminUsers({
         limit: PAGE_SIZE,
-        q: search || undefined,
-        cursor: nextCursor,
-      })
-      .then((page) => {
-        const filtered =
-          statusFilter === "all"
-            ? page.users
-            : page.users.filter((user) => user.status === statusFilter);
-        setUsers((current) => [...current, ...filtered]);
-        setNextCursor(page.nextCursor);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ApiClientError && error.isAuthRequired) {
-          onAuthRequired();
-        }
+        q: search.trim() || undefined,
+        cursor,
       });
+      return { items: page.users, nextCursor: page.nextCursor };
+    },
+    [search],
+  );
+  const collection = useAdminCollection(
+    fetchUsers,
+    onAuthRequired,
+    search ? 300 : 0,
+  );
+  const { loading, loadError, reload } = collection;
+  const users =
+    statusFilter === "all"
+      ? collection.items
+      : collection.items.filter((user) => user.status === statusFilter);
+  const filtered = search.trim() !== "" || statusFilter !== "all";
+  function clearFilters() {
+    setSearch("");
+    setStatusFilter("all");
   }
 
   function closeDialog() {
@@ -198,9 +164,13 @@ export function AdminUsersPage({
     event.preventDefault();
     if (pending) return;
     if (draft.password !== draft.confirmPassword) {
-      setFeedback("The passwords do not match.");
+      setFeedback("两次输入的密码不一致。");
       return;
     }
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    const isCurrent = capture();
+    setSuccess(null);
     setPending(true);
     setFeedback(null);
     try {
@@ -209,34 +179,31 @@ export function AdminUsersPage({
         password: draft.password,
         role: draft.role,
       });
+      if (!isCurrent()) return;
+      setSuccess("账号已创建。点击账号可分配默认助手和设置配额。");
       setCreating(false);
       setDraft(emptyUserDraft);
       onUserMutated();
-      const page = await apiClient.listAdminUsers({
-        limit: PAGE_SIZE,
-        q: search || undefined,
-      });
-      const filtered =
-        statusFilter === "all"
-          ? page.users
-          : page.users.filter((user) => user.status === statusFilter);
-      setUsers(filtered);
-      setNextCursor(page.nextCursor);
+      reload();
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
         return;
       }
-      setFeedback(
-        userAdminErrorMessage(error, "The user could not be created."),
-      );
+      setFeedback(userAdminErrorMessage(error, "账号创建失败，请重试。"));
     } finally {
-      setPending(false);
+      mutationLock.current = false;
+      if (isCurrent()) setPending(false);
     }
   }
 
   async function runAction() {
     if (!action || actionPending) return;
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    const isCurrent = capture();
+    setSuccess(null);
     setActionPending(true);
     setActionFeedback(null);
     try {
@@ -251,19 +218,13 @@ export function AdminUsersPage({
       } else {
         await apiClient.setAdminUserRole(target.id, action.role);
       }
+      if (!isCurrent()) return;
+      setSuccess("账号操作已完成。");
       setAction(null);
       onUserMutated();
-      const page = await apiClient.listAdminUsers({
-        limit: PAGE_SIZE,
-        q: search || undefined,
-      });
-      const filtered =
-        statusFilter === "all"
-          ? page.users
-          : page.users.filter((user) => user.status === statusFilter);
-      setUsers(filtered);
-      setNextCursor(page.nextCursor);
+      reload();
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
         return;
@@ -271,10 +232,11 @@ export function AdminUsersPage({
       setActionFeedback(
         error instanceof ApiClientError
           ? lifecycleErrorMessage(error)
-          : "The change could not be applied. Try again.",
+          : "操作未完成，请重试。",
       );
     } finally {
-      setActionPending(false);
+      mutationLock.current = false;
+      if (isCurrent()) setActionPending(false);
     }
   }
 
@@ -283,40 +245,57 @@ export function AdminUsersPage({
   return (
     <div className="page admin-page">
       <PageHeader
-        title="Users"
+        title="用户管理"
+        description="管理账号、登录状态与默认助手，点击账号查看配额和使用情况。"
         headingRef={headingRef}
         actions={
           <Button onClick={() => setCreating(true)}>
             <UserRound size={16} aria-hidden="true" />
-            New user
+            新建账号
           </Button>
         }
       />
 
-      <div className="admin-toolbar">
-        <Input
-          type="search"
-          className="admin-toolbar__search"
-          aria-label="Search accounts by email"
-          placeholder="Search by email…"
-          value={search}
-          maxLength={320}
-          onChange={(event) => setSearch(event.target.value)}
-        />
-        <Select
-          aria-label="Filter accounts by status"
-          className="admin-toolbar__filter"
-          value={statusFilter}
-          onChange={(event) =>
-            setStatusFilter(event.target.value as typeof statusFilter)
-          }
-        >
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="disabled">Disabled</option>
-        </Select>
+      <div className="admin-toolbar" role="search" aria-label="筛选用户账号">
+        <div className="admin-toolbar__search-field">
+          <Field label="搜索账号">
+            <Input
+              type="search"
+              className="admin-toolbar__search"
+              aria-label="搜索账号邮箱"
+              placeholder="搜索邮箱…"
+              value={search}
+              maxLength={320}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </Field>
+        </div>
+        <Field label="账号状态">
+          <Select
+            aria-label="账号状态"
+            className="admin-toolbar__filter"
+            value={statusFilter}
+            onChange={(event) =>
+              setStatusFilter(event.target.value as typeof statusFilter)
+            }
+          >
+            <option value="all">全部状态</option>
+            <option value="active">已启用</option>
+            <option value="disabled">已停用</option>
+          </Select>
+        </Field>
+        {filtered && users.length > 0 ? (
+          <Button variant="text" onClick={clearFilters}>
+            清除筛选
+          </Button>
+        ) : null}
       </div>
 
+      {success ? (
+        <Alert className="admin-page-feedback" tone="success">
+          {success}
+        </Alert>
+      ) : null}
       {feedback && !creating && !action ? (
         <Alert className="admin-page-feedback" tone="danger">
           {feedback}
@@ -325,41 +304,49 @@ export function AdminUsersPage({
 
       {loading ? (
         <div className="admin-loading" aria-busy="true">
-          <Spinner label="Loading accounts" />
+          <Spinner label="正在加载账号" />
         </div>
       ) : loadError ? (
         <EmptyState
-          title="Accounts unavailable"
-          description="Accounts could not be loaded."
+          title="账号暂时无法加载"
+          description="账号列表加载失败，请重试。"
           action={
-            <Button
-              variant="secondary"
-              onClick={() => setReloadKey((key) => key + 1)}
-            >
-              Retry
+            <Button variant="secondary" onClick={reload}>
+              重试
             </Button>
           }
         />
       ) : users.length === 0 ? (
         <EmptyState
-          title={search ? "No matching accounts" : "No users yet"}
+          title={filtered ? "没有匹配的账号" : "还没有账号"}
           description={
-            search
-              ? "No account matches this email search."
-              : "Create the first account to let someone sign in."
+            filtered
+              ? collection.nextCursor
+                ? "已加载的账号没有匹配项，可继续加载更多或清除筛选。"
+                : "没有符合当前筛选条件的账号。"
+              : "创建个人账号并分配默认助手，即可开始使用工作区。"
+          }
+          action={
+            filtered ? (
+              <Button variant="secondary" onClick={clearFilters}>
+                清除筛选
+              </Button>
+            ) : (
+              <Button onClick={() => setCreating(true)}>新建账号</Button>
+            )
           }
         />
       ) : (
         <>
-          <DataTable caption="User accounts" minWidth="wide">
+          <DataTable caption="用户账号列表" minWidth="wide">
             <thead>
               <tr>
-                <th scope="col">User</th>
-                <th scope="col">Role</th>
-                <th scope="col">Status</th>
-                <th scope="col">Default Agent</th>
-                <th scope="col">Created</th>
-                <th scope="col">Actions</th>
+                <th scope="col">个人用户</th>
+                <th scope="col">角色</th>
+                <th scope="col">状态</th>
+                <th scope="col">默认助手</th>
+                <th scope="col">创建时间</th>
+                <th scope="col">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -369,7 +356,7 @@ export function AdminUsersPage({
                 );
                 return (
                   <tr key={user.id}>
-                    <th scope="row" data-label="User">
+                    <th scope="row" data-label="个人用户">
                       <div className="admin-user-cell">
                         <Link
                           className="admin-user-cell__link"
@@ -378,47 +365,50 @@ export function AdminUsersPage({
                           {user.email}
                         </Link>
                         <Badge tone={user.hasPassword ? "neutral" : "warning"}>
-                          {user.hasPassword ? "Password set" : "No password"}
+                          {user.hasPassword ? "已设置密码" : "未设置密码"}
                         </Badge>
                       </div>
                     </th>
-                    <td data-label="Role">
+                    <td data-label="角色">
                       <Badge tone={roleBadgeTone(user.role)}>
-                        {user.role === "admin" ? "Administrator" : "User"}
+                        {user.role === "admin" ? "管理员" : "个人用户"}
                       </Badge>
                     </td>
-                    <td data-label="Status">
+                    <td data-label="状态">
                       <Badge tone={statusBadgeTone(user.status)}>
-                        {user.status}
+                        {statusLabel(user.status)}
                       </Badge>
                     </td>
-                    <td data-label="Default Agent">
+                    <td data-label="默认助手">
                       <span className="admin-dimmed">
-                        {defaultAgent ? defaultAgent.name : "—"}
+                        {defaultAgent
+                          ? defaultAgent.name
+                          : user.defaultAgentId
+                            ? "助手信息暂不可用"
+                            : "未分配"}
                       </span>
                     </td>
-                    <td data-label="Created">
+                    <td data-label="创建时间">
                       <span className="admin-dimmed">
                         {formatDate(user.createdAt)}
                       </span>
                     </td>
-                    <td data-label="Actions">
+                    <td data-label="操作">
                       <div className="admin-row-actions">
                         <Button
                           size="compact"
                           variant="secondary"
-                          aria-label={`View ${user.email}`}
+                          aria-label={`查看 ${user.email}`}
                           onClick={() => navigate(`/admin/users/${user.id}`)}
                         >
-                          View
+                          查看
                         </Button>
                         <RowActionsMenu
-                          label={`Actions for ${user.email}`}
+                          label={`账号操作：${user.email}`}
                           items={[
                             {
                               icon: <Power size={14} aria-hidden="true" />,
-                              text:
-                                user.status === "active" ? "Disable" : "Enable",
+                              text: user.status === "active" ? "停用" : "启用",
                               run: () =>
                                 setAction({
                                   kind:
@@ -434,7 +424,7 @@ export function AdminUsersPage({
                                     icon: (
                                       <LogOut size={14} aria-hidden="true" />
                                     ),
-                                    text: "Force sign-out",
+                                    text: "强制退出登录",
                                     run: () =>
                                       setAction({ kind: "signout", user }),
                                   },
@@ -449,8 +439,8 @@ export function AdminUsersPage({
                                 ),
                               text:
                                 user.role === "admin"
-                                  ? "Revoke admin"
-                                  : "Make admin",
+                                  ? "撤销管理员权限"
+                                  : "设为管理员",
                               run: () =>
                                 setAction({
                                   kind: "role",
@@ -468,24 +458,19 @@ export function AdminUsersPage({
               })}
             </tbody>
           </DataTable>
-          {nextCursor ? (
-            <div className="admin-load-more">
-              <Button variant="secondary" onClick={loadMore}>
-                Load more
-              </Button>
-            </div>
-          ) : (
-            <p className="admin-table-end">End of accounts</p>
-          )}
         </>
       )}
 
+      {!loading && !loadError ? (
+        <AdminPagination {...collection} count={collection.items.length} />
+      ) : null}
+
       <Dialog
         open={creating}
-        title="New user"
-        eyebrow="User account"
+        title="新建账号"
+        eyebrow="用户账号"
         onClose={closeDialog}
-        closeLabel="Close new user dialog"
+        closeLabel="关闭新建账号窗口"
         closeDisabled={pending}
         initialFocusRef={emailRef}
         footer={
@@ -495,7 +480,7 @@ export function AdminUsersPage({
               onClick={closeDialog}
               disabled={pending}
             >
-              Cancel
+              取消
             </Button>
             <Button
               type="submit"
@@ -506,7 +491,7 @@ export function AdminUsersPage({
               <span className="admin-loading-icon-slot" aria-hidden="true">
                 {pending ? <Spinner size={15} /> : null}
               </span>
-              Create user
+              创建账号
             </Button>
           </>
         }
@@ -516,7 +501,7 @@ export function AdminUsersPage({
           className="admin-agent-editor-form"
           onSubmit={createUser}
         >
-          <Field label="Email">
+          <Field label="邮箱">
             <Input
               ref={emailRef}
               type="email"
@@ -534,8 +519,8 @@ export function AdminUsersPage({
             />
           </Field>
           <Field
-            label="Password"
-            hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+            label="密码"
+            hint={`至少 ${PASSWORD_MIN_LENGTH} 个字符。`}
             error={passwordRequirementError(draft.password)}
           >
             <PasswordInput
@@ -554,7 +539,7 @@ export function AdminUsersPage({
             />
           </Field>
           <Field
-            label="Confirm password"
+            label="确认密码"
             error={passwordMatchError(draft.confirmPassword, draft.password)}
           >
             <PasswordInput
@@ -572,7 +557,14 @@ export function AdminUsersPage({
               }
             />
           </Field>
-          <Field label="Role">
+          <Field
+            label="角色"
+            hint={
+              draft.role === "admin"
+                ? "管理员可访问全部管理功能；日常任务请使用个人用户账号。"
+                : "个人用户可使用任务、文件、技能和个人记忆。"
+            }
+          >
             <Select
               value={draft.role}
               disabled={pending}
@@ -583,8 +575,8 @@ export function AdminUsersPage({
                 }))
               }
             >
-              <option value="user">User</option>
-              <option value="admin">Administrator</option>
+              <option value="user">个人用户</option>
+              <option value="admin">管理员</option>
             </Select>
           </Field>
         </form>
@@ -598,13 +590,13 @@ export function AdminUsersPage({
       <Dialog
         open={action !== null}
         title={actionCopy?.title ?? ""}
-        eyebrow="User account"
+        eyebrow="用户账号"
         onClose={() => {
           if (actionPending) return;
           setAction(null);
           setActionFeedback(null);
         }}
-        closeLabel="Close confirmation dialog"
+        closeLabel="关闭确认窗口"
         closeDisabled={actionPending}
         fallbackFocusRef={headingRef}
         footer={
@@ -618,7 +610,7 @@ export function AdminUsersPage({
               }}
               disabled={actionPending}
             >
-              Cancel
+              取消
             </Button>
             <Button
               variant={
@@ -663,7 +655,7 @@ function createUserReady(draft: CreateUserDraft): boolean {
 function passwordRequirementError(value: string): string | undefined {
   if (value.length === 0) return undefined;
   return value.length < PASSWORD_MIN_LENGTH
-    ? `Password does not meet the requirements — use at least ${PASSWORD_MIN_LENGTH} characters.`
+    ? `密码长度不足，请至少输入 ${PASSWORD_MIN_LENGTH} 个字符。`
     : undefined;
 }
 
@@ -672,7 +664,7 @@ function passwordMatchError(
   password: string,
 ): string | undefined {
   if (confirm.length === 0) return undefined;
-  return confirm === password ? undefined : "The passwords do not match.";
+  return confirm === password ? undefined : "两次输入的密码不一致。";
 }
 
 export function userAdminErrorMessage(
@@ -681,13 +673,13 @@ export function userAdminErrorMessage(
 ): string {
   if (error instanceof ApiClientError) {
     if (error.code === "USER_EMAIL_CONFLICT") {
-      return "A user with this email already exists.";
+      return "此邮箱已注册，请使用其他邮箱。";
     }
     if (error.code === "VALIDATION_FAILED") {
-      return `Check the email and password (at least ${PASSWORD_MIN_LENGTH} characters).`;
+      return `请检查邮箱和密码（至少 ${PASSWORD_MIN_LENGTH} 个字符）。`;
     }
     if (error.retryable) {
-      return "The service is temporarily unavailable. Try again.";
+      return "服务暂时不可用，请稍后重试。";
     }
   }
   return fallback;
@@ -695,13 +687,13 @@ export function userAdminErrorMessage(
 
 function lifecycleErrorMessage(error: ApiClientError): string {
   if (error.code === "SELF_TARGET_FORBIDDEN") {
-    return "You cannot target your own account with this action.";
+    return "此操作不能用于当前登录账号。";
   }
   if (error.code === "LAST_ACTIVE_ADMIN") {
-    return "You cannot disable or demote the last active administrator.";
+    return "不能停用或降级最后一位已启用的管理员。";
   }
   if (error.retryable) {
-    return "The service is temporarily unavailable. Try again.";
+    return "服务暂时不可用，请稍后重试。";
   }
-  return "The change could not be applied. Try again.";
+  return "操作未完成，请重试。";
 }

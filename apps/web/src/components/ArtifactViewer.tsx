@@ -300,12 +300,16 @@ function previewOf(
   artifact: ArtifactSummary,
 ) {
   if (kind === "image" && state.status === "blob") {
+    // The scrollable body renders the image at the panel's width: a tall
+    // composite is read by scrolling, the same way the transcript is.
     return (
-      <img
-        className="artifact-viewer__image"
-        src={state.url}
-        alt={artifact.name}
-      />
+      <div className="artifact-viewer__body">
+        <img
+          className="artifact-viewer__image"
+          src={state.url}
+          alt={artifact.name}
+        />
+      </div>
     );
   }
   if (kind === "pdf" && state.status === "blob") {
@@ -389,9 +393,10 @@ export function ArtifactViewer({
         if (!response.ok) throw new Error(String(response.status));
         const bytes = await readPreviewResponse(
           response,
-          asBuffer || kind === "pdf"
-            ? DOCUMENT_PREVIEW_MAX_BYTES
-            : PREVIEW_MAX_BYTES,
+          // Text formats are bounded by the small DOM-text budget; everything
+          // the browser renders itself (image, pdf, Office) may use the larger
+          // binary budget.
+          asBlob || asBuffer ? DOCUMENT_PREVIEW_MAX_BYTES : PREVIEW_MAX_BYTES,
           controller.signal,
         );
         if (asBlob) {

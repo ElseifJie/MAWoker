@@ -1,0 +1,288 @@
+/* Administration follows the same task-workbench tokens as personal pages. */
+.admin-page {
+  width: min(100%, 1280px);
+  margin-inline: auto;
+  container: admin-content / inline-size;
+}
+
+.admin-page .ui-page-header {
+  align-items: flex-start;
+  margin-bottom: var(--ui-space-6);
+}
+
+.admin-page .ui-page-header__title {
+  overflow-wrap: anywhere;
+}
+
+.admin-toolbar {
+  align-items: end;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-4);
+  background: var(--ui-color-surface);
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-large);
+  margin-bottom: var(--ui-space-6);
+}
+
+.admin-toolbar > .ui-field,
+.admin-toolbar__search-field {
+  min-width: 0;
+  flex: 0 1 200px;
+}
+
+.admin-toolbar__search-field {
+  flex: 1 1 280px;
+}
+
+.admin-toolbar .ui-field {
+  margin: 0;
+}
+
+.admin-toolbar__search,
+.admin-toolbar__filter {
+  width: 100%;
+  max-width: none;
+}
+
+.admin-page .ui-data-table-scroll {
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-large);
+  background: var(--ui-color-surface);
+  max-width: 100%;
+}
+
+.admin-page .ui-data-table {
+  font-size: var(--ui-font-size-control);
+}
+
+.admin-page .ui-data-table th,
+.admin-page .ui-data-table td {
+  vertical-align: top;
+  padding: var(--ui-space-3) var(--ui-space-4);
+}
+
+.admin-page .ui-data-table thead th {
+  background: var(--ui-color-surface-subtle);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.admin-user-cell {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--ui-space-1);
+}
+
+.admin-user-badges,
+.admin-status-stack {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.admin-user-badges {
+  margin-bottom: var(--ui-space-6);
+}
+
+.admin-page .admin-section {
+  margin-top: 0;
+  margin-bottom: var(--ui-space-6);
+  min-width: 0;
+}
+
+.admin-panel {
+  padding: var(--ui-space-6);
+  background: var(--ui-color-surface);
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-large);
+}
+
+.admin-panel > .ui-alert {
+  margin-bottom: var(--ui-space-6);
+}
+
+.admin-page .admin-section__title {
+  font-weight: 600;
+  margin-bottom: var(--ui-space-3);
+}
+
+.admin-page .admin-section__hint {
+  line-height: var(--ui-line-height-body);
+  margin-bottom: var(--ui-space-4);
+}
+
+.admin-detail-grid {
+  gap: var(--ui-space-6);
+}
+
+.admin-page .admin-quota-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ui-space-4);
+  margin-block: var(--ui-space-4);
+}
+
+.admin-page .admin-quota-fields .ui-field {
+  margin: 0;
+}
+
+.admin-account-actions {
+  grid-column: 1 / -1;
+  padding-top: var(--ui-space-4);
+  border-top: 1px solid var(--ui-color-border);
+}
+
+.admin-account-actions__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-3);
+}
+
+.admin-tab {
+  min-height: var(--ui-control-height-default);
+  padding-inline: var(--ui-space-4);
+}
+
+.admin-tab-panel {
+  min-width: 0;
+}
+
+.admin-stat-card {
+  background: var(--ui-color-surface);
+  border-radius: var(--ui-radius-large);
+  padding: var(--ui-space-6);
+}
+
+.admin-stat-card__label {
+  color: var(--ui-color-text-secondary);
+  font-size: var(--ui-font-size-control);
+}
+
+.admin-dimension {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+}
+
+.admin-usage-dimension {
+  min-width: 0;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-4);
+}
+
+.admin-usage-dimension__head {
+  flex-wrap: wrap;
+}
+
+.admin-pagination {
+  margin-block: var(--ui-space-3) var(--ui-space-6);
+  font-size: var(--ui-font-size-aux);
+}
+
+.admin-pagination__footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-3);
+  align-items: center;
+  justify-content: space-between;
+  padding-block: var(--ui-space-3);
+}
+
+.admin-technical-details,
+.admin-configuration-note,
+.admin-workspace-guide {
+  font-size: var(--ui-font-size-aux);
+  color: var(--ui-color-text-muted);
+}
+
+.admin-technical-details {
+  margin-top: var(--ui-space-1);
+  white-space: normal;
+}
+
+.admin-technical-details summary,
+.admin-configuration-note summary,
+.admin-workspace-guide summary {
+  cursor: pointer;
+  width: fit-content;
+  min-height: var(--ui-control-height-small);
+  align-content: center;
+}
+
+.admin-technical-details code {
+  display: block;
+  font-family: var(--ui-font-mono);
+  font-size: var(--ui-font-size-aux);
+  overflow-wrap: anywhere;
+  max-width: 22rem;
+}
+
+.admin-technical-details p {
+  overflow-wrap: anywhere;
+  margin-bottom: 0;
+}
+
+.admin-configuration-note {
+  margin-top: var(--ui-space-4);
+}
+
+.admin-workspace-guide {
+  margin: var(--ui-space-6) var(--ui-space-8);
+  padding-top: var(--ui-space-3);
+  border-top: 1px solid var(--ui-color-border);
+}
+
+.admin-workspace-guide p {
+  max-width: 72ch;
+  line-height: var(--ui-line-height-body);
+}
+
+.admin-settings-page {
+  max-width: 960px;
+}
+
+@container admin-content (max-width: 800px) {
+  .admin-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .admin-stat-grid,
+  .admin-usage-grid,
+  .admin-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container admin-content (max-width: 480px) {
+  .admin-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .admin-toolbar > .ui-field,
+  .admin-toolbar__search-field {
+    flex-basis: auto;
+    width: 100%;
+  }
+  .admin-filter-grid,
+  .admin-stat-grid,
+  .admin-usage-grid,
+  .admin-page .admin-quota-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .admin-panel {
+    padding: var(--ui-space-4);
+  }
+  .admin-account-actions__buttons > .ui-button {
+    flex: 1 1 160px;
+  }
+  .admin-pagination__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+@media (pointer: coarse) {
+  .admin-tab,
+  .admin-technical-details summary,
+  .admin-configuration-note summary,
+  .admin-workspace-guide summary {
+    min-height: 2.75rem;
+  }
+}

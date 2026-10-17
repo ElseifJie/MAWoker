@@ -65,4 +65,31 @@ describe("remarkArtifactLinks", () => {
     );
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+
+  it("unwraps the Agent's <display> tag around an output path", () => {
+    render(
+      <Markdown artifactLinks>
+        {
+          "完整长图在这里：\n\n<display>/mnt/session/outputs/qwen-n1-2026/qwen-n1-longimage.jpg</display>\n\n完了。"
+        }
+      </Markdown>,
+    );
+    expect(
+      chip("/mnt/session/outputs/qwen-n1-2026/qwen-n1-longimage.jpg"),
+    ).toBeInTheDocument();
+    const body = document.querySelector(".markdown")?.textContent ?? "";
+    expect(body).not.toContain("<display>");
+    expect(body).not.toContain("</display>");
+  });
+
+  it("keeps a display tag that wraps nothing linkable", () => {
+    render(
+      <Markdown artifactLinks>{"<display>just a note</display>"}</Markdown>,
+    );
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // The tag itself is still stripped: it is Agent chrome, not content.
+    expect(document.querySelector(".markdown")?.textContent).not.toContain(
+      "<display>",
+    );
+  });
 });

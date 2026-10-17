@@ -834,8 +834,16 @@ export class UserAgentService {
         skillId: skill.arkSkillId,
         version: skill.arkVersion,
       })),
-      toolsetId: PLATFORM_AGENT_TOOLSET_ID,
-      toolPermission: PLATFORM_AGENT_TOOL_PERMISSION,
+      // The documented v3 shape: the built-in toolset is a `tools` entry, not
+      // the legacy top-level `toolsetId` / `toolPermission` shortcut.
+      tools: [
+        {
+          type: PLATFORM_AGENT_TOOLSET_ID,
+          defaultConfig: {
+            permissionPolicy: { type: PLATFORM_AGENT_TOOL_PERMISSION },
+          },
+        },
+      ],
     };
   }
 

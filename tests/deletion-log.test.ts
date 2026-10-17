@@ -42,7 +42,10 @@ describe("DeletionLogStore", () => {
     expect(store.write).toHaveBeenCalledWith(
       `deletion-log/${intent.deletionRequestId}.json`,
       expect.any(Readable),
-      { contentType: "application/json" },
+      {
+        contentType: "application/json",
+        contentLength: Buffer.byteLength(JSON.stringify(intent)),
+      },
     );
     await expect(log.read(intent.deletionRequestId)).resolves.toEqual(intent);
   });

@@ -6,17 +6,21 @@ import {
   ShieldCheck,
   ShieldOff,
 } from "lucide-react";
-import { type SyntheticEvent, useEffect, useRef, useState } from "react";
+import {
+  type SyntheticEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PASSWORD_MIN_LENGTH } from "@pwa/contracts";
 import {
   ApiClientError,
   apiClient,
-  type AdminAuditEntry,
   type AdminPlatformAgent,
   type AdminQuota,
   type AdminUserDetail,
-  type AdminUserSession,
 } from "../api.js";
 import {
   Alert,
@@ -33,25 +37,30 @@ import {
   Spinner,
   type BadgeTone,
 } from "../ui/index.js";
+import { AdminTabs } from "./AdminTabs.js";
+import { AdminPagination } from "./AdminPagination.js";
+import { useAdminCollection } from "./useAdminCollection.js";
+import { useAdminLifetime } from "./useAdminLifetime.js";
+import { statusLabel, actionLabel } from "./presentation.js";
 import { formatCount, formatDate, formatDateTime } from "./format.js";
 import { userAdminErrorMessage } from "./AdminUsersPage.js";
 
 const PAGE_SIZE = 25;
 
 const QUOTA_FIELDS: Array<{ key: keyof AdminQuota; label: string }> = [
-  { key: "personalAgentLimit", label: "Personal Agent limit" },
-  { key: "concurrentSessionLimit", label: "Concurrent Session limit" },
-  { key: "dailySessionLimit", label: "Daily Session limit" },
-  { key: "monthlyTokenLimit", label: "Monthly token limit" },
+  { key: "personalAgentLimit", label: "个人助手上限" },
+  { key: "concurrentSessionLimit", label: "同时运行任务上限" },
+  { key: "dailySessionLimit", label: "每日任务上限" },
+  { key: "monthlyTokenLimit", label: "每月 Token 上限" },
 ];
 
 type Tab = "overview" | "usage" | "sessions" | "audit";
 
 const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "usage", label: "Usage" },
-  { id: "sessions", label: "Sessions" },
-  { id: "audit", label: "Audit" },
+  { id: "overview", label: "概览" },
+  { id: "usage", label: "用量" },
+  { id: "sessions", label: "任务" },
+  { id: "audit", label: "审计记录" },
 ];
 
 type QuotaDraft = Record<keyof AdminQuota, string>;
@@ -97,7 +106,15 @@ function dimensionTone(exhausted: boolean, near: boolean): BadgeTone {
   return "neutral";
 }
 
-export function AdminUserDetailPage({
+export function AdminUserDetailPage(props: {
+  agents: AdminPlatformAgent[];
+  onAuthRequired: () => void;
+}) {
+  const { userId } = useParams<{ userId: string }>();
+  return <AdminUserDetail key={userId} {...props} />;
+}
+
+function AdminUserDetail({
   agents,
   onAuthRequired,
 }: {
@@ -114,6 +131,10 @@ export function AdminUserDetailPage({
   const [detail, setDetail] = useState<AdminUserDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const capture = useAdminLifetime();
+  const mutationLock = useRef(false);
   const [feedback, setFeedback] = useState<{
     tone: "success" | "danger";
     message: string;
@@ -145,6 +166,7 @@ export function AdminUserDetailPage({
     let active = true;
     setLoading(true);
     setNotFound(false);
+    setLoadError(false);
     apiClient
       .getAdminUser(userId)
       .then((result) => {
@@ -159,7 +181,9 @@ export function AdminUserDetailPage({
           onAuthRequired();
           return;
         }
-        setNotFound(true);
+        if (error instanceof ApiClientError && error.status === 404)
+          setNotFound(true);
+        else setLoadError(true);
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -167,15 +191,22 @@ export function AdminUserDetailPage({
     return () => {
       active = false;
     };
-  }, [userId, onAuthRequired]);
+  }, [userId, onAuthRequired, revision]);
 
-  async function refreshDetail() {
+  async function refreshDetail(resetQuota = false) {
     if (!userId) return;
     // Preserve an unsaved Default Agent selection across quota refreshes.
     const previousDefault = detail?.defaultAgentId ?? null;
+    const previousQuota = detail ? draftFromDetail(detail) : null;
+    const isCurrent = capture();
     const result = await apiClient.getAdminUser(userId);
+    if (!isCurrent()) return;
     setDetail(result);
-    setQuotaDraft(draftFromDetail(result));
+    setQuotaDraft((current) =>
+      resetQuota || JSON.stringify(current) === JSON.stringify(previousQuota)
+        ? draftFromDetail(result)
+        : current,
+    );
     setAgentSelection((current) =>
       current === (previousDefault ?? "")
         ? (result.defaultAgentId ?? "")
@@ -189,17 +220,23 @@ export function AdminUserDetailPage({
     if (!parsed) {
       setFeedback({
         tone: "danger",
-        message: "Overrides must be non-negative whole numbers.",
+        message: "配额必须为非负整数。",
       });
       return;
     }
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    const isCurrent = capture();
     setQuotaPending(true);
     setFeedback(null);
     try {
       await apiClient.updateAdminUserQuota(userId, parsed);
-      await refreshDetail();
-      setFeedback({ tone: "success", message: "Quotas saved." });
+      if (!isCurrent()) return;
+      await refreshDetail(true);
+      if (!isCurrent()) return;
+      setFeedback({ tone: "success", message: "配额已保存。" });
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
         return;
@@ -208,16 +245,20 @@ export function AdminUserDetailPage({
         tone: "danger",
         message:
           error instanceof ApiClientError && error.retryable
-            ? "The service is temporarily unavailable. Try again."
-            : "Quotas could not be saved. Review the values and try again.",
+            ? "服务暂时不可用，请稍后重试。"
+            : "配额保存失败，请检查输入后重试。",
       });
     } finally {
-      setQuotaPending(false);
+      mutationLock.current = false;
+      if (isCurrent()) setQuotaPending(false);
     }
   }
 
   async function saveDefaultAgent() {
     if (!userId || agentPending) return;
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    const isCurrent = capture();
     setAgentPending(true);
     setFeedback(null);
     try {
@@ -225,23 +266,26 @@ export function AdminUserDetailPage({
         userId,
         agentSelection,
       );
+      if (!isCurrent()) return;
       setDetail((current) =>
         current
           ? { ...current, defaultAgentId: assignment.platformAgentId }
           : current,
       );
-      setFeedback({ tone: "success", message: "Default Agent saved." });
+      setFeedback({ tone: "success", message: "默认助手已保存。" });
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
         return;
       }
       setFeedback({
         tone: "danger",
-        message: "The default Agent could not be saved.",
+        message: "默认助手保存失败，请重试。",
       });
     } finally {
-      setAgentPending(false);
+      mutationLock.current = false;
+      if (isCurrent()) setAgentPending(false);
     }
   }
 
@@ -251,95 +295,145 @@ export function AdminUserDetailPage({
     event.preventDefault();
     if (!userId || resetPending) return;
     if (resetDraft.password !== resetDraft.confirmPassword) {
-      setResetFeedback("The passwords do not match.");
+      setResetFeedback("两次输入的密码不一致。");
       return;
     }
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    const isCurrent = capture();
     setResetPending(true);
     setResetFeedback(null);
     try {
       await apiClient.resetAdminUserPassword(userId, resetDraft.password);
+      if (!isCurrent()) return;
       setDetail((current) =>
         current ? { ...current, hasPassword: true } : current,
       );
       setResetOpen(false);
-      setFeedback({ tone: "success", message: "Password reset." });
+      setResetDraft({ password: "", confirmPassword: "" });
+      setFeedback({ tone: "success", message: "密码已重置。" });
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
         return;
       }
-      setResetFeedback(
-        userAdminErrorMessage(error, "The password could not be reset."),
-      );
+      setResetFeedback(userAdminErrorMessage(error, "密码重置失败，请重试。"));
     } finally {
-      setResetPending(false);
+      mutationLock.current = false;
+      if (isCurrent()) setResetPending(false);
     }
   }
 
   async function runAction() {
     if (!detail || !action || actionPending) return;
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    const isCurrent = capture();
     setActionPending(true);
     setActionFeedback(null);
+    let applied = false;
     try {
       if (action === "disable" || action === "enable") {
         await apiClient.setAdminUserStatus(
           detail.id,
           action === "disable" ? "disabled" : "active",
         );
+        if (!isCurrent()) return;
       } else if (action === "signout") {
         await apiClient.revokeAdminUserSessions(detail.id);
+        if (!isCurrent()) return;
       } else {
         await apiClient.setAdminUserRole(
           detail.id,
           detail.role === "admin" ? "user" : "admin",
         );
+        if (!isCurrent()) return;
       }
+      applied = true;
       setAction(null);
       await refreshDetail();
+      if (!isCurrent()) return;
       setFeedback({
         tone: "success",
-        message: "Change applied.",
+        message: "操作已完成。",
       });
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
+        return;
+      }
+      if (applied) {
+        setFeedback({
+          tone: "danger",
+          message: "操作已完成，但账号信息刷新失败。请重新打开账号详情。",
+        });
         return;
       }
       setActionFeedback(
         error instanceof ApiClientError
           ? lifecycleMessage(error)
-          : "The change could not be applied. Try again.",
+          : "操作未完成，请重试。",
       );
     } finally {
-      setActionPending(false);
+      mutationLock.current = false;
+      if (isCurrent()) setActionPending(false);
     }
   }
 
   if (loading) {
     return (
       <div className="page admin-page" aria-busy="true">
-        <Spinner label="Loading account" />
-        <p className="admin-dimmed">Loading account…</p>
+        <Spinner label="正在加载账号" />
+        <p className="admin-dimmed">正在加载账号…</p>
       </div>
     );
   }
+
+  if (loadError)
+    return (
+      <div className="page admin-page">
+        <PageHeader title="账号详情" />
+        <EmptyState
+          title="账号暂时无法加载"
+          description="加载失败，请重试。"
+          action={
+            <Button
+              variant="secondary"
+              onClick={() => setRevision((value) => value + 1)}
+            >
+              重试
+            </Button>
+          }
+        />
+        <Link className="admin-back-link" to="/admin/users">
+          返回用户管理
+        </Link>
+      </div>
+    );
 
   if (notFound || !detail || !quotaDraft) {
     return (
       <div className="page admin-page">
         <EmptyState
-          title="Account not found"
-          description="This account does not exist or is no longer available."
+          title="账号不存在"
+          description="该账号不存在或已不可用。"
           action={
-            <Button variant="secondary">
-              <Link to="/admin/users">Back to users</Link>
-            </Button>
+            <Link
+              className="ui-button ui-button--secondary ui-button--default"
+              to="/admin/users"
+            >
+              返回用户管理
+            </Link>
           }
         />
       </div>
     );
   }
 
+  const mutating =
+    quotaPending || agentPending || resetPending || actionPending;
   const quotaDirty =
     JSON.stringify(quotaDraft) !== JSON.stringify(draftFromDetail(detail));
 
@@ -347,81 +441,25 @@ export function AdminUserDetailPage({
     <div className="page admin-page">
       <Link className="admin-back-link" to="/admin/users">
         <ArrowLeft size={14} aria-hidden="true" />
-        Users
+        用户管理
       </Link>
       <PageHeader
-        eyebrow="User account"
+        eyebrow="用户账号"
         title={detail.email}
-        description={`Created ${formatDate(detail.createdAt)} · Member ID ${detail.id}`}
+        description={`创建于 ${formatDate(detail.createdAt)}`}
         headingRef={headingRef}
-        actions={
-          <>
-            <Button
-              variant="secondary"
-              aria-label={`Reset password for ${detail.email}`}
-              onClick={() => {
-                setResetDraft({ password: "", confirmPassword: "" });
-                setResetFeedback(null);
-                setResetOpen(true);
-              }}
-            >
-              <KeyRound size={15} aria-hidden="true" />
-              Reset password
-            </Button>
-            <Button variant="secondary" onClick={() => setAction("signout")}>
-              <LogOut size={15} aria-hidden="true" />
-              Force sign-out
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() =>
-                setAction(detail.status === "active" ? "disable" : "enable")
-              }
-            >
-              <Power size={15} aria-hidden="true" />
-              {detail.status === "active" ? "Disable" : "Enable"}
-            </Button>
-            <Button variant="secondary" onClick={() => setAction("role")}>
-              {detail.role === "admin" ? (
-                <ShieldOff size={15} aria-hidden="true" />
-              ) : (
-                <ShieldCheck size={15} aria-hidden="true" />
-              )}
-              {detail.role === "admin" ? "Revoke admin" : "Make admin"}
-            </Button>
-          </>
-        }
       />
 
       <div className="admin-user-cell admin-user-badges">
         <Badge tone={detail.role === "admin" ? "info" : "neutral"}>
-          {detail.role === "admin" ? "Administrator" : "User"}
+          {detail.role === "admin" ? "管理员" : "个人用户"}
         </Badge>
         <Badge tone={detail.status === "active" ? "success" : "neutral"}>
-          {detail.status}
+          {statusLabel(detail.status)}
         </Badge>
         <Badge tone={detail.hasPassword ? "neutral" : "warning"}>
-          {detail.hasPassword ? "Password set" : "No password"}
+          {detail.hasPassword ? "已设置密码" : "未设置密码"}
         </Badge>
-      </div>
-
-      <div className="admin-tabs" role="tablist" aria-label="Account detail">
-        {TABS.map(({ id, label }) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            aria-selected={tab === id}
-            className={`admin-tab${tab === id ? " admin-tab--active" : ""}`}
-            onClick={() =>
-              setSearchParams(id === "overview" ? {} : { tab: id }, {
-                replace: true,
-              })
-            }
-          >
-            {label}
-          </button>
-        ))}
       </div>
 
       {feedback ? (
@@ -434,165 +472,256 @@ export function AdminUserDetailPage({
         </Alert>
       ) : null}
 
-      {tab === "overview" ? (
-        <div className="admin-detail-grid">
-          <section className="admin-section" aria-label="Identity">
-            <h2 className="admin-section__title">Identity</h2>
-            <dl className="admin-definition-list">
-              <div>
-                <dt>Email</dt>
-                <dd>{detail.email}</dd>
-              </div>
-              <div>
-                <dt>Role</dt>
-                <dd>{detail.role === "admin" ? "Administrator" : "User"}</dd>
-              </div>
-              <div>
-                <dt>Status</dt>
-                <dd>{detail.status}</dd>
-              </div>
-              <div>
-                <dt>Created</dt>
-                <dd>{formatDateTime(detail.createdAt)}</dd>
-              </div>
-              <div>
-                <dt>Updated</dt>
-                <dd>{formatDateTime(detail.updatedAt)}</dd>
-              </div>
-            </dl>
-            {detail.role === "user" ? (
-              <>
-                <h3 className="admin-section__subtitle">Default Agent</h3>
-                <div className="admin-default-agent-controls">
-                  <Select
-                    aria-label={`Default Agent for ${detail.email}`}
-                    value={agentSelection}
-                    onChange={(event) => setAgentSelection(event.target.value)}
-                    disabled={agentPending || detail.status !== "active"}
-                  >
-                    <option value="" disabled>
-                      Select Agent
-                    </option>
-                    {agents.map((agent) => (
-                      <option
-                        key={agent.id}
-                        value={agent.id}
-                        disabled={agent.status !== "active"}
-                      >
-                        {agent.name}
-                      </option>
-                    ))}
-                  </Select>
-                  <Button
-                    size="compact"
-                    variant="secondary"
-                    aria-label={`Save default Agent for ${detail.email}`}
-                    onClick={() => void saveDefaultAgent()}
-                    loading={agentPending}
-                    disabled={
-                      detail.status !== "active" ||
-                      agentSelection === (detail.defaultAgentId ?? "")
-                    }
-                  >
-                    <span
-                      className="admin-loading-icon-slot"
-                      aria-hidden="true"
-                    >
-                      {agentPending ? <Spinner size={14} /> : null}
-                    </span>
-                    Save
-                  </Button>
+      <AdminTabs
+        label="账号详情"
+        tabs={TABS}
+        value={tab}
+        onChange={(value) =>
+          setSearchParams(value === "overview" ? {} : { tab: value }, {
+            replace: true,
+          })
+        }
+      >
+        {tab === "overview" ? (
+          <div className="admin-detail-grid">
+            <section
+              className="admin-section admin-panel"
+              aria-label="账号信息"
+            >
+              <h2 className="admin-section__title">账号信息</h2>
+              <dl className="admin-definition-list">
+                <div>
+                  <dt>邮箱</dt>
+                  <dd>{detail.email}</dd>
                 </div>
-                {agents.length === 0 ? (
-                  <p className="form-note">
-                    No Platform Agent exists yet.{" "}
-                    <Link to="/admin/platform-agents">Create one</Link> before
-                    assigning a default.
-                  </p>
-                ) : null}
-              </>
-            ) : null}
-          </section>
-
-          {detail.role === "user" ? (
-            <section className="admin-section" aria-label="Quotas">
-              <h2 className="admin-section__title">Quotas</h2>
-              <p className="admin-dimmed admin-section__hint">
-                Empty fields inherit the default policy; a value overrides just
-                that dimension for this account.
-              </p>
-              <div className="admin-quota-fields">
-                {QUOTA_FIELDS.map(({ key, label }) => (
-                  <Field
-                    label={label}
-                    key={key}
-                    hint={
-                      detail.inherited[key]
-                        ? `Inheriting default (${formatCount(detail.quota[key])})`
-                        : `Override · effective ${formatCount(detail.quota[key])}`
-                    }
-                  >
-                    <Input
-                      aria-label={`${label} for ${detail.email}`}
-                      type="number"
-                      min={0}
-                      max={Number.MAX_SAFE_INTEGER}
-                      step={1}
-                      placeholder={String(detail.quota[key])}
-                      value={quotaDraft[key]}
-                      disabled={quotaPending || detail.status !== "active"}
+                <div>
+                  <dt>账号编号</dt>
+                  <dd>
+                    <details className="admin-technical-details">
+                      <summary>查看编号</summary>
+                      <code>{detail.id}</code>
+                    </details>
+                  </dd>
+                </div>
+                <div>
+                  <dt>角色</dt>
+                  <dd>{detail.role === "admin" ? "管理员" : "个人用户"}</dd>
+                </div>
+                <div>
+                  <dt>状态</dt>
+                  <dd>{statusLabel(detail.status)}</dd>
+                </div>
+                <div>
+                  <dt>创建时间</dt>
+                  <dd>{formatDateTime(detail.createdAt)}</dd>
+                </div>
+                <div>
+                  <dt>更新时间</dt>
+                  <dd>{formatDateTime(detail.updatedAt)}</dd>
+                </div>
+              </dl>
+              {detail.role === "user" ? (
+                <>
+                  <h3 className="admin-section__subtitle">默认助手</h3>
+                  <div className="admin-default-agent-controls">
+                    <Select
+                      aria-label={`${detail.email} 的默认助手`}
+                      value={agentSelection}
                       onChange={(event) =>
-                        setQuotaDraft((current) =>
-                          current
-                            ? { ...current, [key]: event.target.value }
-                            : current,
-                        )
+                        setAgentSelection(event.target.value)
                       }
-                    />
-                  </Field>
-                ))}
-              </div>
-              <Button
-                size="compact"
-                variant="secondary"
-                className="admin-save-quotas"
-                aria-label={`Save quotas for ${detail.email}`}
-                onClick={() => void saveQuota()}
-                loading={quotaPending}
-                disabled={
-                  detail.status !== "active" ||
-                  !quotaDirty ||
-                  parseDraft(quotaDraft) === null
-                }
-              >
-                <span className="admin-loading-icon-slot" aria-hidden="true">
-                  {quotaPending ? <Spinner size={14} /> : null}
-                </span>
-                Save quotas
-              </Button>
+                      disabled={mutating || detail.status !== "active"}
+                    >
+                      <option value="" disabled>
+                        选择默认助手
+                      </option>
+                      {agents.map((agent) => (
+                        <option
+                          key={agent.id}
+                          value={agent.id}
+                          disabled={agent.status !== "active"}
+                        >
+                          {agent.name}
+                        </option>
+                      ))}
+                    </Select>
+                    <Button
+                      size="compact"
+                      variant="secondary"
+                      aria-label={`保存 ${detail.email} 的默认助手`}
+                      onClick={() => void saveDefaultAgent()}
+                      loading={agentPending}
+                      disabled={
+                        mutating ||
+                        !agentSelection ||
+                        detail.status !== "active" ||
+                        agentSelection === (detail.defaultAgentId ?? "")
+                      }
+                    >
+                      <span
+                        className="admin-loading-icon-slot"
+                        aria-hidden="true"
+                      >
+                        {agentPending ? <Spinner size={14} /> : null}
+                      </span>
+                      保存
+                    </Button>
+                  </div>
+                  {agents.length === 0 ? (
+                    <p className="form-note">
+                      暂无可用平台助手，请先
+                      <Link to="/admin/platform-agents">查看平台助手配置</Link>
+                      ，再分配默认助手。
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
             </section>
-          ) : null}
-        </div>
-      ) : null}
 
-      {tab === "usage" ? <UsageTab detail={detail} /> : null}
-      {tab === "sessions" ? (
-        <SessionsTab userId={detail.id} onAuthRequired={onAuthRequired} />
-      ) : null}
-      {tab === "audit" ? (
-        <AuditTab userId={detail.id} onAuthRequired={onAuthRequired} />
-      ) : null}
+            {detail.role === "user" ? (
+              <section
+                className="admin-section admin-panel"
+                aria-label="使用配额"
+              >
+                <h2 className="admin-section__title">使用配额</h2>
+                <p className="admin-dimmed admin-section__hint">
+                  留空表示沿用平台默认配额；填写数值后，仅覆盖该账号对应的配额。
+                </p>
+                <div className="admin-quota-fields">
+                  {QUOTA_FIELDS.map(({ key, label }) => (
+                    <Field
+                      label={label}
+                      key={key}
+                      error={
+                        quotaDraft[key].trim() !== "" &&
+                        (!Number.isSafeInteger(Number(quotaDraft[key])) ||
+                          Number(quotaDraft[key]) < 0)
+                          ? "请输入非负整数，或留空沿用默认值。"
+                          : undefined
+                      }
+                      hint={
+                        detail.inherited[key]
+                          ? `沿用默认值（${formatCount(detail.quota[key])}）`
+                          : `自定义 · 当前生效 ${formatCount(detail.quota[key])}`
+                      }
+                    >
+                      <Input
+                        aria-label={`${detail.email} 的${label}`}
+                        type="number"
+                        min={0}
+                        max={Number.MAX_SAFE_INTEGER}
+                        step={1}
+                        placeholder={String(detail.quota[key])}
+                        value={quotaDraft[key]}
+                        disabled={mutating || detail.status !== "active"}
+                        onChange={(event) =>
+                          setQuotaDraft((current) =>
+                            current
+                              ? { ...current, [key]: event.target.value }
+                              : current,
+                          )
+                        }
+                      />
+                    </Field>
+                  ))}
+                </div>
+                <Button
+                  size="compact"
+                  variant="secondary"
+                  className="admin-save-quotas"
+                  aria-label={`保存 ${detail.email} 的配额`}
+                  onClick={() => void saveQuota()}
+                  loading={quotaPending}
+                  disabled={
+                    mutating ||
+                    detail.status !== "active" ||
+                    !quotaDirty ||
+                    parseDraft(quotaDraft) === null
+                  }
+                >
+                  <span className="admin-loading-icon-slot" aria-hidden="true">
+                    {quotaPending ? <Spinner size={14} /> : null}
+                  </span>
+                  保存配额
+                </Button>
+              </section>
+            ) : null}
+            <section
+              className="admin-section admin-account-actions"
+              aria-label="账号操作"
+            >
+              <h2 className="admin-section__title">账号操作</h2>
+              <p className="admin-dimmed admin-section__hint">
+                更改状态、角色或密码会使现有登录失效。操作前会再次确认。
+              </p>
+              <div className="admin-account-actions__buttons">
+                <Button
+                  variant="secondary"
+                  aria-label={`重置 ${detail.email} 的密码`}
+                  disabled={mutating}
+                  onClick={() => {
+                    setResetDraft({ password: "", confirmPassword: "" });
+                    setResetFeedback(null);
+                    setResetOpen(true);
+                  }}
+                >
+                  <KeyRound size={15} aria-hidden="true" />
+                  重置密码
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={mutating}
+                  onClick={() => setAction("signout")}
+                >
+                  <LogOut size={15} aria-hidden="true" />
+                  强制退出登录
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={mutating}
+                  onClick={() =>
+                    setAction(detail.status === "active" ? "disable" : "enable")
+                  }
+                >
+                  <Power size={15} aria-hidden="true" />
+                  {detail.status === "active" ? "停用" : "启用"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  disabled={mutating}
+                  onClick={() => setAction("role")}
+                >
+                  {detail.role === "admin" ? (
+                    <ShieldOff size={15} aria-hidden="true" />
+                  ) : (
+                    <ShieldCheck size={15} aria-hidden="true" />
+                  )}
+                  {detail.role === "admin" ? "撤销管理员权限" : "设为管理员"}
+                </Button>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {tab === "usage" ? <UsageTab detail={detail} /> : null}
+        {tab === "sessions" ? (
+          <SessionsTab userId={detail.id} onAuthRequired={onAuthRequired} />
+        ) : null}
+        {tab === "audit" ? (
+          <AuditTab userId={detail.id} onAuthRequired={onAuthRequired} />
+        ) : null}
+      </AdminTabs>
 
       <Dialog
         open={resetOpen}
-        title="Reset password"
-        eyebrow="User account"
+        title="重置密码"
+        eyebrow="用户账号"
         onClose={() => {
           if (resetPending) return;
           setResetOpen(false);
           setResetFeedback(null);
         }}
-        closeLabel="Close password reset dialog"
+        closeLabel="关闭重置密码窗口"
         closeDisabled={resetPending}
         initialFocusRef={resetPasswordRef}
         footer={
@@ -605,7 +734,7 @@ export function AdminUserDetailPage({
               }}
               disabled={resetPending}
             >
-              Cancel
+              取消
             </Button>
             <Button
               type="submit"
@@ -619,24 +748,20 @@ export function AdminUserDetailPage({
               <span className="admin-loading-icon-slot" aria-hidden="true">
                 {resetPending ? <Spinner size={15} /> : null}
               </span>
-              Reset password
+              重置密码
             </Button>
           </>
         }
       >
         <p className="admin-dialog-copy">
-          Set a new password for <strong>{detail.email}</strong>. Existing
-          sessions for this account are signed out.
+          为 <strong>{detail.email}</strong> 设置新密码，现有登录将立即失效。
         </p>
         <form
           id={`admin-user-password-form-${detail.id}`}
           className="admin-agent-editor-form"
           onSubmit={submitReset}
         >
-          <Field
-            label="New password"
-            hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
-          >
+          <Field label="新密码" hint={`至少 ${PASSWORD_MIN_LENGTH} 个字符。`}>
             <PasswordInput
               ref={resetPasswordRef}
               autoComplete="new-password"
@@ -653,7 +778,15 @@ export function AdminUserDetailPage({
               }
             />
           </Field>
-          <Field label="Confirm password">
+          <Field
+            label="确认密码"
+            error={
+              resetDraft.confirmPassword &&
+              resetDraft.confirmPassword !== resetDraft.password
+                ? "两次输入的密码不一致。"
+                : undefined
+            }
+          >
             <PasswordInput
               autoComplete="new-password"
               value={resetDraft.confirmPassword}
@@ -681,20 +814,20 @@ export function AdminUserDetailPage({
         open={action !== null}
         title={
           action === "disable"
-            ? "Disable account"
+            ? "停用账号"
             : action === "enable"
-              ? "Enable account"
+              ? "启用账号"
               : action === "signout"
-                ? "Force sign-out"
-                : "Change role"
+                ? "强制退出登录"
+                : "更改角色"
         }
-        eyebrow="User account"
+        eyebrow="用户账号"
         onClose={() => {
           if (actionPending) return;
           setAction(null);
           setActionFeedback(null);
         }}
-        closeLabel="Close confirmation dialog"
+        closeLabel="关闭确认窗口"
         closeDisabled={actionPending}
         fallbackFocusRef={headingRef}
         footer={
@@ -708,7 +841,7 @@ export function AdminUserDetailPage({
               }}
               disabled={actionPending}
             >
-              Cancel
+              取消
             </Button>
             <Button
               variant={
@@ -720,21 +853,21 @@ export function AdminUserDetailPage({
               <span className="admin-loading-icon-slot" aria-hidden="true">
                 {actionPending ? <Spinner size={15} /> : null}
               </span>
-              Confirm
+              确认操作
             </Button>
           </>
         }
       >
         <p className="admin-dialog-copy">
           {action === "disable"
-            ? `Disabling ${detail.email} signs out all of its active sessions immediately. Its data is kept.`
+            ? `停用 ${detail.email} 将立即退出该账号的所有登录，账号数据会保留。`
             : action === "enable"
-              ? `${detail.email} will be able to sign in again with its existing password.`
+              ? `${detail.email} 将可以使用现有密码重新登录。`
               : action === "signout"
-                ? `All active sessions for ${detail.email} are revoked immediately.`
+                ? `${detail.email} 的所有登录将立即失效。`
                 : detail.role === "admin"
-                  ? `${detail.email} loses administrator access. Its sessions are revoked so the change applies immediately.`
-                  : `${detail.email} becomes an administrator with full console access. Its sessions are revoked so the change applies immediately.`}
+                  ? `${detail.email} 将失去管理权限，现有登录将失效。`
+                  : `${detail.email} 将获得全部管理权限，现有登录将失效。`}
         </p>
         {actionFeedback ? (
           <Alert className="admin-dialog-feedback" tone="danger">
@@ -748,15 +881,15 @@ export function AdminUserDetailPage({
 
 function lifecycleMessage(error: ApiClientError): string {
   if (error.code === "SELF_TARGET_FORBIDDEN") {
-    return "You cannot target your own account with this action.";
+    return "此操作不能用于当前登录账号。";
   }
   if (error.code === "LAST_ACTIVE_ADMIN") {
-    return "You cannot disable or demote the last active administrator.";
+    return "不能停用或降级最后一位已启用的管理员。";
   }
   if (error.retryable) {
-    return "The service is temporarily unavailable. Try again.";
+    return "服务暂时不可用，请稍后重试。";
   }
-  return "The change could not be applied. Try again.";
+  return "操作未完成，请重试。";
 }
 
 function UsageTab({ detail }: { detail: AdminUserDetail }) {
@@ -777,7 +910,7 @@ function UsageTab({ detail }: { detail: AdminUserDetail }) {
       <div className="admin-usage-dimension__head">
         <span>{label}</span>
         <Badge tone={dimensionTone(isExhausted, isNear)}>
-          {isExhausted ? "exhausted" : isNear ? "near" : "ok"}
+          {isExhausted ? "已用尽" : isNear ? "接近上限" : "正常"}
         </Badge>
       </div>
       <span className="admin-mono">
@@ -787,11 +920,11 @@ function UsageTab({ detail }: { detail: AdminUserDetail }) {
     </div>
   );
   return (
-    <section className="admin-section" aria-label="Monthly usage">
-      <h2 className="admin-section__title">This month</h2>
+    <section className="admin-section" aria-label="本月用量">
+      <h2 className="admin-section__title">本月用量</h2>
       <div className="admin-usage-grid">
         {dimension(
-          "Personal Agents",
+          "个人助手",
           detail.usage.personalAgents,
           detail.quota.personalAgentLimit,
           exhausted.personalAgents,
@@ -802,7 +935,7 @@ function UsageTab({ detail }: { detail: AdminUserDetail }) {
           ),
         )}
         {dimension(
-          "Concurrent Sessions",
+          "同时运行任务",
           detail.usage.concurrentSessions,
           detail.quota.concurrentSessionLimit,
           exhausted.concurrentSessions,
@@ -813,7 +946,7 @@ function UsageTab({ detail }: { detail: AdminUserDetail }) {
           ),
         )}
         {dimension(
-          "Sessions today",
+          "今日任务",
           detail.usage.dailySessions,
           detail.quota.dailySessionLimit,
           exhausted.dailySessions,
@@ -824,7 +957,7 @@ function UsageTab({ detail }: { detail: AdminUserDetail }) {
           ),
         )}
         {dimension(
-          "Tokens",
+          "Token 用量",
           detail.usage.tokens,
           detail.quota.monthlyTokenLimit,
           exhausted.monthlyTokens,
@@ -837,23 +970,23 @@ function UsageTab({ detail }: { detail: AdminUserDetail }) {
       </div>
       <dl className="admin-definition-list admin-usage-extra">
         <div>
-          <dt>Input tokens</dt>
+          <dt>输入 Token</dt>
           <dd className="admin-mono">
             {formatCount(detail.usage.inputTokens)}
           </dd>
         </div>
         <div>
-          <dt>Output tokens</dt>
+          <dt>输出 Token</dt>
           <dd className="admin-mono">
             {formatCount(detail.usage.outputTokens)}
           </dd>
         </div>
         <div>
-          <dt>Tool calls</dt>
+          <dt>工具调用</dt>
           <dd className="admin-mono">{formatCount(detail.usage.toolCalls)}</dd>
         </div>
         <div>
-          <dt>Runtime</dt>
+          <dt>运行时长</dt>
           <dd className="admin-mono">
             {formatCount(detail.usage.runtimeMs)} ms
           </dd>
@@ -870,126 +1003,104 @@ function SessionsTab({
   userId: string;
   onAuthRequired: () => void;
 }) {
-  const [sessions, setSessions] = useState<AdminUserSession[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setLoadError(false);
-    apiClient
-      .listAdminUserSessions(userId, { limit: PAGE_SIZE })
-      .then((page) => {
-        if (!active) return;
-        setSessions(page.sessions);
-        setNextCursor(page.nextCursor);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        if (error instanceof ApiClientError && error.isAuthRequired) {
-          onAuthRequired();
-          return;
-        }
-        setLoadError(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+  const fetchPage = useCallback(
+    async (cursor?: string) => {
+      const page = await apiClient.listAdminUserSessions(userId, {
+        limit: PAGE_SIZE,
+        cursor,
       });
-    return () => {
-      active = false;
-    };
-  }, [userId, onAuthRequired, reloadKey]);
+      return { items: page.sessions, nextCursor: page.nextCursor };
+    },
+    [userId],
+  );
+  const collection = useAdminCollection(fetchPage, onAuthRequired);
+  const { items: sessions, loading, loadError, reload } = collection;
 
   if (loading) {
     return (
       <div className="admin-loading" aria-busy="true">
-        <Spinner label="Loading sessions" />
+        <Spinner label="正在加载任务" />
       </div>
     );
   }
   if (loadError) {
     return (
       <EmptyState
-        title="Sessions unavailable"
-        description="Session metadata could not be loaded."
+        title="任务暂时无法加载"
+        description="任务信息加载失败，请重试。"
         action={
-          <Button
-            variant="secondary"
-            onClick={() => setReloadKey((key) => key + 1)}
-          >
-            Retry
+          <Button variant="secondary" onClick={reload}>
+            重试
           </Button>
         }
       />
     );
   }
   return (
-    <section className="admin-section" aria-label="Sessions">
-      <h2 className="admin-section__title">Sessions</h2>
+    <section className="admin-section" aria-label="任务">
+      <h2 className="admin-section__title">任务</h2>
       <p className="admin-dimmed admin-section__hint">
-        Metadata only — transcripts and artifacts stay with the account owner.
+        仅展示任务元信息；对话正文和文件由账号本人查看。
       </p>
       {sessions.length === 0 ? (
-        <EmptyState
-          title="No sessions"
-          description="This account has not created any Session yet."
-        />
+        <EmptyState title="还没有任务" description="该账号尚未创建任务。" />
       ) : (
         <>
-          <DataTable caption="Account sessions" minWidth="wide">
+          <DataTable caption="账号任务列表" minWidth="wide">
             <thead>
               <tr>
-                <th scope="col">Title</th>
-                <th scope="col">Status</th>
-                <th scope="col">Agent</th>
-                <th scope="col">Created</th>
-                <th scope="col">Last event</th>
-                <th scope="col">Tokens</th>
+                <th scope="col">任务标题</th>
+                <th scope="col">状态</th>
+                <th scope="col">助手</th>
+                <th scope="col">创建时间</th>
+                <th scope="col">最近活动</th>
+                <th scope="col">Token 用量</th>
               </tr>
             </thead>
             <tbody>
               {sessions.map((session) => (
                 <tr key={session.id}>
-                  <th scope="row" data-label="Title">
-                    {session.title || "Untitled"}
+                  <th scope="row" data-label="任务标题">
+                    {session.title || "未命名任务"}
                     {session.archivedAt ? (
-                      <Badge tone="neutral">archived</Badge>
+                      <Badge tone="neutral">已归档</Badge>
                     ) : null}
                   </th>
-                  <td data-label="Status">
+                  <td data-label="状态">
                     <Badge
                       tone={
                         session.status === "terminated" ? "neutral" : "success"
                       }
                     >
-                      {session.status}
+                      {statusLabel(session.status)}
                     </Badge>
                   </td>
-                  <td data-label="Agent">
+                  <td data-label="助手">
                     <span>
                       {session.agentName}
                       <span className="admin-dimmed">
                         {" "}
-                        · {session.agentKind} · v{session.agentVersion}
+                        ·{" "}
+                        {session.agentKind === "platform"
+                          ? "平台助手"
+                          : "个人助手"}{" "}
+                        · v{session.agentVersion}
                       </span>
                     </span>
                   </td>
-                  <td data-label="Created">
+                  <td data-label="创建时间">
                     <span className="admin-dimmed">
                       {formatDateTime(session.createdAt)}
                     </span>
                   </td>
-                  <td data-label="Last event">
+                  <td data-label="最近活动">
                     <span className="admin-dimmed">
                       {session.lastEventAt
                         ? formatDateTime(session.lastEventAt)
                         : "—"}
                     </span>
                   </td>
-                  <td data-label="Tokens">
+                  <td data-label="Token 用量">
                     <span className="admin-mono">
                       {formatCount(session.tokens)}
                     </span>
@@ -998,29 +1109,9 @@ function SessionsTab({
               ))}
             </tbody>
           </DataTable>
-          {nextCursor ? (
-            <div className="admin-load-more">
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  apiClient
-                    .listAdminUserSessions(userId, {
-                      limit: PAGE_SIZE,
-                      cursor: nextCursor,
-                    })
-                    .then((page) => {
-                      setSessions((current) => [...current, ...page.sessions]);
-                      setNextCursor(page.nextCursor);
-                    })
-                    .catch(() => undefined)
-                }
-              >
-                Load more
-              </Button>
-            </div>
-          ) : null}
         </>
       )}
+      <AdminPagination {...collection} count={sessions.length} />
     </section>
   );
 }
@@ -1032,101 +1123,80 @@ function AuditTab({
   userId: string;
   onAuthRequired: () => void;
 }) {
-  const [entries, setEntries] = useState<AdminAuditEntry[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setLoadError(false);
-    apiClient
-      .listAdminUserAudit(userId, { limit: PAGE_SIZE })
-      .then((page) => {
-        if (!active) return;
-        setEntries(page.entries);
-        setNextCursor(page.nextCursor);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        if (error instanceof ApiClientError && error.isAuthRequired) {
-          onAuthRequired();
-          return;
-        }
-        setLoadError(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+  const fetchPage = useCallback(
+    async (cursor?: string) => {
+      const page = await apiClient.listAdminUserAudit(userId, {
+        limit: PAGE_SIZE,
+        cursor,
       });
-    return () => {
-      active = false;
-    };
-  }, [userId, onAuthRequired, reloadKey]);
+      return { items: page.entries, nextCursor: page.nextCursor };
+    },
+    [userId],
+  );
+  const collection = useAdminCollection(fetchPage, onAuthRequired);
+  const { items: entries, loading, loadError, reload } = collection;
 
   if (loading) {
     return (
       <div className="admin-loading" aria-busy="true">
-        <Spinner label="Loading audit entries" />
+        <Spinner label="正在加载审计记录" />
       </div>
     );
   }
   if (loadError) {
     return (
       <EmptyState
-        title="Audit unavailable"
-        description="Audit entries could not be loaded."
+        title="审计记录暂时无法加载"
+        description="审计记录加载失败，请重试。"
         action={
-          <Button
-            variant="secondary"
-            onClick={() => setReloadKey((key) => key + 1)}
-          >
-            Retry
+          <Button variant="secondary" onClick={reload}>
+            重试
           </Button>
         }
       />
     );
   }
   return (
-    <section className="admin-section" aria-label="Related audit">
-      <h2 className="admin-section__title">Related audit</h2>
+    <section className="admin-section" aria-label="相关审计记录">
+      <h2 className="admin-section__title">相关审计记录</h2>
       {entries.length === 0 ? (
         <EmptyState
-          title="No audit entries"
-          description="No recorded operations involve this account."
+          title="暂无审计记录"
+          description="尚无涉及该账号的操作记录。"
         />
       ) : (
-        <DataTable caption="Related audit entries" minWidth="wide">
+        <DataTable caption="账号相关审计记录" minWidth="wide">
           <thead>
             <tr>
-              <th scope="col">Time</th>
-              <th scope="col">Action</th>
-              <th scope="col">Operator</th>
-              <th scope="col">Result</th>
+              <th scope="col">时间</th>
+              <th scope="col">操作类型</th>
+              <th scope="col">操作人</th>
+              <th scope="col">结果</th>
             </tr>
           </thead>
           <tbody>
             {entries.map((entry) => (
               <tr key={entry.id}>
-                <td data-label="Time">
+                <td data-label="时间">
                   <span className="admin-dimmed admin-time">
                     {formatDateTime(entry.createdAt)}
                   </span>
                 </td>
-                <td data-label="Action">
-                  <span className="admin-mono admin-action">
-                    {entry.action}
-                  </span>
+                <td data-label="操作类型">
+                  <span>{actionLabel(entry.action)}</span>
+                  <details className="admin-technical-details">
+                    <summary>操作标识</summary>
+                    <code>{entry.action}</code>
+                  </details>
                 </td>
-                <td data-label="Operator">
-                  <span>{entry.actorEmail ?? "System"}</span>
+                <td data-label="操作人">
+                  <span>{entry.actorEmail ?? "系统"}</span>
                 </td>
-                <td data-label="Result">
+                <td data-label="结果">
                   <Badge
                     tone={entry.result === "succeeded" ? "success" : "danger"}
                   >
-                    {entry.result}
+                    {statusLabel(entry.result)}
                   </Badge>
                 </td>
               </tr>
@@ -1134,27 +1204,7 @@ function AuditTab({
           </tbody>
         </DataTable>
       )}
-      {nextCursor ? (
-        <div className="admin-load-more">
-          <Button
-            variant="secondary"
-            onClick={() =>
-              apiClient
-                .listAdminUserAudit(userId, {
-                  limit: PAGE_SIZE,
-                  cursor: nextCursor,
-                })
-                .then((page) => {
-                  setEntries((current) => [...current, ...page.entries]);
-                  setNextCursor(page.nextCursor);
-                })
-                .catch(() => undefined)
-            }
-          >
-            Load more
-          </Button>
-        </div>
-      ) : null}
+      <AdminPagination {...collection} count={entries.length} />
     </section>
   );
 }

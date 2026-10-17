@@ -146,6 +146,23 @@
   padding: var(--ui-space-2) var(--ui-space-3);
 }
 
+/* A checkbox is not a text control: the 2.75rem floor inflates the box and
+   the browser draws the glyph centered inside it, dropping it off the text
+   line next to it. */
+input.ui-input[type="checkbox"] {
+  min-height: 0;
+}
+
+/* The native arrow hugs the border at whatever inset the UA chooses; a drawn
+   chevron keeps a fixed, generous gap from the edge in every theme. */
+.ui-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239097a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  padding-inline-end: 2rem;
+}
+
 .ui-textarea {
   min-height: 96px;
   padding: var(--ui-space-3);

@@ -13,7 +13,7 @@ import {
   type AdminPlatformAgent,
   type CurrentUser,
 } from "../api.js";
-import { AppShell, Button, EmptyState, Spinner } from "../ui/index.js";
+import { AppShell, Button } from "../ui/index.js";
 import { AdminAuditPage } from "./AdminAuditPage.js";
 import { AdminPlatformAgentsPage } from "./AdminPlatformAgentsPage.js";
 import { AdminSettingsPage } from "./AdminSettingsPage.js";
@@ -48,6 +48,7 @@ export function AdminWorkspace({
   useEffect(() => {
     let active = true;
     setLoadError(false);
+    setAgents(null);
     apiClient
       .listAdminPlatformAgents()
       .then((agentsResult) => {
@@ -75,79 +76,33 @@ export function AdminWorkspace({
     }
   }
 
-  if (loadError) {
-    return (
-      <main className="centered-page">
-        <EmptyState
-          title="Administration unavailable"
-          description="Administrator data could not be loaded."
-          action={
-            <button
-              type="button"
-              className="ui-button ui-button--secondary ui-button--default"
-              onClick={() => setReloadKey((key) => key + 1)}
-            >
-              Retry
-            </button>
-          }
-        />
-      </main>
-    );
-  }
-
-  if (agents === null) {
-    return (
-      <main className="centered-page" aria-busy="true">
-        <Spinner label="Loading administration" />
-        <p>Loading administration…</p>
-      </main>
-    );
-  }
-
   return (
     <AppShell
-      brand="Administration"
-      navigationLabel="Administration"
+      brand="管理工作台"
+      navigationLabel="管理工作台"
       navigation={[
-        { to: "/admin/users", label: "Users", icon: Users },
-        { to: "/admin/usage", label: "Usage", icon: ChartNoAxesColumn },
-        { to: "/admin/audit", label: "Audit", icon: ScrollText },
+        { to: "/admin/users", label: "用户管理", icon: Users },
+        { to: "/admin/usage", label: "用量", icon: ChartNoAxesColumn },
+        { to: "/admin/audit", label: "审计记录", icon: ScrollText },
         {
           to: "/admin/platform-agents",
-          label: "Agents",
+          label: "助手管理",
           icon: Bot,
         },
-        { to: "/admin/settings", label: "Settings", icon: Settings },
+        { to: "/admin/settings", label: "设置", icon: Settings },
       ]}
-      openNavigationLabel="Open administration navigation"
-      closeNavigationLabel="Close administration navigation"
-      backdropLabel="Close administration navigation"
+      openNavigationLabel="打开管理导航"
+      closeNavigationLabel="关闭管理导航"
+      backdropLabel="关闭管理导航"
       user={{ handle: adminHandle(user.authSubject) }}
       onSignOut={() => void signOut()}
     >
-      <section className="page" aria-label="个人工作区使用指引">
-        <details>
-          <summary>开始使用个人工作区</summary>
-          <p>
-            管理员账户用于配置。完成平台助手配置后，请创建个人使用账户并分配默认助手，
-            再返回登录，以个人账户发起任务。
-          </p>
-          <p>
-            <Link to="/admin/platform-agents">配置平台助手</Link>
-            {" · "}
-            <Link to="/admin/users">创建个人账户并分配默认助手</Link>
-          </p>
-          <Button variant="secondary" onClick={() => void signOut()}>
-            返回登录
-          </Button>
-        </details>
-      </section>
       <Routes>
         <Route
           path="/admin/users"
           element={
             <AdminUsersPage
-              agents={agents}
+              agents={agents ?? []}
               onAuthRequired={onAuthRequired}
               onUserMutated={() => setReloadKey((key) => key + 1)}
             />
@@ -157,7 +112,7 @@ export function AdminWorkspace({
           path="/admin/users/:userId"
           element={
             <AdminUserDetailPage
-              agents={agents}
+              agents={agents ?? []}
               onAuthRequired={onAuthRequired}
             />
           }
@@ -174,8 +129,11 @@ export function AdminWorkspace({
           path="/admin/platform-agents"
           element={
             <AdminPlatformAgentsPage
-              agents={agents}
+              agents={agents ?? []}
               onAuthRequired={onAuthRequired}
+              loading={agents === null && !loadError}
+              loadError={loadError}
+              onRetry={() => setReloadKey((key) => key + 1)}
             />
           }
         />
@@ -193,6 +151,26 @@ export function AdminWorkspace({
         />
         <Route path="*" element={<Navigate to="/admin/users" replace />} />
       </Routes>
+      <section
+        className="admin-workspace-guide"
+        aria-label="个人工作区使用指引"
+      >
+        <details>
+          <summary>开始使用个人工作区</summary>
+          <p>
+            管理员账户用于配置。完成平台助手配置后，请创建个人使用账户并分配默认助手，
+            再返回登录，以个人账户发起任务。
+          </p>
+          <p>
+            <Link to="/admin/platform-agents">配置平台助手</Link>
+            {" · "}
+            <Link to="/admin/users">创建个人账户并分配默认助手</Link>
+          </p>
+          <Button variant="secondary" onClick={() => void signOut()}>
+            返回登录
+          </Button>
+        </details>
+      </section>
     </AppShell>
   );
 }

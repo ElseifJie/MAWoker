@@ -1176,6 +1176,34 @@ select:not(.ui-select):hover {
   flex: 0 0 auto;
 }
 
+.workspace-rail__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--ui-space-2);
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-rail__toggle > svg {
+  flex: 0 0 auto;
+}
+
+.workspace-rail__chevron {
+  color: var(--ui-color-text-muted);
+  transition: transform 0.15s ease;
+}
+
+.workspace-rail__chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
 .workspace-rail__count {
   color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-aux);
@@ -1204,57 +1232,6 @@ select:not(.ui-select):hover {
   background: none;
   font: inherit;
   text-decoration: underline;
-}
-
-.workspace-rail__todos {
-  display: grid;
-  margin: 0;
-  padding: 0;
-  gap: var(--ui-space-2);
-  list-style: none;
-}
-
-.todo {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: var(--ui-space-2);
-  color: var(--ui-color-text);
-  font-size: var(--ui-font-size-control);
-  line-height: var(--ui-line-height-control);
-}
-
-.todo__content {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.todo > svg {
-  flex: 0 0 auto;
-  margin-top: var(--ui-space-1);
-  color: var(--ui-color-text-muted);
-}
-
-.todo--in_progress > svg {
-  color: var(--ui-color-accent-interactive);
-}
-
-.todo--completed {
-  color: var(--ui-color-text-muted);
-}
-
-.todo--completed > svg {
-  color: var(--ui-color-success);
-}
-
-.todo--completed .todo__content {
-  text-decoration: line-through;
-}
-
-.workspace-rail__header--artifacts {
-  margin-top: var(--ui-space-6);
-  padding-top: var(--ui-space-4);
-  border-top: 1px solid var(--ui-color-border);
 }
 
 .workspace-rail__artifacts {
@@ -1348,7 +1325,6 @@ select:not(.ui-select):hover {
   flex: 1 1 auto;
   flex-direction: column;
   gap: var(--ui-space-2);
-  margin-top: var(--ui-space-4);
   padding: var(--ui-space-3);
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-large);
@@ -1357,7 +1333,6 @@ select:not(.ui-select):hover {
 
 /* A modal host already supplies its own surface, title and close action. */
 .artifact-viewer--hosted {
-  margin-top: 0;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -1388,6 +1363,15 @@ select:not(.ui-select):hover {
   flex: 0 0 auto;
   flex-wrap: wrap;
   gap: var(--ui-space-2);
+}
+
+/* Panel-level actions read as secondary chrome: a notch smaller than the
+   page's compact buttons, so the preview keeps the room. */
+.artifact-viewer__actions .ui-button {
+  min-height: 1.75rem;
+  padding: var(--ui-space-1) var(--ui-space-2);
+  gap: var(--ui-space-1);
+  font-size: var(--ui-font-size-aux);
 }
 
 .artifact-viewer__note {
@@ -1422,12 +1406,27 @@ select:not(.ui-select):hover {
 }
 
 .artifact-viewer__image {
-  max-width: 100%;
-  min-height: 0;
-  object-fit: contain;
-  border: 1px solid var(--ui-color-border);
-  border-radius: var(--ui-radius-medium);
-  background: var(--ui-color-surface-subtle);
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* The image body owns the scrolling: long composites (Agent posters, stitched
+   screenshots) render at the panel's width and are read by scrolling, not
+   letterboxed into a fixed-height box. The frame chrome stays on the viewer
+   card, so the image carries no border of its own. */
+.artifact-viewer__body {
+  display: block;
+}
+
+/* In the rail the panel's height is definite, so the body fills what is left
+   and scrolls. Basis 0 keeps the image's natural height out of the flex
+   sizing — with basis auto a tall composite inflated the viewer's flex
+   footprint and squeezed the rail's header row into a clipped sliver. */
+.workspace-rail .artifact-viewer__body {
+  flex: 1 1 0;
+  min-height: 160px;
+  overflow-y: auto;
 }
 
 .artifact-viewer__frame {
@@ -1440,10 +1439,9 @@ select:not(.ui-select):hover {
   background: var(--ui-color-embed-canvas);
 }
 
-/* Documents and images fill the panel's remaining height rather than a fixed
+/* Document previews fill the panel's remaining height rather than a fixed
    viewport slice, so a widened side panel shows more of the file. */
 .artifact-viewer__frame--document,
-.artifact-viewer__image,
 .artifact-viewer__document .artifact-viewer__frame {
   min-height: 160px;
   flex: 1 1 auto;
@@ -1516,8 +1514,14 @@ select:not(.ui-select):hover {
     flex: 0 0 auto;
   }
 
+  /* The sheet cannot grow with a tall image, so the scrollable body takes a
+     viewport-relative slice; the image inside keeps its fit-width ratio. */
+  .workspace-rail .artifact-viewer__body {
+    flex: 0 0 auto;
+    height: 46vh;
+  }
+
   .artifact-viewer__frame--document,
-  .artifact-viewer__image,
   .artifact-viewer__document .artifact-viewer__frame {
     flex: 0 0 auto;
     height: 46vh;
@@ -2651,17 +2655,48 @@ select:not(.ui-select):hover {
   gap: var(--ui-space-2);
 }
 
-.artifact-record__details {
-  margin-top: var(--ui-space-1);
-  font-size: var(--ui-font-size-aux);
-  color: var(--ui-color-text-muted);
+/* The files toolbar reads as a quiet filter strip: smaller controls, muted
+   labels, and a search affordance inset so text never touches the edge. */
+.files-toolbar {
+  margin-bottom: var(--ui-space-4);
 }
 
-.artifact-record__details span,
-.artifact-record__details code {
+.files-toolbar .ui-field {
+  gap: var(--ui-space-1);
+}
+
+.files-toolbar .ui-field__label {
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+}
+
+.files-toolbar .ui-input,
+.files-toolbar .ui-select {
+  min-height: 2.25rem;
+  padding: var(--ui-space-1) var(--ui-space-2);
+  font-size: var(--ui-font-size-aux);
+}
+
+.files-toolbar .ui-select {
+  padding-inline-end: 1.85rem;
+}
+
+.files-toolbar__search {
+  position: relative;
   display: block;
-  padding-top: var(--ui-space-1);
-  overflow-wrap: anywhere;
+}
+
+.files-toolbar__search > svg {
+  position: absolute;
+  top: 50%;
+  left: var(--ui-space-2);
+  translate: 0 -50%;
+  color: var(--ui-color-text-muted);
+  pointer-events: none;
+}
+
+.files-toolbar__search .ui-input {
+  padding-left: 2rem;
 }
 
 .artifact-feedback {
@@ -2678,17 +2713,85 @@ select:not(.ui-select):hover {
   list-style: none;
 }
 
+.artifact-list > li + li {
+  border-top: 1px solid var(--ui-color-border);
+}
+
+/* One expandable record per task: the summary carries the task identity and
+   totals, the file rows stay compact underneath. */
+.artifact-group__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--ui-space-2);
+  padding: var(--ui-space-3);
+  list-style: none;
+  cursor: pointer;
+}
+
+.artifact-group__summary::-webkit-details-marker {
+  display: none;
+}
+
+.artifact-group__summary:hover {
+  background: var(--ui-color-surface-hover);
+}
+
+.artifact-group__icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: var(--ui-radius-medium);
+  color: var(--ui-color-accent-interactive);
+  background: var(--ui-color-accent-subtle);
+}
+
+.artifact-group__heading {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.artifact-group__heading strong {
+  min-width: 0;
+  color: var(--ui-color-text);
+  font-size: var(--ui-font-size-control);
+  overflow-wrap: anywhere;
+}
+
+.artifact-group__meta {
+  min-width: 0;
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+  overflow-wrap: anywhere;
+}
+
+.artifact-group__chevron {
+  flex: 0 0 auto;
+  color: var(--ui-color-text-muted);
+  transition: transform 0.15s ease;
+}
+
+.artifact-group[open] > .artifact-group__summary .artifact-group__chevron {
+  transform: rotate(180deg);
+}
+
+.artifact-group__files {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--ui-color-border);
+  list-style: none;
+}
+
 .artifact-record {
   display: grid;
   min-width: 0;
-  min-height: 4.5rem;
-  grid-template-columns: 2.25rem minmax(0, 1fr) minmax(0, 0.8fr) minmax(
-      0,
-      18rem
-    );
+  grid-template-columns: 2rem minmax(0, 1fr) minmax(0, 18rem);
   align-items: center;
   gap: var(--ui-space-3);
-  padding: var(--ui-space-3) var(--ui-space-3);
+  padding: var(--ui-space-2) var(--ui-space-3);
   border-bottom: 1px solid var(--ui-color-border);
 }
 
@@ -2698,16 +2801,15 @@ select:not(.ui-select):hover {
 
 .artifact-record__icon {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border-radius: var(--ui-radius-medium);
   color: var(--ui-color-accent-interactive);
   background: var(--ui-color-accent-subtle);
 }
 
-.artifact-record__file,
-.artifact-record__source {
+.artifact-record__file {
   min-width: 0;
 }
 
@@ -2734,13 +2836,6 @@ select:not(.ui-select):hover {
   overflow-wrap: anywhere;
 }
 
-.artifact-record__source {
-  display: grid;
-  gap: var(--ui-space-1);
-  color: var(--ui-color-text-muted);
-  font-size: var(--ui-font-size-aux);
-}
-
 .artifact-record__actions {
   display: flex;
   min-width: 0;
@@ -2752,14 +2847,11 @@ select:not(.ui-select):hover {
 
 @container user-list (max-width: 50rem) {
   .artifact-record {
-    grid-template-columns: 2.25rem minmax(0, 1fr);
+    grid-template-columns: 2rem minmax(0, 1fr);
     align-items: start;
   }
-  .artifact-record__source,
   .artifact-record__actions {
     grid-column: 2;
-  }
-  .artifact-record__actions {
     justify-content: flex-start;
   }
 }
@@ -4161,6 +4253,12 @@ select:not(.ui-select):hover {
   gap: var(--ui-space-4);
 }
 
+/* The shared page header's 2rem foot would double the grid gap; the store
+   facts row should follow the description closely. */
+.memory-detail .ui-page-header {
+  margin-bottom: 0;
+}
+
 .memory-detail__header {
   display: flex;
   flex-wrap: wrap;
@@ -4216,32 +4314,21 @@ select:not(.ui-select):hover {
   margin: 0;
 }
 
-.memory-detail__store-id {
-  min-width: 0;
-  font-size: var(--ui-font-size-aux);
-}
-
-.memory-detail__store-id summary {
-  cursor: pointer;
-}
-
-.memory-detail__store-id .memory-mono {
-  display: block;
-  margin-top: var(--ui-space-1);
-  overflow-wrap: anywhere;
-}
-
+/* Store facts render flat, one aligned row: the mono store id anchors the
+   left, the counters follow, nothing hidden behind a disclosure. */
 .memory-detail__meta {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--ui-space-4);
+  gap: var(--ui-space-2) var(--ui-space-4);
+  align-items: baseline;
   margin: 0;
   color: var(--ui-color-text-muted);
-  font-size: var(--ui-font-size-control);
+  font-size: var(--ui-font-size-aux);
   overflow-wrap: anywhere;
 }
 
 .memory-mono {
+  color: var(--ui-color-text);
   font-family: var(--ui-font-mono, monospace);
 }
 
@@ -4255,53 +4342,87 @@ select:not(.ui-select):hover {
   overflow: hidden;
 }
 
-.memory-catalog {
-  padding-block: var(--ui-space-4);
-}
-
-.memory-catalog h2 {
-  margin: 0 0 var(--ui-space-2);
-  font-size: var(--ui-font-size-section);
-  font-weight: 500;
-}
-
-.memory-catalog > p {
-  margin: 0 0 var(--ui-space-4);
-  font-size: var(--ui-font-size-control);
-  color: var(--ui-color-text-muted);
-}
-
-.memory-catalog__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
-  gap: var(--ui-space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.memory-catalog__list li {
-  min-width: 0;
-  padding: var(--ui-space-4);
-  border: 1px solid var(--ui-color-border);
-  border-radius: var(--ui-radius-large);
-  background: var(--ui-color-surface);
-}
-
-.memory-catalog__list .ui-button {
-  padding-inline: 0;
-  justify-content: flex-start;
-}
-
-.memory-catalog__list p {
-  margin: var(--ui-space-2) 0 0;
-  font-size: var(--ui-font-size-aux);
-  overflow-wrap: anywhere;
-}
-
 .memory-editor form {
-  display: grid;
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
   gap: var(--ui-space-4);
+}
+
+/* The memory body reads at the label size, not the page-body size: it is
+   working text under the 内容 heading, matching the field it belongs to. */
+.memory-editor .ui-textarea {
+  font-size: var(--ui-font-size-control);
+  line-height: var(--ui-line-height-control);
+}
+
+.memory-protect {
+  display: flex;
+  min-width: 0;
+  gap: var(--ui-space-1);
+  align-items: flex-start;
+  /* The textarea above already breathes one full gap; this row tucks closer. */
+  margin-top: calc(-1 * var(--ui-space-2));
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+}
+
+.memory-protect input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  /* Baseline alignment lifts a checkbox above the text line; a fixed nudge
+     centers it on the first text line instead. */
+  margin-top: 2px;
+}
+
+/* The content field stretches so the editor fills the panel: the textarea
+   grows with the available height instead of stopping at its row count. */
+.memory-editor__content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.memory-editor__content .ui-field {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.memory-editor__content .ui-textarea {
+  flex: 1 1 auto;
+  min-height: 240px;
+}
+
+.memory-editor__actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--ui-space-1);
+  align-items: center;
+  justify-content: flex-start;
+  /* Anchored to the panel's bottom edge with the same row geometry as the
+     新建记忆 footer across the divider: border, 8px, control, 8px. */
+  margin-top: auto;
+  min-height: calc(var(--ui-control-height-large) + 2 * var(--ui-space-2));
+  padding: var(--ui-space-2) var(--ui-space-1);
+  border-top: 1px solid var(--ui-color-border);
+}
+
+.memory-editor__actions .ui-button {
+  min-height: 2.25rem;
+  padding: var(--ui-space-1) var(--ui-space-2);
+}
+
+/* 删除 reads as plain danger text next to 保存, no filled button box. */
+.memory-editor__actions .ui-button--danger,
+.memory-editor__actions .ui-button--danger:hover:not(:disabled) {
+  border: 0;
+  color: var(--ui-color-danger);
+  background: none;
 }
 
 .memory-detail .memory-detail__title h2 {
@@ -4344,14 +4465,14 @@ select:not(.ui-select):hover {
 
 .memory-tree__row {
   display: flex;
-  min-width: calc(10rem + var(--memory-depth, 0) * 0.5rem);
+  min-width: calc(10rem + var(--memory-depth, 0) * 0.875rem);
   min-height: var(--ui-control-height-default);
   overflow: hidden;
   gap: var(--ui-space-2);
   align-items: center;
   width: 100%;
   padding: var(--ui-space-1) var(--ui-space-2);
-  padding-left: calc(var(--ui-space-2) + var(--memory-depth, 0) * 0.5rem);
+  padding-left: calc(var(--ui-space-2) + var(--memory-depth, 0) * 0.875rem);
   border: 0;
   border-radius: var(--ui-radius-small, 6px);
   background: none;
@@ -4380,9 +4501,9 @@ select:not(.ui-select):hover {
 }
 
 .memory-tree__row--file {
-  min-width: calc(11.375rem + var(--memory-depth, 0) * 0.5rem);
+  min-width: calc(11.375rem + var(--memory-depth, 0) * 0.875rem);
   padding-left: calc(
-    var(--ui-space-2) + 1.375rem + var(--memory-depth, 0) * 0.5rem
+    var(--ui-space-2) + 1.375rem + var(--memory-depth, 0) * 0.875rem
   );
   color: var(--ui-color-text-muted);
 }
@@ -4405,6 +4526,7 @@ select:not(.ui-select):hover {
 .memory-editor {
   min-width: 0;
   padding: var(--ui-space-4);
+  padding-bottom: 0;
   overflow-y: auto;
 }
 
@@ -4420,14 +4542,6 @@ select:not(.ui-select):hover {
   color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-control);
   font-weight: 400;
-}
-
-.memory-editor__actions {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: var(--ui-space-3);
-  margin-top: var(--ui-space-3);
 }
 
 @media (max-width: 900px) {

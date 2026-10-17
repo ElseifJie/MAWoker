@@ -24,7 +24,6 @@ export const DOCUMENT_PREVIEW_MAX_BYTES = 25 * 1024 * 1024;
 const TEXT_KINDS: ReadonlySet<ArtifactKind> = new Set([
   "markdown",
   "text",
-  "image",
   "html",
   "csv",
 ]);
@@ -40,6 +39,10 @@ export function canPreview(
   artifact: Pick<ArtifactSummary, "name" | "mimeType" | "sizeBytes">,
 ): boolean {
   const kind = artifactKind(artifact);
+  // Images decode in the browser's own engine and render scaled, so — like the
+  // other binary formats — they answer to the bitmap budget, not the DOM-text
+  // budget that limits agent-written long images well below a useful size.
+  if (kind === "image") return artifact.sizeBytes <= DOCUMENT_PREVIEW_MAX_BYTES;
   if (TEXT_KINDS.has(kind)) return artifact.sizeBytes <= PREVIEW_MAX_BYTES;
   if (DOCUMENT_KINDS.has(kind)) {
     return artifact.sizeBytes <= DOCUMENT_PREVIEW_MAX_BYTES;

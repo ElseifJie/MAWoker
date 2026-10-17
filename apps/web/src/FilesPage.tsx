@@ -1,4 +1,11 @@
-import { Download, FileText, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  Download,
+  FileText,
+  Folder,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { artifactKind } from "./artifacts.js";
@@ -39,6 +46,17 @@ function formatDate(value: string): string {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(date);
+}
+
+/** Native option popups size to the widest label, so a full task title would
+ * blow the popup far past the select and read as misaligned. Labels stay
+ * popup-sized; the full title remains on the group record. */
+const MAX_OPTION_CHARS = 28;
+
+function taskOptionLabel(title: string): string {
+  return title.length > MAX_OPTION_CHARS
+    ? `${title.slice(0, MAX_OPTION_CHARS)}…`
+    : title;
 }
 
 export function FilesPage({
@@ -135,6 +153,22 @@ export function FilesPage({
           .includes(search.trim().toLocaleLowerCase()) &&
         (!kind || artifactKind(file) === kind),
     ) ?? [];
+  // One record per task: a task's outputs stay together and expand in place.
+  const groups = [...new Set(filtered.map((file) => file.sessionId))]
+    .map((id) => {
+      const files = filtered.filter((file) => file.sessionId === id);
+      return {
+        sessionId: id,
+        files,
+        updatedAt: files
+          .map((file) => file.generatedAt)
+          .reduce(
+            (latest, at) => (at > latest ? at : latest),
+            files[0]!.generatedAt,
+          ),
+      };
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const kindLabels = {
     spreadsheet: "表格",
     word: "文档",
@@ -155,15 +189,25 @@ export function FilesPage({
         headingRef={pageHeadingRef}
         description="查看任务成果，下载文件或继续使用已有材料。"
       />
-      <div className="page-toolbar" role="search" aria-label="文件筛选">
-        <Field label="搜索文件">
-          <Input
-            type="search"
-            placeholder="输入文件名称"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </Field>
+      <div
+        className="page-toolbar files-toolbar"
+        role="search"
+        aria-label="文件筛选"
+      >
+        {/* Not the shared Field: the search box carries a leading icon inside
+            the labelled region, and Field's clone targets a direct child. */}
+        <label className="ui-field files-toolbar__field">
+          <span className="ui-field__label">搜索文件</span>
+          <span className="files-toolbar__search">
+            <Search size={14} aria-hidden="true" />
+            <Input
+              type="search"
+              placeholder="输入文件名称"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </span>
+        </label>
         <Field label="来源任务">
           <Select
             value={sessionId}
@@ -172,8 +216,10 @@ export function FilesPage({
             <option value="">全部任务</option>
             {knownSessionIds.map((knownSessionId) => (
               <option key={knownSessionId} value={knownSessionId}>
-                {sessionNames.get(knownSessionId) ??
-                  `任务 ${knownSessionId.slice(0, 8)}`}
+                {taskOptionLabel(
+                  sessionNames.get(knownSessionId) ??
+                    `任务 ${knownSessionId.slice(0, 8)}`,
+                )}
               </option>
             ))}
           </Select>
@@ -249,82 +295,105 @@ export function FilesPage({
         />
       ) : (
         <ul className="artifact-list" aria-label="成果文件">
-          {filtered.map((artifact) => {
-            const source =
-              sessionNames.get(artifact.sessionId) ??
-              `任务 ${artifact.sessionId.slice(0, 8)}`;
+          {groups.map((group) => {
+            const totalBytes = group.files.reduce(
+              (sum, file) => sum + file.sizeBytes,
+              0,
+            );
             return (
-              <li key={artifact.id} className="artifact-record">
-                <span className="artifact-record__icon" aria-hidden="true">
-                  <FileText size={18} />
-                </span>
-                <div className="artifact-record__file">
-                  <strong>{artifact.name}</strong>
-                  <div className="artifact-record__metadata">
-                    <span>{kindLabels[artifactKind(artifact)]}</span>
-                    <span>{formatBytes(artifact.sizeBytes)}</span>
-                  </div>
-                  <details className="artifact-record__details">
-                    <summary>文件详情</summary>
-                    <span>{artifact.mimeType}</span>
-                    <span>
-                      来源任务编号：<code>{artifact.sessionId}</code>
+              <li key={group.sessionId}>
+                <details className="artifact-group">
+                  <summary className="artifact-group__summary">
+                    <span className="artifact-group__icon" aria-hidden="true">
+                      <Folder size={16} />
                     </span>
-                    <code>{artifact.id}</code>
-                  </details>
-                </div>
-                <div className="artifact-record__source">
-                  <span>{source}</span>
-                  <time dateTime={artifact.generatedAt}>
-                    {formatDate(artifact.generatedAt)}
-                  </time>
-                </div>
-                <div className="artifact-record__actions">
-                  {artifact.deletionState === "pending" ? (
-                    <Badge tone="warning">删除中</Badge>
-                  ) : artifact.deletionState === "deletion_failed" ? (
-                    <Badge tone="danger">删除失败</Badge>
-                  ) : (
-                    <>
-                      <Button
-                        variant="text"
-                        onClick={(event) => {
-                          previewTriggerRef.current = event.currentTarget;
-                          setPreview(artifact);
-                        }}
-                      >
-                        预览
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() =>
-                          navigate(
-                            `/?artifactId=${encodeURIComponent(artifact.id)}`,
-                          )
-                        }
-                      >
-                        继续修改
-                      </Button>
-                      <a
-                        className="ui-icon-button ui-icon-button--small"
-                        href={`/api/v1/artifacts/${encodeURIComponent(artifact.id)}/download`}
-                        aria-label={`下载 ${artifact.name}`}
-                        title={`下载 ${artifact.name}`}
-                        download
-                      >
-                        <Download size={16} aria-hidden="true" />
-                      </a>
-                      <IconButton
-                        size="small"
-                        className="artifact-record__delete"
-                        label={`删除 ${artifact.name}`}
-                        onClick={() => setDeleteTarget(artifact)}
-                      >
-                        <Trash2 size={15} aria-hidden="true" />
-                      </IconButton>
-                    </>
-                  )}
-                </div>
+                    <span className="artifact-group__heading">
+                      <strong>
+                        {sessionNames.get(group.sessionId) ??
+                          `任务 ${group.sessionId.slice(0, 8)}`}
+                      </strong>
+                      <span className="artifact-group__meta">
+                        {group.files.length} 个文件 · 共{" "}
+                        {formatBytes(totalBytes)} · 更新于{" "}
+                        {formatDate(group.updatedAt)}
+                      </span>
+                    </span>
+                    <ChevronDown
+                      size={16}
+                      aria-hidden="true"
+                      className="artifact-group__chevron"
+                    />
+                  </summary>
+                  <ul className="artifact-group__files">
+                    {group.files.map((artifact) => (
+                      <li key={artifact.id} className="artifact-record">
+                        <span
+                          className="artifact-record__icon"
+                          aria-hidden="true"
+                        >
+                          <FileText size={16} />
+                        </span>
+                        <div className="artifact-record__file">
+                          <strong>{artifact.name}</strong>
+                          <div className="artifact-record__metadata">
+                            <span>{kindLabels[artifactKind(artifact)]}</span>
+                            <span>{formatBytes(artifact.sizeBytes)}</span>
+                            <time dateTime={artifact.generatedAt}>
+                              {formatDate(artifact.generatedAt)}
+                            </time>
+                          </div>
+                        </div>
+                        <div className="artifact-record__actions">
+                          {artifact.deletionState === "pending" ? (
+                            <Badge tone="warning">删除中</Badge>
+                          ) : artifact.deletionState === "deletion_failed" ? (
+                            <Badge tone="danger">删除失败</Badge>
+                          ) : (
+                            <>
+                              <Button
+                                variant="text"
+                                onClick={(event) => {
+                                  previewTriggerRef.current =
+                                    event.currentTarget;
+                                  setPreview(artifact);
+                                }}
+                              >
+                                预览
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                onClick={() =>
+                                  navigate(
+                                    `/?artifactId=${encodeURIComponent(artifact.id)}`,
+                                  )
+                                }
+                              >
+                                继续修改
+                              </Button>
+                              <a
+                                className="ui-icon-button ui-icon-button--small"
+                                href={`/api/v1/artifacts/${encodeURIComponent(artifact.id)}/download`}
+                                aria-label={`下载 ${artifact.name}`}
+                                title={`下载 ${artifact.name}`}
+                                download
+                              >
+                                <Download size={16} aria-hidden="true" />
+                              </a>
+                              <IconButton
+                                size="small"
+                                className="artifact-record__delete"
+                                label={`删除 ${artifact.name}`}
+                                onClick={() => setDeleteTarget(artifact)}
+                              >
+                                <Trash2 size={15} aria-hidden="true" />
+                              </IconButton>
+                            </>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               </li>
             );
           })}

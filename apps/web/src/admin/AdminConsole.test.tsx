@@ -4,6 +4,8 @@ import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+  act,
+  fireEvent,
   cleanup,
   render,
   screen,
@@ -395,7 +397,7 @@ describe("admin console walkthrough", () => {
     rowName: string,
   ) {
     await user.click(
-      screen.getByRole("button", { name: `Actions for ${rowName}` }),
+      await screen.findByRole("button", { name: `账号操作：${rowName}` }),
     );
     return screen.getByRole("menu");
   }
@@ -410,15 +412,15 @@ describe("admin console walkthrough", () => {
     // Force sign-out is only offered while the account is active; it goes
     // through its own confirmation dialog.
     await openRowMenu(user, "user@example.com");
-    await user.click(screen.getByRole("menuitem", { name: "Force sign-out" }));
+    await user.click(screen.getByRole("menuitem", { name: "强制退出登录" }));
     const signoutDialog = screen.getByRole("dialog", {
-      name: "Force sign-out",
+      name: "强制退出登录",
     });
     expect(calls.some((call) => call.url.endsWith("/sessions/revoke"))).toBe(
       false,
     );
     await user.click(
-      within(signoutDialog).getByRole("button", { name: "Force sign-out" }),
+      within(signoutDialog).getByRole("button", { name: "强制退出登录" }),
     );
     await waitFor(() =>
       expect(
@@ -431,22 +433,22 @@ describe("admin console walkthrough", () => {
 
     // Cancel the disable confirmation first — nothing must be sent.
     await openRowMenu(user, "user@example.com");
-    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
-    const dialog = screen.getByRole("dialog", { name: "Disable account" });
+    await user.click(screen.getByRole("menuitem", { name: "停用" }));
+    const dialog = screen.getByRole("dialog", { name: "停用账号" });
     expect(
-      within(dialog).getByText(/signs out all of its active sessions/i),
+      within(dialog).getByText(/立即退出该账号的所有登录/),
     ).toBeInTheDocument();
     expect(calls.some((call) => call.url.endsWith("/status"))).toBe(false);
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
 
     // Confirm — the PATCH lands and the row flips to Enable.
     await openRowMenu(user, "user@example.com");
-    await user.click(screen.getByRole("menuitem", { name: "Disable" }));
+    await user.click(screen.getByRole("menuitem", { name: "停用" }));
     const confirmDialog = screen.getByRole("dialog", {
-      name: "Disable account",
+      name: "停用账号",
     });
     await user.click(
-      within(confirmDialog).getByRole("button", { name: "Disable account" }),
+      within(confirmDialog).getByRole("button", { name: "停用账号" }),
     );
     await waitFor(() =>
       expect(
@@ -458,9 +460,7 @@ describe("admin console walkthrough", () => {
 
     // The now-disabled account offers Enable instead.
     await openRowMenu(user, "user@example.com");
-    expect(
-      screen.getByRole("menuitem", { name: "Enable" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "启用" })).toBeInTheDocument();
   });
 
   it("surfaces lifecycle guard errors from the API", async () => {
@@ -480,15 +480,13 @@ describe("admin console walkthrough", () => {
     const user = userEvent.setup();
     await screen.findByText("user@example.com");
     await openRowMenu(user, "user@example.com");
-    await user.click(screen.getByRole("menuitem", { name: /admin/i }));
-    const dialog = screen.getByRole("dialog", { name: "Change role" });
+    await user.click(screen.getByRole("menuitem", { name: /管理员/ }));
+    const dialog = screen.getByRole("dialog", { name: "更改角色" });
     await user.click(
-      within(dialog).getByRole("button", { name: "Grant administrator" }),
+      within(dialog).getByRole("button", { name: "授予管理员权限" }),
     );
     expect(
-      await within(dialog).findByText(
-        /cannot disable or demote the last active administrator/i,
-      ),
+      await within(dialog).findByText(/不能停用或降级最后一位已启用的管理员/),
     ).toBeInTheDocument();
   });
 
@@ -510,19 +508,19 @@ describe("admin console walkthrough", () => {
     renderWorkspace("/admin/usage");
     const user = userEvent.setup();
 
-    expect(await screen.findByText("Monthly tokens")).toBeInTheDocument();
+    expect(await screen.findByText("本月 Token")).toBeInTheDocument();
     // The stat card and the per-user row agree on the monthly total.
     expect(screen.getAllByText("75K").length).toBeGreaterThanOrEqual(2);
     // Active users and users-at-limit stat cards both read 1.
     expect(screen.getAllByText("1").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText(/Sep 2026 \(UTC\)/)).toBeInTheDocument();
+    expect(screen.getByText(/2026年9月 \(UTC\)/)).toBeInTheDocument();
     expect(screen.getByText("user@example.com")).toBeInTheDocument();
-    expect(screen.getByText("exhausted")).toBeInTheDocument();
-    expect(screen.getByText("near")).toBeInTheDocument();
-    expect(await screen.findByText("By Agent")).toBeInTheDocument();
+    expect(screen.getByText("已用尽")).toBeInTheDocument();
+    expect(screen.getByText("接近上限")).toBeInTheDocument();
+    expect(await screen.findByText("按助手汇总")).toBeInTheDocument();
     expect(screen.getByText("Research assistant")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Export CSV" }));
+    await user.click(screen.getByRole("button", { name: "导出已加载数据" }));
     expect(blobs).toHaveLength(1);
     const csv = await blobs[0]!.text();
     expect(csv.split("\n")[0]).toBe(
@@ -541,7 +539,9 @@ describe("admin console walkthrough", () => {
 
     // The action name also appears in the filter options, so anchor on the
     // table itself once entries have loaded.
-    const auditTable = await screen.findByRole("table", { name: "Audit log" });
+    const auditTable = await screen.findByRole("table", {
+      name: "操作审计记录",
+    });
     expect(
       within(auditTable).getByText("user.status.update"),
     ).toBeInTheDocument();
@@ -551,13 +551,13 @@ describe("admin console walkthrough", () => {
     expect(
       within(auditTable).getByText("→ user@example.com"),
     ).toBeInTheDocument();
-    expect(screen.getByText("succeeded")).toBeInTheDocument();
+    expect(within(auditTable).getByText("成功")).toBeInTheDocument();
 
     await user.selectOptions(
-      screen.getByLabelText("Action"),
+      screen.getByLabelText("操作类型"),
       "user_quota.update",
     );
-    await user.selectOptions(screen.getByLabelText("Result"), "failed");
+    await user.selectOptions(screen.getByLabelText("结果"), "failed");
     await waitFor(() => {
       const auditCalls = calls.filter((call) =>
         call.url.startsWith("/api/v1/admin/audit-logs"),
@@ -575,15 +575,13 @@ describe("admin console walkthrough", () => {
     renderWorkspace("/admin/settings");
     const user = userEvent.setup();
 
-    const monthly = await screen.findByLabelText("Monthly token limit");
+    const monthly = await screen.findByLabelText("每月 Token 上限");
     expect(monthly).toHaveValue(100000);
     await user.clear(monthly);
     await user.type(monthly, "200000");
-    await user.click(screen.getByRole("button", { name: "Save policy" }));
+    await user.click(screen.getByRole("button", { name: "保存默认配额" }));
 
-    expect(
-      await screen.findByText("Default quota policy saved."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("平台默认配额已保存。")).toBeInTheDocument();
     expect(
       calls.find(
         (call) =>
@@ -609,28 +607,30 @@ describe("admin console walkthrough", () => {
         level: 1,
       }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Quotas" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "使用配额" }),
+    ).toBeInTheDocument();
     expect(
       calls.some(
         (call) => call.url.includes("/sessions") || call.url.includes("/audit"),
       ),
     ).toBe(false);
 
-    await user.click(screen.getByRole("tab", { name: "Usage" }));
-    expect(await screen.findByText("Tokens")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "用量" }));
+    expect(await screen.findByText("Token 用量")).toBeInTheDocument();
     expect(screen.getByText("75K")).toBeInTheDocument();
     expect(screen.getByText("40K")).toBeInTheDocument(); // input tokens
     expect(screen.getByText("26")).toBeInTheDocument(); // tool calls
 
-    await user.click(screen.getByRole("tab", { name: "Sessions" }));
+    await user.click(screen.getByRole("tab", { name: "任务" }));
     expect(await screen.findByText("Quarterly report")).toBeInTheDocument();
-    expect(screen.getByText(/Metadata only/)).toBeInTheDocument();
+    expect(screen.getByText(/仅展示任务元信息/)).toBeInTheDocument();
     expect(
       screen.queryByText("must-not-render-transcript"),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("tab", { name: "Audit" }));
-    expect(await screen.findByText("user.status.update")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "审计记录" }));
+    expect(await screen.findByText("更改账号状态")).toBeInTheDocument();
   });
 
   it("keeps stat cards responsive and monospace numbers technical", () => {
@@ -648,4 +648,200 @@ describe("admin console walkthrough", () => {
       /\.admin-mono\s*\{[^}]*font-family:\s*var\(--ui-font-mono\)/,
     );
   });
+});
+
+describe("admin workbench resilience", () => {
+  it("keeps account navigation available when platform agents fail", async () => {
+    const { fetchMock } = createBackend();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        requestUrl(input).pathname === "/api/v1/admin/platform-agents"
+          ? Promise.resolve(errorBody("UPSTREAM_UNAVAILABLE", 503))
+          : fetchMock(input, init),
+      ),
+    );
+    renderWorkspace("/admin/users");
+    expect(await screen.findByText("user@example.com")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("link", { name: "设置" }));
+    expect(await screen.findByLabelText("每月 Token 上限")).toHaveValue(100000);
+  });
+
+  it("clears a status-only account filter from the no-match state", async () => {
+    const { fetchMock } = createBackend();
+    vi.stubGlobal("fetch", fetchMock);
+    renderWorkspace("/admin/users");
+    const user = userEvent.setup();
+    await screen.findByText("user@example.com");
+    await user.selectOptions(screen.getByLabelText("账号状态"), "disabled");
+    expect(await screen.findByText("没有匹配的账号")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(await screen.findByText("user@example.com")).toBeInTheDocument();
+  });
+
+  it("retries failed account pagination without losing loaded rows", async () => {
+    const { fetchMock } = createBackend();
+    let pageAttempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = requestUrl(input);
+        if (url.pathname === "/api/v1/admin/users") {
+          if (!url.searchParams.has("cursor"))
+            return Promise.resolve(
+              json({ users: usersFixture, nextCursor: "page-2" }),
+            );
+          pageAttempts++;
+          return Promise.resolve(
+            pageAttempts === 1
+              ? errorBody("UPSTREAM_UNAVAILABLE", 503)
+              : json({
+                  users: [
+                    {
+                      ...usersFixture[1],
+                      id: "next-user",
+                      email: "next@example.com",
+                    },
+                  ],
+                }),
+          );
+        }
+        return fetchMock(input, init);
+      }),
+    );
+    renderWorkspace("/admin/users");
+    const user = userEvent.setup();
+    await screen.findByText("user@example.com");
+    await user.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("加载失败");
+    expect(screen.getByText("user@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试加载" }));
+    expect(await screen.findByText("next@example.com")).toBeInTheDocument();
+    expect(screen.getAllByText("user@example.com")).toHaveLength(1);
+  });
+
+  it("switches account tabs with arrow keys and links the active panel", async () => {
+    const { fetchMock } = createBackend();
+    vi.stubGlobal("fetch", fetchMock);
+    renderWorkspace(`/admin/users/${userId}`);
+    const user = userEvent.setup();
+    const overview = await screen.findByRole("tab", { name: "概览" });
+    overview.focus();
+    await user.keyboard("{ArrowRight}");
+    const usage = screen.getByRole("tab", { name: "用量" });
+    expect(usage).toHaveFocus();
+    expect(usage).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute(
+      "aria-labelledby",
+      usage.id,
+    );
+  });
+
+  it("distinguishes temporary account failures from missing accounts and retries", async () => {
+    const { fetchMock } = createBackend();
+    let attempts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          requestUrl(input).pathname === `/api/v1/admin/users/${userId}` &&
+          ++attempts === 1
+        )
+          return Promise.resolve(errorBody("UPSTREAM_UNAVAILABLE", 503));
+        return fetchMock(input, init);
+      }),
+    );
+    renderWorkspace(`/admin/users/${userId}`);
+    expect(await screen.findByText("账号暂时无法加载")).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "重试" }));
+    expect(
+      await screen.findByRole("heading", { name: "user@example.com" }),
+    ).toBeInTheDocument();
+  });
+});
+
+it("does not expire the current page after an abandoned account mutation", async () => {
+  const { fetchMock } = createBackend();
+  const authRequired = vi.fn();
+  let finish!: (response: Response) => void;
+  const pending = new Promise<Response>((resolve) => {
+    finish = resolve;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+      requestUrl(input).pathname.endsWith("/sessions/revoke")
+        ? pending
+        : fetchMock(input, init),
+    ),
+  );
+  render(
+    <MemoryRouter initialEntries={["/admin/users"]}>
+      <AdminWorkspace
+        user={{ userId: adminId, authSubject: "local:admin", role: "admin" }}
+        onSignedOut={vi.fn()}
+        onAuthRequired={authRequired}
+      />
+    </MemoryRouter>,
+  );
+  const user = userEvent.setup();
+  await user.click(
+    await screen.findByRole("button", { name: "账号操作：user@example.com" }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "强制退出登录" }));
+  await user.click(
+    within(screen.getByRole("dialog")).getByRole("button", {
+      name: "强制退出登录",
+    }),
+  );
+  await user.click(screen.getByRole("link", { name: "设置" }));
+  await screen.findByLabelText("每月 Token 上限");
+  await act(async () => {
+    finish(errorBody("AUTH_REQUIRED", 401));
+    await pending;
+  });
+  expect(authRequired).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("每月 Token 上限")).toHaveValue(100000);
+});
+
+it("restores quota policy inputs without submitting invalid or discarded edits", async () => {
+  const { calls, fetchMock } = createBackend();
+  vi.stubGlobal("fetch", fetchMock);
+  renderWorkspace("/admin/settings");
+  const user = userEvent.setup();
+  const monthly = await screen.findByLabelText("每月 Token 上限");
+  await user.clear(monthly);
+  expect(monthly).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByRole("button", { name: "保存默认配额" })).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "撤销修改" }));
+  expect(monthly).toHaveValue(100000);
+  expect(monthly).not.toHaveAttribute("aria-invalid", "true");
+  expect(calls.filter((call) => call.method === "PUT")).toHaveLength(0);
+});
+
+it("rejects inverted audit date ranges and recovers after resetting filters", async () => {
+  const { calls, fetchMock } = createBackend();
+  vi.stubGlobal("fetch", fetchMock);
+  renderWorkspace("/admin/audit");
+  await screen.findByRole("table", { name: "操作审计记录" });
+  act(() => {
+    fireEvent.change(screen.getByLabelText("开始日期"), {
+      target: { value: "2026-09-14" },
+    });
+    fireEvent.change(screen.getByLabelText("结束日期"), {
+      target: { value: "2026-09-01" },
+    });
+  });
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "结束日期不能早于开始日期",
+  );
+  expect(calls.some((call) => call.url.includes("until=2026-09-01"))).toBe(
+    false,
+  );
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "重置筛选" }));
+  expect(
+    await screen.findByRole("table", { name: "操作审计记录" }),
+  ).toBeInTheDocument();
 });

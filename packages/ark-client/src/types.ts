@@ -22,14 +22,79 @@ export interface ArkSkillBindingInput {
   version?: string | undefined;
 }
 
+/**
+ * Ark MCP/Tool wire contract (see the create-Agent API reference).
+ *
+ * `mcp_servers` declares upstream endpoints on the Agent; `tools[]` enables
+ * them via `type: "mcp_toolset"` and points back with `mcp_server_name`.
+ * Declaring a server without a matching toolset leaves its tools disabled.
+ */
+export type ArkToolPermission = "always_allow" | "always_ask";
+
+export interface ArkMcpServerInput {
+  /** Ark currently supports URL-declared MCP servers only. */
+  type: "url";
+  /** Stable name referenced by `tools[].mcpServerName`; suggested `[a-z0-9_-]{1,64}`. */
+  name?: string | undefined;
+  url: string;
+}
+
+export interface ArkPermissionPolicyInput {
+  type: ArkToolPermission;
+}
+
+/** `default_config`: enablement and permission for tools without an entry in `configs`. */
+export interface ArkToolDefaultConfigInput {
+  enabled?: boolean | undefined;
+  permissionPolicy?: ArkPermissionPolicyInput | undefined;
+}
+
+/** One entry in `configs`: a named tool override. */
+export interface ArkToolConfigInput extends ArkToolDefaultConfigInput {
+  name: string;
+}
+
+export interface ArkMcpToolsetInput {
+  type: "mcp_toolset";
+  mcpServerName: string;
+  defaultConfig?: ArkToolDefaultConfigInput | undefined;
+  configs?: ArkToolConfigInput[] | undefined;
+}
+
+export interface ArkCustomToolInput {
+  type: "custom";
+  /** 1–128 chars: letters, digits, underscore or hyphen; unique per Agent. */
+  name: string;
+  description: string;
+  /** JSON Schema with a top-level `object` type. */
+  inputSchema: Record<string, unknown>;
+}
+
+export type ArkBuiltinToolsetId =
+  | "agent_toolset_20260401"
+  | "agent_toolset_20260701"
+  | "agent_toolset_20260916"
+  | "agent_toolset_multimodal_20260825";
+
+export interface ArkBuiltinToolsetInput {
+  type: ArkBuiltinToolsetId;
+  defaultConfig?: ArkToolDefaultConfigInput | undefined;
+  configs?: ArkToolConfigInput[] | undefined;
+}
+
+export type ArkAgentToolInput =
+  ArkMcpToolsetInput | ArkCustomToolInput | ArkBuiltinToolsetInput;
+
 export interface ArkAgentInput {
   name: string;
   description: string;
   modelId: string;
   systemPrompt: string;
-  toolsetId?: string | undefined;
-  toolPermission?: "always_allow" | undefined;
   skills?: ArkSkillBindingInput[] | undefined;
+  /** MCP endpoints declared on the Agent (max 20, unique URLs). */
+  mcpServers?: ArkMcpServerInput[] | undefined;
+  /** Tools enabled for this Agent (max 128), including MCP toolsets and custom tools. */
+  tools?: ArkAgentToolInput[] | undefined;
 }
 
 /**
@@ -150,6 +215,12 @@ export interface ArkSessionInput {
   agentVersion: number;
   environmentId: string;
   resources: ArkResourceInput[];
+  /**
+   * Per-user Vault bindings. The caller must derive these from the
+   * authenticated account, never from a client-supplied id: Vaults are shared
+   * within the workspace, so ownership is enforced by this application.
+   */
+  vaultIds?: string[] | undefined;
 }
 
 export interface ArkEventInput {

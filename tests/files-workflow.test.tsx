@@ -210,7 +210,15 @@ it.each(["Escape", "close button"])(
     await screen.findByText("报告-79.txt");
     await user.selectOptions(screen.getByLabelText("文件类型"), "text");
     const list = screen.getByRole("list", { name: "成果文件" });
-    const records = within(list).getAllByRole("listitem");
+    // All 80 files belong to one task, so they collapse into a single
+    // expandable record.
+    const group = within(list)
+      .getByText(/80 个文件/)
+      .closest("details")!;
+    fireEvent.click(within(group).getByText("来源任务"));
+    const records = within(
+      group.querySelector("ul") as HTMLUListElement,
+    ).getAllByRole("listitem");
     expect(records).toHaveLength(80);
     const firstRow = records[0]!;
     const trigger = within(firstRow).getByRole("button", { name: "预览" });
@@ -254,10 +262,9 @@ it.each(["Escape", "close button"])(
     expect(screen.getByLabelText("来源任务")).toHaveValue("source");
     expect(screen.getByLabelText("文件类型")).toHaveValue("text");
     expect(
-      within(screen.getByRole("list", { name: "成果文件" })).getAllByRole(
+      within(group.querySelector("ul") as HTMLUListElement).getAllByRole(
         "listitem",
       )[0],
     ).toBe(firstRow);
-    expect(within(firstRow).getByText("file-0")).toBeInTheDocument();
   },
 );

@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ArtifactSummary } from "../api.js";
 import {
   RAIL_DEFAULT_WIDTH,
   RAIL_MAX_WIDTH,
@@ -22,21 +23,34 @@ let overlay: boolean;
 let resizeContainer: () => void;
 const disconnect = vi.fn();
 
+const artifact: ArtifactSummary = {
+  id: "00000000-0000-4000-8000-000000000001",
+  sessionId: "00000000-0000-4000-8000-000000000002",
+  name: "report.jpg",
+  mimeType: "image/jpeg",
+  sizeBytes: 1024,
+  generatedAt: "2026-10-14T08:00:00.000Z",
+  deletionState: "none",
+  error: null,
+};
+
 function RailHarness({
   initialWidth = RAIL_DEFAULT_WIDTH,
   containerStyle = {},
+  artifacts = [],
+  selectable = false,
 } = {}) {
   const [width, setWidth] = useState(initialWidth);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   return (
     <div data-testid="workspace" style={containerStyle}>
       <main>Transcript</main>
       <WorkspaceRail
-        todos={[]}
-        artifacts={[]}
+        artifacts={artifacts}
         artifactsError={false}
         onRetryArtifacts={() => undefined}
-        selectedArtifactId={null}
-        onSelectArtifact={() => undefined}
+        selectedArtifactId={selectable ? selectedId : null}
+        onSelectArtifact={selectable ? setSelectedId : () => undefined}
         width={width}
         onWidthChange={setWidth}
       />
@@ -212,5 +226,53 @@ describe("B5 responsive workspace rail", () => {
     expect(rail()).toHaveStyle({ width: "340px" });
     unmount();
     expect(disconnect).toHaveBeenCalledOnce();
+  });
+});
+
+describe("WorkspaceRail artifacts section", () => {
+  // Selecting an artifact mounts the inline viewer; a failing fetch parks it
+  // in the error state, which is all these layout tests need.
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("gone", { status: 404 })),
+    );
+  });
+
+  function toggle() {
+    return screen.getByRole("button", { name: /Artifacts/ });
+  }
+
+  function select(artifactRow: ArtifactSummary) {
+    return screen.getByRole("button", { name: artifactRow.name });
+  }
+
+  it("shows no Progress section, only the artifacts list", () => {
+    render(<RailHarness artifacts={[artifact]} />);
+    expect(screen.queryByText("Progress")).not.toBeInTheDocument();
+    expect(screen.queryByText("No plan yet.")).not.toBeInTheDocument();
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(select(artifact)).toBeInTheDocument();
+  });
+
+  it("folds the list while a preview is open and unfolds when it closes", () => {
+    render(<RailHarness artifacts={[artifact]} selectable />);
+    fireEvent.click(select(artifact));
+    expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: artifact.name })).toBeNull();
+
+    fireEvent.click(toggle());
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(select(artifact)).toBeInTheDocument();
+  });
+
+  it("keeps the collapsed choice manual while no preview is open", () => {
+    render(<RailHarness artifacts={[artifact]} selectable />);
+    fireEvent.click(toggle());
+    expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: artifact.name })).toBeNull();
+
+    fireEvent.click(toggle());
+    expect(select(artifact)).toBeInTheDocument();
   });
 });

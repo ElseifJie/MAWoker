@@ -177,8 +177,14 @@ describe("PlatformAgentService", () => {
         ...input,
         // Preset Agents carry the platform-owned Memory Store framework.
         systemPrompt: withMemoryFramework(input.systemPrompt),
-        toolsetId: "agent_toolset_20260701",
-        toolPermission: "always_allow",
+        tools: [
+          {
+            type: "agent_toolset_20260701",
+            defaultConfig: {
+              permissionPolicy: { type: "always_allow" },
+            },
+          },
+        ],
       },
       correlationId: requestId,
     });

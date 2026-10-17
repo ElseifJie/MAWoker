@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiClientError,
   apiClient,
-  type AdminAuditEntry,
   type AdminAuditLogQuery,
   type AdminUserSummary,
 } from "../api.js";
 import {
+  Alert,
   Badge,
   Button,
   DataTable,
@@ -17,6 +17,9 @@ import {
   Select,
   Spinner,
 } from "../ui/index.js";
+import { AdminPagination } from "./AdminPagination.js";
+import { useAdminCollection } from "./useAdminCollection.js";
+import { actionLabel, resourceLabel, statusLabel } from "./presentation.js";
 import { formatDateTime } from "./format.js";
 
 const PAGE_SIZE = 50;
@@ -66,8 +69,6 @@ export function AdminAuditPage({
 }: {
   onAuthRequired: () => void;
 }) {
-  const [entries, setEntries] = useState<AdminAuditEntry[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [since, setSince] = useState(isoDaysAgo(DEFAULT_WINDOW_DAYS));
   const [until, setUntil] = useState("");
   const [action, setAction] = useState("");
@@ -75,74 +76,60 @@ export function AdminAuditPage({
   const [result, setResult] = useState("");
   const [actorId, setActorId] = useState("");
   const [admins, setAdmins] = useState<AdminUserSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    let active = true;
     apiClient
       .listAdminUsers({ limit: 100 })
-      .then((page) =>
-        setAdmins(page.users.filter((user) => user.role === "admin")),
-      )
-      .catch(() => undefined);
-  }, []);
+      .then((page) => {
+        if (active)
+          setAdmins(page.users.filter((user) => user.role === "admin"));
+      })
+      .catch((error: unknown) => {
+        if (active && error instanceof ApiClientError && error.isAuthRequired)
+          onAuthRequired();
+      });
+    return () => {
+      active = false;
+    };
+  }, [onAuthRequired]);
 
+  const validDates =
+    (!since || !Number.isNaN(new Date(`${since}T00:00:00Z`).getTime())) &&
+    (!until || !Number.isNaN(new Date(`${until}T00:00:00Z`).getTime())) &&
+    (!since || !until || since <= until);
   const query = useMemo<AdminAuditLogQuery>(
     () => ({
-      since: since ? new Date(`${since}T00:00:00Z`).toISOString() : undefined,
-      until: until
-        ? new Date(`${until}T23:59:59.999Z`).toISOString()
-        : undefined,
+      since:
+        validDates && since
+          ? new Date(`${since}T00:00:00Z`).toISOString()
+          : undefined,
+      until:
+        validDates && until
+          ? new Date(`${until}T23:59:59.999Z`).toISOString()
+          : undefined,
       action: action || undefined,
       resourceType: resourceType || undefined,
       result: (result || undefined) as AdminAuditLogQuery["result"],
       actorId: actorId || undefined,
     }),
-    [since, until, action, resourceType, result, actorId],
+    [since, until, action, resourceType, result, actorId, validDates],
   );
 
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setLoadError(false);
-    apiClient
-      .listAdminAuditLogs({ ...query, limit: PAGE_SIZE })
-      .then((page) => {
-        if (!active) return;
-        setEntries(page.entries);
-        setNextCursor(page.nextCursor);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        if (error instanceof ApiClientError && error.isAuthRequired) {
-          onAuthRequired();
-          return;
-        }
-        setLoadError(true);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+  const fetchEntries = useCallback(
+    async (cursor?: string) => {
+      if (!validDates) return { items: [], nextCursor: undefined };
+      const page = await apiClient.listAdminAuditLogs({
+        ...query,
+        limit: PAGE_SIZE,
+        cursor,
       });
-    return () => {
-      active = false;
-    };
-  }, [query, onAuthRequired, reloadKey]);
-
-  function loadMore() {
-    if (!nextCursor) return;
-    apiClient
-      .listAdminAuditLogs({ ...query, limit: PAGE_SIZE, cursor: nextCursor })
-      .then((page) => {
-        setEntries((current) => [...current, ...page.entries]);
-        setNextCursor(page.nextCursor);
-      })
-      .catch((error: unknown) => {
-        if (error instanceof ApiClientError && error.isAuthRequired) {
-          onAuthRequired();
-        }
-      });
-  }
+      return { items: page.entries, nextCursor: page.nextCursor };
+    },
+    [query, validDates],
+  );
+  const collection = useAdminCollection(fetchEntries, onAuthRequired);
+  const { items: entries, loading, loadError, reload } = collection;
 
   function resetFilters() {
     setSince(isoDaysAgo(DEFAULT_WINDOW_DAYS));
@@ -155,10 +142,13 @@ export function AdminAuditPage({
 
   return (
     <div className="page admin-page">
-      <PageHeader title="Audit" description="Last 7 days by default." />
+      <PageHeader
+        title="审计记录"
+        description="默认查看最近 7 天的操作，日期筛选按 UTC 计算。"
+      />
 
       <div className="admin-filter-grid">
-        <Field label="From">
+        <Field label="开始日期">
           <Input
             type="date"
             value={since}
@@ -166,7 +156,7 @@ export function AdminAuditPage({
             onChange={(event) => setSince(event.target.value)}
           />
         </Field>
-        <Field label="To">
+        <Field label="结束日期">
           <Input
             type="date"
             value={until}
@@ -175,38 +165,38 @@ export function AdminAuditPage({
             onChange={(event) => setUntil(event.target.value)}
           />
         </Field>
-        <Field label="Action">
+        <Field label="操作类型">
           <Select
             value={action}
             onChange={(event) => setAction(event.target.value)}
           >
-            <option value="">All actions</option>
+            <option value="">全部操作</option>
             {ACTIONS.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {actionLabel(value)}
               </option>
             ))}
           </Select>
         </Field>
-        <Field label="Resource type">
+        <Field label="资源类型">
           <Select
             value={resourceType}
             onChange={(event) => setResourceType(event.target.value)}
           >
-            <option value="">All resources</option>
+            <option value="">全部资源</option>
             {RESOURCE_TYPES.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {resourceLabel(value)}
               </option>
             ))}
           </Select>
         </Field>
-        <Field label="Operator">
+        <Field label="操作人">
           <Select
             value={actorId}
             onChange={(event) => setActorId(event.target.value)}
           >
-            <option value="">Anyone</option>
+            <option value="">全部操作人</option>
             {admins.map((admin) => (
               <option key={admin.id} value={admin.id}>
                 {admin.email}
@@ -214,67 +204,71 @@ export function AdminAuditPage({
             ))}
           </Select>
         </Field>
-        <Field label="Result">
+        <Field label="结果">
           <Select
             value={result}
             onChange={(event) => setResult(event.target.value)}
           >
-            <option value="">Any result</option>
-            <option value="succeeded">Succeeded</option>
-            <option value="failed">Failed</option>
+            <option value="">全部结果</option>
+            <option value="succeeded">成功</option>
+            <option value="failed">失败</option>
           </Select>
         </Field>
         <div className="admin-filter-actions">
           <Button variant="secondary" onClick={resetFilters}>
-            Reset
+            重置筛选
           </Button>
         </div>
       </div>
 
-      {loading ? (
+      {!validDates ? (
+        <Alert tone="danger">请选择有效日期，结束日期不能早于开始日期。</Alert>
+      ) : loading ? (
         <div className="admin-loading" aria-busy="true">
-          <Spinner label="Loading audit log" />
+          <Spinner label="正在加载审计记录" />
         </div>
       ) : loadError ? (
         <EmptyState
-          title="Audit log unavailable"
-          description="Audit entries could not be loaded."
+          title="审计记录暂时无法加载"
+          description="审计记录加载失败，请重试。"
           action={
-            <Button
-              variant="secondary"
-              onClick={() => setReloadKey((key) => key + 1)}
-            >
-              Retry
+            <Button variant="secondary" onClick={reload}>
+              重试
             </Button>
           }
         />
       ) : entries.length === 0 ? (
         <EmptyState
-          title="No matching entries"
-          description="No audit entries match these filters in the selected window."
+          title="没有匹配的审计记录"
+          description="所选时间内没有符合筛选条件的操作记录。"
+          action={
+            <Button variant="secondary" onClick={resetFilters}>
+              重置筛选
+            </Button>
+          }
         />
       ) : (
         <>
-          <DataTable caption="Audit log" minWidth="wide">
+          <DataTable caption="操作审计记录" minWidth="wide">
             <thead>
               <tr>
-                <th scope="col">Time</th>
-                <th scope="col">Operator</th>
-                <th scope="col">Action</th>
-                <th scope="col">Resource</th>
-                <th scope="col">Result</th>
+                <th scope="col">时间</th>
+                <th scope="col">操作人</th>
+                <th scope="col">操作类型</th>
+                <th scope="col">关联资源</th>
+                <th scope="col">结果</th>
               </tr>
             </thead>
             <tbody>
               {entries.map((entry) => (
                 <tr key={entry.id}>
-                  <td data-label="Time">
+                  <td data-label="时间">
                     <span className="admin-dimmed admin-time">
                       {formatDateTime(entry.createdAt)}
                     </span>
                   </td>
-                  <td data-label="Operator">
-                    <span>{entry.actorEmail ?? "System"}</span>
+                  <td data-label="操作人">
+                    <span>{entry.actorEmail ?? "系统"}</span>
                     {entry.ownerEmail &&
                     entry.ownerEmail !== entry.actorEmail ? (
                       <span className="admin-dimmed admin-quota-of">
@@ -283,30 +277,38 @@ export function AdminAuditPage({
                       </span>
                     ) : null}
                   </td>
-                  <td data-label="Action">
+                  <td data-label="操作类型">
                     <span className="admin-mono admin-action">
-                      {entry.action}
+                      {actionLabel(entry.action)}
                     </span>
+                    <details className="admin-technical-details">
+                      <summary>操作标识</summary>
+                      <code>{entry.action}</code>
+                      <p>请求编号：{entry.requestId}</p>
+                    </details>
                   </td>
-                  <td data-label="Resource">
+                  <td data-label="关联资源">
                     <span>
-                      {entry.resourceType}
+                      {resourceLabel(entry.resourceType)}
                       {entry.resourceId ? (
                         <span className="admin-dimmed admin-mono admin-resource-id">
                           {" "}
-                          {truncateId(entry.resourceId)}
+                          <details className="admin-technical-details">
+                            <summary>查看编号</summary>
+                            <code>{entry.resourceId}</code>
+                          </details>
                         </span>
                       ) : null}
                     </span>
                   </td>
-                  <td data-label="Result">
+                  <td data-label="结果">
                     <div className="admin-status-stack">
                       <Badge
                         tone={
                           entry.result === "succeeded" ? "success" : "danger"
                         }
                       >
-                        {entry.result}
+                        {statusLabel(entry.result)}
                       </Badge>
                       {entry.errorCode ? (
                         <span className="admin-mono admin-dimmed">
@@ -319,21 +321,11 @@ export function AdminAuditPage({
               ))}
             </tbody>
           </DataTable>
-          {nextCursor ? (
-            <div className="admin-load-more">
-              <Button variant="secondary" onClick={loadMore}>
-                Load more
-              </Button>
-            </div>
-          ) : (
-            <p className="admin-table-end">End of entries</p>
-          )}
         </>
       )}
+      {!loading && !loadError && validDates ? (
+        <AdminPagination {...collection} count={entries.length} />
+      ) : null}
     </div>
   );
-}
-
-function truncateId(value: string): string {
-  return value.length > 13 ? `${value.slice(0, 13)}…` : value;
 }

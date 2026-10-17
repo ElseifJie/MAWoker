@@ -805,6 +805,151 @@ describe("HttpArkGateway", () => {
     expect(JSON.stringify(session)).not.toContain("private-bucket");
   });
 
+  it("serializes MCP servers, toolsets, and custom tools using the Agent wire contract", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: agentInput.name,
+          description: agentInput.description,
+          model: { id: agentInput.modelId },
+          instructions: agentInput.systemPrompt,
+          mcp_servers: [
+            { type: "url", name: "feishu", url: "https://mcp.example.com/mcp" },
+          ],
+          tools: [
+            {
+              type: "mcp_toolset",
+              mcp_server_name: "feishu",
+              default_config: {
+                enabled: true,
+                permission_policy: { type: "always_ask" },
+              },
+              configs: [{ name: "search_docs", enabled: true }],
+            },
+            {
+              type: "custom",
+              name: "create_automation",
+              description: "Create a scheduled automation.",
+              input_schema: {
+                type: "object",
+                properties: { title: { type: "string" } },
+                required: ["title"],
+                additionalProperties: false,
+              },
+            },
+          ],
+        });
+        return Response.json(arkAgentResponse);
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(
+      gateway.createAgent({
+        ...agentInput,
+        mcpServers: [
+          { type: "url", name: "feishu", url: "https://mcp.example.com/mcp" },
+        ],
+        tools: [
+          {
+            type: "mcp_toolset",
+            mcpServerName: "feishu",
+            defaultConfig: {
+              enabled: true,
+              permissionPolicy: { type: "always_ask" },
+            },
+            configs: [{ name: "search_docs", enabled: true }],
+          },
+          {
+            type: "custom",
+            name: "create_automation",
+            description: "Create a scheduled automation.",
+            inputSchema: {
+              type: "object",
+              properties: { title: { type: "string" } },
+              required: ["title"],
+              additionalProperties: false,
+            },
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ id: "agent-1" });
+  });
+
+  it("serializes the built-in toolset using the v3 tools array", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          name: agentInput.name,
+          description: agentInput.description,
+          model: { id: agentInput.modelId },
+          instructions: agentInput.systemPrompt,
+          tools: [
+            {
+              type: "agent_toolset_20260701",
+              default_config: {
+                permission_policy: { type: "always_allow" },
+              },
+            },
+          ],
+        });
+        return Response.json(arkAgentResponse);
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(
+      gateway.createAgent({
+        ...agentInput,
+        tools: [
+          {
+            type: "agent_toolset_20260701",
+            defaultConfig: {
+              permissionPolicy: { type: "always_allow" },
+            },
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ id: "agent-1" });
+  });
+
+  it("binds caller-derived Vault ids when creating a Session", async () => {
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          agent: { type: "agent", id: "agent-1", version: 1 },
+          environment_id: "environment-1",
+          resources: [],
+          vault_ids: ["vault-1", "vault-2"],
+        });
+        return Response.json(arkSessionResponse);
+      },
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(
+      gateway.createSession({
+        agentId: "agent-1",
+        agentVersion: 1,
+        environmentId: "environment-1",
+        resources: [],
+        vaultIds: ["vault-1", "vault-2"],
+      }),
+    ).resolves.toEqual(normalizedSession);
+  });
+
   it("accepts an omitted Environment scope while retaining its unknown value and verified identity fields", async () => {
     const environment = { ...arkSessionResponse.environment };
     delete (environment as Partial<typeof environment>).scope;

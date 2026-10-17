@@ -13,13 +13,14 @@ import {
   PageHeader,
   Spinner,
 } from "../ui/index.js";
+import { useAdminLifetime } from "./useAdminLifetime.js";
 import { formatDateTime } from "./format.js";
 
 const QUOTA_FIELDS: Array<{ key: keyof AdminQuota; label: string }> = [
-  { key: "personalAgentLimit", label: "Personal Agent limit" },
-  { key: "concurrentSessionLimit", label: "Concurrent Session limit" },
-  { key: "dailySessionLimit", label: "Daily Session limit" },
-  { key: "monthlyTokenLimit", label: "Monthly token limit" },
+  { key: "personalAgentLimit", label: "个人助手上限" },
+  { key: "concurrentSessionLimit", label: "同时运行任务上限" },
+  { key: "dailySessionLimit", label: "每日任务上限" },
+  { key: "monthlyTokenLimit", label: "每月 Token 上限" },
 ];
 
 type QuotaDraft = Record<keyof AdminQuota, string>;
@@ -66,6 +67,8 @@ export function AdminSettingsPage({
   } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const capture = useAdminLifetime();
+  const saveLock = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -100,18 +103,23 @@ export function AdminSettingsPage({
     if (!parsed) {
       setFeedback({
         tone: "danger",
-        message: "Every limit must be a non-negative whole number.",
+        message: "所有配额必须为非负整数。",
       });
       return;
     }
+    if (saveLock.current) return;
+    saveLock.current = true;
+    const isCurrent = capture();
     setPending(true);
     setFeedback(null);
     try {
       const updated = await apiClient.updateAdminQuotaPolicy(parsed);
+      if (!isCurrent()) return;
       setPolicy(updated);
       setDraft(draftFromPolicy(updated));
-      setFeedback({ tone: "success", message: "Default quota policy saved." });
+      setFeedback({ tone: "success", message: "平台默认配额已保存。" });
     } catch (error) {
+      if (!isCurrent()) return;
       if (error instanceof ApiClientError && error.isAuthRequired) {
         onAuthRequired();
         return;
@@ -120,38 +128,35 @@ export function AdminSettingsPage({
         tone: "danger",
         message:
           error instanceof ApiClientError && error.retryable
-            ? "The service is temporarily unavailable. Try again."
-            : "The policy could not be saved. Review the values and try again.",
+            ? "服务暂时不可用，请稍后重试。"
+            : "默认配额保存失败，请检查输入后重试。",
       });
     } finally {
-      setPending(false);
+      saveLock.current = false;
+      if (isCurrent()) setPending(false);
     }
   }
 
   if (loading) {
     return (
-      <div className="page admin-page" aria-busy="true">
-        <Spinner label="Loading settings" />
-        <p className="admin-dimmed">Loading settings…</p>
+      <div className="page admin-page admin-settings-page" aria-busy="true">
+        <Spinner label="正在加载设置" />
+        <p className="admin-dimmed">正在加载设置…</p>
       </div>
     );
   }
 
   if (loadError || !policy || !draft) {
     return (
-      <div className="page admin-page">
-        <PageHeader
-          eyebrow="Administration"
-          title="Settings"
-          headingRef={headingRef}
-        />
-        <Alert tone="danger">Settings could not be loaded.</Alert>
+      <div className="page admin-page admin-settings-page">
+        <PageHeader eyebrow="管理工作台" title="设置" headingRef={headingRef} />
+        <Alert tone="danger">设置加载失败，请重试。</Alert>
         <div className="admin-load-more">
           <Button
             variant="secondary"
             onClick={() => setReloadKey((key) => key + 1)}
           >
-            Retry
+            重试
           </Button>
         </div>
       </div>
@@ -159,59 +164,95 @@ export function AdminSettingsPage({
   }
 
   const parsed = parseDraft(draft);
-  const dirty =
-    parsed !== null &&
-    QUOTA_FIELDS.some(({ key }) => parsed[key] !== policy[key]);
+  const dirty = QUOTA_FIELDS.some(
+    ({ key }) => draft[key] !== String(policy[key]),
+  );
 
   return (
-    <div className="page admin-page">
-      <PageHeader title="Settings" headingRef={headingRef} />
+    <div className="page admin-page admin-settings-page">
+      <PageHeader
+        title="设置"
+        description="配置平台默认配额，用户账号可单独覆盖各项限制。"
+        headingRef={headingRef}
+      />
 
-      <section className="admin-section" aria-label="Default quota policy">
-        <h2 className="admin-section__title">Default quota policy</h2>
+      <section className="admin-section admin-panel" aria-label="平台默认配额">
+        <h2 className="admin-section__title">平台默认配额</h2>
         <p className="admin-dimmed admin-section__hint">
-          Applies to every account that has no explicit override on a dimension.
-          Lowering the monthly token limit re-evaluates current usage and
-          interrupts running sessions that now exceed it.
+          默认值适用于未设置自定义配额的个人账号。每项配额均为非负整数，0
+          表示不允许使用该项能力。
         </p>
-        <div className="admin-quota-fields">
-          {QUOTA_FIELDS.map(({ key, label }) => (
-            <Field label={label} key={key}>
-              <Input
-                aria-label={label}
-                type="number"
-                min={0}
-                max={Number.MAX_SAFE_INTEGER}
-                step={1}
-                value={draft[key]}
-                disabled={pending}
-                onChange={(event) =>
-                  setDraft((current) =>
-                    current
-                      ? { ...current, [key]: event.target.value }
-                      : current,
-                  )
+        <Alert tone="info">
+          降低每月 Token
+          上限会重新检查当前用量，并中断已超出新上限的运行中任务。
+        </Alert>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (parsed && dirty) void savePolicy();
+          }}
+        >
+          <div className="admin-quota-fields">
+            {QUOTA_FIELDS.map(({ key, label }) => (
+              <Field
+                label={label}
+                key={key}
+                error={
+                  draft[key].trim() === "" ||
+                  !Number.isSafeInteger(Number(draft[key])) ||
+                  Number(draft[key]) < 0
+                    ? "请输入非负整数。"
+                    : undefined
                 }
-              />
-            </Field>
-          ))}
-        </div>
-        <div className="admin-settings-footer">
-          <Button
-            onClick={() => void savePolicy()}
-            loading={pending}
-            disabled={!parsed || !dirty}
-          >
-            <span className="admin-loading-icon-slot" aria-hidden="true">
-              {pending ? <Spinner size={15} /> : null}
+              >
+                <Input
+                  aria-label={label}
+                  type="number"
+                  min={0}
+                  max={Number.MAX_SAFE_INTEGER}
+                  step={1}
+                  value={draft[key]}
+                  disabled={pending}
+                  onChange={(event) =>
+                    setDraft((current) =>
+                      current
+                        ? { ...current, [key]: event.target.value }
+                        : current,
+                    )
+                  }
+                />
+              </Field>
+            ))}
+          </div>
+          <div className="admin-settings-footer">
+            <Button
+              type="submit"
+              loading={pending}
+              disabled={!parsed || !dirty}
+            >
+              <span className="admin-loading-icon-slot" aria-hidden="true">
+                {pending ? <Spinner size={15} /> : null}
+              </span>
+              保存默认配额
+            </Button>
+            {dirty ? (
+              <Button
+                variant="text"
+                disabled={pending}
+                onClick={() => {
+                  setDraft(draftFromPolicy(policy));
+                  setFeedback(null);
+                }}
+              >
+                撤销修改
+              </Button>
+            ) : null}
+            <span className="admin-dimmed">
+              更新于 {formatDateTime(policy.updatedAt)}
+              {policy.updatedBy ? "" : " · 初始配置"}
             </span>
-            Save policy
-          </Button>
-          <span className="admin-dimmed">
-            Last updated {formatDateTime(policy.updatedAt)}
-            {policy.updatedBy ? "" : " · seeded"}
-          </span>
-        </div>
+          </div>
+        </form>
       </section>
 
       {feedback ? (

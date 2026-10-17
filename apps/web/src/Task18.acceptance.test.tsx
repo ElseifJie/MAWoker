@@ -314,15 +314,15 @@ describe("Task 18 browser acceptance", () => {
     const user = await signIn("admin@example.com");
 
     expect(
-      await screen.findByRole("heading", { name: "Agents" }),
+      await screen.findByRole("heading", { name: "助手管理" }),
     ).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "New platform Agent" }),
     ).not.toBeInTheDocument();
     expect(await screen.findByText("Research assistant")).toBeVisible();
 
-    await user.click(screen.getByRole("link", { name: "Users" }));
-    await screen.findByRole("heading", { name: "Users" });
+    await user.click(screen.getByRole("link", { name: "用户管理" }));
+    await screen.findByRole("heading", { name: "用户管理" });
     // Account management lives on the detail page.
     await user.click(
       await screen.findByRole("link", { name: "user-a@example.com" }),
@@ -334,21 +334,21 @@ describe("Task 18 browser acceptance", () => {
       }),
     ).toBeVisible();
     await user.selectOptions(
-      screen.getByLabelText("Default Agent for user-a@example.com"),
+      screen.getByLabelText("user-a@example.com 的默认助手"),
       backend.createdPlatformAgentId,
     );
     await user.click(
       screen.getByRole("button", {
-        name: "Save default Agent for user-a@example.com",
+        name: "保存 user-a@example.com 的默认助手",
       }),
     );
-    expect(await screen.findByText("Default Agent saved.")).toBeVisible();
+    expect(await screen.findByText("默认助手已保存。")).toBeVisible();
 
     const quotaValues = [
-      ["Personal Agent limit for user-a@example.com", "12"],
-      ["Concurrent Session limit for user-a@example.com", "3"],
-      ["Daily Session limit for user-a@example.com", "30"],
-      ["Monthly token limit for user-a@example.com", "2000"],
+      ["user-a@example.com 的个人助手上限", "12"],
+      ["user-a@example.com 的同时运行任务上限", "3"],
+      ["user-a@example.com 的每日任务上限", "30"],
+      ["user-a@example.com 的每月 Token 上限", "2000"],
     ] as const;
     for (const [label, value] of quotaValues) {
       const input = screen.getByLabelText(label);
@@ -357,15 +357,15 @@ describe("Task 18 browser acceptance", () => {
     }
     await user.click(
       screen.getByRole("button", {
-        name: "Save quotas for user-a@example.com",
+        name: "保存 user-a@example.com 的配额",
       }),
     );
-    expect(await screen.findByText("Quotas saved.")).toBeVisible();
+    expect(await screen.findByText("配额已保存。")).toBeVisible();
 
-    await user.click(screen.getByRole("link", { name: "Agents" }));
+    await user.click(screen.getByRole("link", { name: "助手管理" }));
     expect(await screen.findByText("Research assistant")).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: /Actions for/ }),
+      screen.queryByRole("button", { name: /账号操作：/ }),
     ).not.toBeInTheDocument();
     expect(
       backend.calls.some(

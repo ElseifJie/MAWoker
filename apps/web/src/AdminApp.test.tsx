@@ -13,6 +13,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { StrictMode } from "react";
 import { App } from "./App.js";
 
 const adminStyles = readFileSync(
@@ -294,18 +295,18 @@ describe("administrator role routing", () => {
     renderApp("/files");
 
     expect(
-      await screen.findByRole("heading", { name: "Users" }),
+      await screen.findByRole("heading", { name: "用户管理" }),
     ).toBeInTheDocument();
     await screen.findByText("user@example.com");
     expect(document.querySelector(".ui-app-shell")).toBeInTheDocument();
     const navigation = screen.getByRole("navigation", {
-      name: "Administration",
+      name: "管理工作台",
     });
     expect(
-      within(navigation).getByRole("link", { name: "Agents" }),
+      within(navigation).getByRole("link", { name: "助手管理" }),
     ).toBeInTheDocument();
     expect(
-      within(navigation).getByRole("link", { name: "Users" }),
+      within(navigation).getByRole("link", { name: "用户管理" }),
     ).toBeInTheDocument();
     for (const name of ["新任务", "我的文件", "历史任务"]) {
       expect(
@@ -335,7 +336,7 @@ describe("administrator role routing", () => {
       await screen.findByRole("heading", { name: "新任务" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("navigation", { name: "Administration" }),
+      screen.queryByRole("navigation", { name: "管理工作台" }),
     ).not.toBeInTheDocument();
     expect(
       vi
@@ -352,7 +353,7 @@ describe("administrator role routing", () => {
     renderApp("/admin/users");
 
     expect(
-      await screen.findByRole("heading", { name: "Users" }),
+      await screen.findByRole("heading", { name: "用户管理" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("user@example.com")).toBeInTheDocument();
     expect(screen.getByText("Research assistant")).toBeInTheDocument();
@@ -376,17 +377,19 @@ describe("administrator role routing", () => {
       level: 1,
     });
     expect(
-      screen.getByRole("region", { name: "Identity" }),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Quotas" })).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("Default Agent for user@example.com"),
+      screen.getByRole("region", { name: "账号信息" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByLabelText("Monthly token limit for user@example.com"),
+      screen.getByRole("region", { name: "使用配额" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Sessions" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Audit" })).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("user@example.com 的默认助手"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("user@example.com 的每月 Token 上限"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "任务" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "审计记录" })).toBeInTheDocument();
   });
 
   it("orders the account heading before its subordinate management groups", async () => {
@@ -406,9 +409,10 @@ describe("administrator role routing", () => {
       ),
     ).toEqual([
       "H1:user@example.com",
-      "H2:Identity",
-      "H3:Default Agent",
-      "H2:Quotas",
+      "H2:账号信息",
+      "H3:默认助手",
+      "H2:使用配额",
+      "H2:账号操作",
     ]);
   });
 
@@ -418,10 +422,10 @@ describe("administrator role routing", () => {
 
     renderApp("/admin/platform-agents");
     const user = userEvent.setup();
-    await screen.findByRole("heading", { name: "Agents" });
+    await screen.findByRole("heading", { name: "助手管理" });
     const sidebar = screen.getByRole("complementary", { hidden: true });
     const menu = screen.getByRole("button", {
-      name: "Open administration navigation",
+      name: "打开管理导航",
     });
 
     expect(sidebar.id).not.toBe("");
@@ -447,15 +451,15 @@ describe("platform Agent administration", () => {
     const fetchMock = vi.fn(adminHandler());
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/admin/platform-agents");
-    const table = await screen.findByRole("table", { name: "Platform Agents" });
+    const table = await screen.findByRole("table", { name: "平台助手列表" });
     expect(within(table).getByText("Research assistant")).toBeInTheDocument();
     expect(within(table).getByText("Legacy assistant")).toBeInTheDocument();
     expect(within(table).getByText(longModelId).closest("td")).toHaveAttribute(
       "data-label",
-      "Model",
+      "模型",
     );
     expect(
-      screen.getByText(/System Agents are configured through SYSTEM_AGENT_IDS/),
+      screen.getByText(/平台助手通过 .env 中的 SYSTEM_AGENT_IDS 配置/),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("button", { name: "New platform Agent" }),
@@ -483,7 +487,7 @@ describe("platform Agent administration", () => {
       vi.stubGlobal("fetch", vi.fn(adminHandler()));
       renderApp(path);
       expect(
-        await screen.findByRole("table", { name: "Platform Agents" }),
+        await screen.findByRole("table", { name: "平台助手列表" }),
       ).toBeInTheDocument();
       expect(screen.queryByLabelText("Name")).not.toBeInTheDocument();
     },
@@ -500,9 +504,7 @@ describe("platform Agent administration", () => {
       ),
     );
     renderApp("/admin/platform-agents");
-    expect(
-      await screen.findByText("No System Agents configured."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("还没有配置平台助手")).toBeInTheDocument();
   });
 
   it("switches Platform Agents to labeled records before the 1024px table overflows", () => {
@@ -602,10 +604,10 @@ describe("user administration", () => {
     });
     const saveButtons = [
       screen.getByRole("button", {
-        name: "Save default Agent for user@example.com",
+        name: "保存 user@example.com 的默认助手",
       }),
       screen.getByRole("button", {
-        name: "Save quotas for user@example.com",
+        name: "保存 user@example.com 的配额",
       }),
     ];
     for (const button of saveButtons) {
@@ -625,20 +627,20 @@ describe("user administration", () => {
     renderApp(`/admin/users/${userId}`);
     const user = userEvent.setup();
     const quotaInput = await screen.findByLabelText(
-      "Personal Agent limit for user@example.com",
+      "user@example.com 的个人助手上限",
     );
     await user.clear(quotaInput);
     await user.type(quotaInput, "77");
     await user.selectOptions(
-      screen.getByLabelText("Default Agent for user@example.com"),
+      screen.getByLabelText("user@example.com 的默认助手"),
       agentId,
     );
     const saveDefaultAgent = screen.getByRole("button", {
-      name: "Save default Agent for user@example.com",
+      name: "保存 user@example.com 的默认助手",
     });
     await user.click(saveDefaultAgent);
 
-    expect(await screen.findByText("Default Agent saved.")).toBeInTheDocument();
+    expect(await screen.findByText("默认助手已保存。")).toBeInTheDocument();
     expect(quotaInput).toHaveValue(77);
     expect(saveDefaultAgent).toBeDisabled();
   });
@@ -662,21 +664,19 @@ describe("user administration", () => {
     renderApp(`/admin/users/${userId}`);
     const user = userEvent.setup();
     const agentSelect = await screen.findByLabelText(
-      "Default Agent for user@example.com",
+      "user@example.com 的默认助手",
     );
     await user.selectOptions(agentSelect, disabledAgentId);
-    const quotaInput = screen.getByLabelText(
-      "Personal Agent limit for user@example.com",
-    );
+    const quotaInput = screen.getByLabelText("user@example.com 的个人助手上限");
     await user.clear(quotaInput);
     await user.type(quotaInput, "78");
     await user.click(
       screen.getByRole("button", {
-        name: "Save quotas for user@example.com",
+        name: "保存 user@example.com 的配额",
       }),
     );
 
-    expect(await screen.findByText("Quotas saved.")).toBeInTheDocument();
+    expect(await screen.findByText("配额已保存。")).toBeInTheDocument();
     expect(agentSelect).toHaveValue(disabledAgentId);
     // The refreshed effective value replaces the saved dimension.
     expect(quotaInput).toHaveValue(78);
@@ -705,19 +705,17 @@ describe("user administration", () => {
       level: 1,
     });
 
-    const agentSelect = screen.getByLabelText(
-      "Default Agent for user@example.com",
-    );
+    const agentSelect = screen.getByLabelText("user@example.com 的默认助手");
     expect(
       within(agentSelect).getByRole("option", { name: "Legacy assistant" }),
     ).toBeDisabled();
     await user.selectOptions(agentSelect, agentId);
     await user.click(
       screen.getByRole("button", {
-        name: "Save default Agent for user@example.com",
+        name: "保存 user@example.com 的默认助手",
       }),
     );
-    expect(await screen.findByText("Default Agent saved.")).toBeInTheDocument();
+    expect(await screen.findByText("默认助手已保存。")).toBeInTheDocument();
     expect(
       calls.filter(
         (call) => call.method === "PUT" && call.path.endsWith("/default-agent"),
@@ -726,13 +724,13 @@ describe("user administration", () => {
     expect(calls.some((call) => call.path.endsWith("/quota"))).toBe(false);
 
     const saveQuotas = screen.getByRole("button", {
-      name: "Save quotas for user@example.com",
+      name: "保存 user@example.com 的配额",
     });
     const quotaValues = [
-      ["Personal Agent limit for user@example.com", "12"],
-      ["Concurrent Session limit for user@example.com", "3"],
-      ["Daily Session limit for user@example.com", "30"],
-      ["Monthly token limit for user@example.com", "200000"],
+      ["user@example.com 的个人助手上限", "12"],
+      ["user@example.com 的同时运行任务上限", "3"],
+      ["user@example.com 的每日任务上限", "30"],
+      ["user@example.com 的每月 Token 上限", "200000"],
     ] as const;
     for (const [label, value] of quotaValues) {
       const input = screen.getByLabelText(label);
@@ -740,7 +738,7 @@ describe("user administration", () => {
       await user.type(input, value);
     }
     await user.click(saveQuotas);
-    expect(await screen.findByText("Quotas saved.")).toBeInTheDocument();
+    expect(await screen.findByText("配额已保存。")).toBeInTheDocument();
     expect(
       calls.filter(
         (call) => call.method === "PUT" && call.path.endsWith("/quota"),
@@ -758,7 +756,7 @@ describe("user administration", () => {
 
     // Clearing a dimension back to empty means "inherit the default policy".
     await user.clear(
-      screen.getByLabelText("Monthly token limit for user@example.com"),
+      screen.getByLabelText("user@example.com 的每月 Token 上限"),
     );
     await user.click(saveQuotas);
     await waitFor(() =>
@@ -840,15 +838,12 @@ describe("user account administration", () => {
 
     renderApp("/admin/users");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "New user" }));
+    await user.click(await screen.findByRole("button", { name: "新建账号" }));
 
-    await user.type(screen.getByLabelText("Email"), "Newcomer@Example.com");
-    await user.type(screen.getByLabelText("Password"), "newcomer-password");
-    await user.type(
-      screen.getByLabelText("Confirm password"),
-      "newcomer-password",
-    );
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.type(screen.getByLabelText("邮箱"), "Newcomer@Example.com");
+    await user.type(screen.getByLabelText("密码"), "newcomer-password");
+    await user.type(screen.getByLabelText("确认密码"), "newcomer-password");
+    await user.click(screen.getByRole("button", { name: "创建账号" }));
 
     expect(await screen.findByText("newcomer@example.com")).toBeInTheDocument();
     const createCall = calls.find(
@@ -866,14 +861,14 @@ describe("user account administration", () => {
 
     renderApp("/admin/users");
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "New user" }));
-    await user.type(screen.getByLabelText("Email"), "newcomer@example.com");
-    await user.type(screen.getByLabelText("Password"), "newcomer-password");
-    await user.type(screen.getByLabelText("Confirm password"), "different");
+    await user.click(await screen.findByRole("button", { name: "新建账号" }));
+    await user.type(screen.getByLabelText("邮箱"), "newcomer@example.com");
+    await user.type(screen.getByLabelText("密码"), "newcomer-password");
+    await user.type(screen.getByLabelText("确认密码"), "different");
 
-    expect(screen.getByRole("button", { name: "Create user" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "创建账号" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Create user" }));
+    await user.click(screen.getByRole("button", { name: "创建账号" }));
     expect(calls.some((call) => call.method === "POST")).toBe(false);
   });
 
@@ -884,19 +879,37 @@ describe("user account administration", () => {
     const user = userEvent.setup();
     await user.click(
       await screen.findByRole("button", {
-        name: "Reset password for user@example.com",
+        name: "重置 user@example.com 的密码",
       }),
     );
-    await user.type(screen.getByLabelText("New password"), "rotated-password");
-    await user.type(
-      screen.getByLabelText("Confirm password"),
-      "rotated-password",
-    );
-    await user.click(screen.getByRole("button", { name: "Reset password" }));
+    await user.type(screen.getByLabelText("新密码"), "rotated-password");
+    await user.type(screen.getByLabelText("确认密码"), "rotated-password");
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
 
-    expect(await screen.findByText("Password reset.")).toBeInTheDocument();
+    expect(await screen.findByText("密码已重置。")).toBeInTheDocument();
     const resetCall = calls.find((call) => call.path.endsWith("/password"));
     expect(resetCall?.path).toBe(`/api/v1/admin/users/${userId}/password`);
     expect(resetCall?.body).toEqual({ password: "rotated-password" });
   });
+});
+
+it("renders the real administrator entry point under StrictMode without exposing user content", async () => {
+  vi.stubGlobal("fetch", vi.fn(adminHandler()));
+  render(
+    <StrictMode>
+      <MemoryRouter initialEntries={["/admin/users"]}>
+        <App />
+      </MemoryRouter>
+    </StrictMode>,
+  );
+  const table = await screen.findByRole("table", { name: "用户账号列表" });
+  expect(within(table).getAllByText("user@example.com")).toHaveLength(1);
+  expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.some(([input]) =>
+        ["/api/v1/sessions", "/api/v1/artifacts"].includes(requestPath(input)),
+      ),
+  ).toBe(false);
 });

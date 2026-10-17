@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App.js";
 import "./styles.css";
+import "./admin/admin.css";
 
 const root = document.querySelector("#root");
 

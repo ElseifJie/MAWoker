@@ -302,8 +302,8 @@ describe("MemoryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "查看记忆" }));
     expect(await screen.findByText("路径浏览")).toBeInTheDocument();
     expect(screen.getByText(currentStore.id)).toBeInTheDocument();
-    expect(screen.getByText(/记忆条目：2/)).toBeInTheDocument();
-    expect(screen.getByText(/关联任务：1/)).toBeInTheDocument();
+    expect(screen.getByText(/记忆条目 2/)).toBeInTheDocument();
+    expect(screen.getByText(/关联任务 1/)).toBeInTheDocument();
   });
   it("renders the path tree and opens a memory for editing", async () => {
     await openDetail();
@@ -416,9 +416,9 @@ describe("MemoryPage", () => {
   it("creates a new memory and sends protection and settings changes", async () => {
     await openDetail();
     fireEvent.click(await screen.findByRole("button", { name: "profile.md" }));
-    fireEvent.click(screen.getByLabelText("保护（仅限制后台整理）"));
+    fireEvent.click(screen.getByLabelText(/保护（仅限制后台整理）/));
     await waitFor(() =>
-      expect(screen.getByLabelText("保护（仅限制后台整理）")).toBeChecked(),
+      expect(screen.getByLabelText(/保护（仅限制后台整理）/)).toBeChecked(),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/memory/protect",

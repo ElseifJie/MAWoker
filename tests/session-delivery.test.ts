@@ -110,6 +110,25 @@ describe("turn delivery observations", () => {
     expect(observed[0]?.expectedNames).toEqual(["报告.xlsx"]);
   });
 
+  it("ends a display-wrapped path at the tag instead of absorbing it", () => {
+    const observed = observeSessionTurns([
+      history[1]!,
+      event(
+        "answer",
+        "agent.message",
+        {
+          content:
+            "完整长图在这里：\n\n<display>/mnt/session/outputs/qwen-n1-2026/qwen-n1-longimage.jpg</display>",
+        },
+        200,
+      ),
+      history[3]!,
+    ]);
+    // Absorbing `</display` made the derived name "display", which no real
+    // file matches, so the turn settled as ARTIFACTS_NOT_VISIBLE.
+    expect(observed[0]?.expectedNames).toEqual(["qwen-n1-longimage.jpg"]);
+  });
+
   it("retains earlier file declarations when the final response contains only a summary", () => {
     const observed = observeSessionTurns([
       history[1]!,

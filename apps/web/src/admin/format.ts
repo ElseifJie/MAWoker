@@ -1,14 +1,16 @@
-const dateFormatter = new Intl.DateTimeFormat("en", {
-  month: "short",
-  day: "numeric",
+const dateFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
   year: "numeric",
 });
 
-const dateTimeFormatter = new Intl.DateTimeFormat("en", {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
+const dateTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit",
+  day: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
   minute: "2-digit",
+  hour12: false,
 });
 
 /**
@@ -20,7 +22,7 @@ export function formatDate(value: string | Date): string {
   return Number.isNaN(date.getTime()) ? "—" : dateFormatter.format(date);
 }
 
-/** e.g. "Sep 12, 8:53 PM" — omits the year, which the table context supplies. */
+/** Keep the year so older audit records remain unambiguous. */
 export function formatDateTime(value: string | Date): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "—" : dateTimeFormatter.format(date);
@@ -42,10 +44,11 @@ function trimZero(value: string): string {
   return value.endsWith(".0") ? value.slice(0, -2) : value;
 }
 
-/** "Sep 2026 (UTC)" — surfaces the billing-window basis of usage numbers. */
+/** The accounting month is based on UTC, independent of display timezone. */
 export function formatUsagePeriod(startsAt: string): string {
-  return `${new Intl.DateTimeFormat("en", {
-    month: "short",
+  if (Number.isNaN(new Date(startsAt).getTime())) return "—";
+  return `${new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
     year: "numeric",
     timeZone: "UTC",
   }).format(new Date(startsAt))} (UTC)`;

@@ -13,6 +13,24 @@ const PATH_PATTERN = /\/mnt\/session\/outputs\/[^\s`*_~[\]()<>|"'#\\]+/g;
 const PATH_IN_TEXT = new RegExp(`^${PATH_PATTERN.source}$`);
 const TRAILING_PUNCTUATION = /[.,;:!?…、。，；：！？)】》"'”’]+$/;
 
+/**
+ * Agents wrap display-worthy outputs in `<display>` tags. The renderer escapes
+ * raw HTML, so the tags would surface as literal text around the artifact
+ * chip; they are Agent chrome, not content, and are removed on sight — both as
+ * the `html` nodes micromark produces and as text, in case the source arrives
+ * pre-escaped.
+ */
+const DISPLAY_TAG = /<\/?display(?:\s[^>]*)?>/g;
+const DISPLAY_TAG_NODE = /^<\/?display(?:\s[^>]*)?>$/;
+
+function isDisplayTagNode(node: MdNode): boolean {
+  return node.type === "html" && DISPLAY_TAG_NODE.test(node.value ?? "");
+}
+
+function withoutDisplayTags(value: string): string {
+  return value.replace(DISPLAY_TAG, "");
+}
+
 function basenameOf(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1);
 }
@@ -41,8 +59,10 @@ function transformChildren(node: MdNode) {
   if (!node.children) return;
   const next: MdNode[] = [];
   for (const child of node.children) {
+    if (isDisplayTagNode(child)) continue;
     if (child.type === "text" && child.value) {
-      next.push(...splitTextNode(child.value));
+      const value = withoutDisplayTags(child.value);
+      if (value.length > 0) next.push(...splitTextNode(value));
     } else if (
       child.type === "inlineCode" &&
       child.value?.startsWith(OUTPUT_PREFIX)

@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ArtifactSummary } from "../api.js";
+import { PREVIEW_MAX_BYTES } from "../artifacts.js";
 
 const { renderAsync, pptxToHtml } = vi.hoisted(() => ({
   renderAsync: vi.fn(async () => undefined),
@@ -153,5 +154,43 @@ describe("ArtifactViewer document previews", () => {
       await screen.findByText("Preview unavailable. Download to open."),
     ).toBeInTheDocument();
     expect(renderAsync).not.toHaveBeenCalled();
+  });
+
+  it("previews images larger than the text cap through an object URL", async () => {
+    stubFetch("jpeg-bytes", "image/jpeg");
+    const createObjectURL = vi.fn(() => "blob:image");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      value: createObjectURL,
+      configurable: true,
+      writable: true,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      value: revokeObjectURL,
+      configurable: true,
+      writable: true,
+    });
+
+    render(
+      <ArtifactViewer
+        artifact={artifact({
+          name: "long.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: PREVIEW_MAX_BYTES + 1,
+        })}
+        onClose={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledOnce());
+    const image = await waitFor(() => {
+      const found = document.querySelector('img[alt="long.jpg"]');
+      expect(found).not.toBeNull();
+      return found as HTMLImageElement;
+    });
+    expect(image).toHaveAttribute("src", "blob:image");
+    // Fit-width reading: the image scrolls inside a body container instead of
+    // being letterboxed into a bordered frame of its own.
+    expect(image.parentElement).toHaveClass("artifact-viewer__body");
   });
 });

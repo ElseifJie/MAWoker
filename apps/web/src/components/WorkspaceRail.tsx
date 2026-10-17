@@ -1,20 +1,12 @@
+import { ChevronDown, FileText, Package, X } from "lucide-react";
 import {
-  CheckCircle2,
-  Circle,
-  CircleDot,
-  FileText,
-  ListTodo,
-  Package,
-  X,
-} from "lucide-react";
-import {
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { TodoEntry } from "@pwa/contracts";
 import type { ArtifactSummary } from "../api.js";
 import { Button, IconButton } from "../ui/index.js";
 import { ArtifactViewer } from "./ArtifactViewer.js";
@@ -51,20 +43,7 @@ function availableRailWidth(aside: HTMLElement) {
   );
 }
 
-const todoIcons = {
-  pending: Circle,
-  in_progress: CircleDot,
-  completed: CheckCircle2,
-} as const;
-
-const todoLabels = {
-  pending: "Pending",
-  in_progress: "In progress",
-  completed: "Completed",
-} as const;
-
 export interface WorkspaceRailProps {
-  todos: TodoEntry[];
   artifacts: readonly ArtifactSummary[];
   artifactsError: boolean;
   /** The last refresh of the Agent's output folder failed; the list may be stale. */
@@ -80,15 +59,12 @@ export interface WorkspaceRailProps {
 }
 
 /**
- * The session's third column: the Agent's own task list plus the files it
- * produced. Progress comes from `todo_write`, so it reports what the Agent
- * committed to rather than a guess derived from event counts.
+ * The session's third column: the files the Agent produced.
  *
  * Presentational only — the page owns the fetch and the URL-addressed selection,
  * so the collapsed panel's count in the topbar and this list cannot disagree.
  */
 export function WorkspaceRail({
-  todos,
   artifacts,
   artifactsError,
   artifactsSyncError = false,
@@ -100,14 +76,23 @@ export function WorkspaceRail({
   width,
   onWidthChange,
 }: WorkspaceRailProps) {
-  const done = todos.filter((todo) => todo.status === "completed").length;
   const selected =
     artifacts.find((artifact) => artifact.id === selectedArtifactId) ?? null;
   const asideRef = useRef<HTMLElement>(null);
   const [maxWidth, setMaxWidth] = useState(RAIL_MAX_WIDTH);
   const [dragging, setDragging] = useState(false);
+  const [listCollapsed, setListCollapsed] = useState(false);
   const resizable = Boolean(onWidthChange);
   const minWidth = Math.min(RAIL_MIN_WIDTH, maxWidth);
+
+  // A preview owns the panel's height: the list folds away while one is open
+  // and unfolds when the preview closes. Selections that resolve to no file
+  // (stale link, still syncing) keep the list, since there is no preview to
+  // serve. The toggle still allows either state.
+  const hasPreview = selected !== null;
+  useEffect(() => {
+    setListCollapsed(hasPreview);
+  }, [hasPreview]);
 
   const clampWidth = (value: number) =>
     Math.min(maxWidth, Math.max(minWidth, value));
@@ -195,16 +180,31 @@ export function WorkspaceRail({
         />
       ) : null}
       <div className="workspace-rail__scroll">
-        <header className="workspace-rail__header">
+        <header className="workspace-rail__header workspace-rail__header--artifacts">
           <h2>
-            <ListTodo size={16} aria-hidden="true" />
-            Progress
+            <button
+              type="button"
+              className="workspace-rail__toggle"
+              aria-expanded={!listCollapsed}
+              aria-controls="workspace-rail-artifacts"
+              onClick={() => setListCollapsed((current) => !current)}
+            >
+              <ChevronDown
+                size={16}
+                aria-hidden="true"
+                className={`workspace-rail__chevron${
+                  listCollapsed ? " is-collapsed" : ""
+                }`}
+              />
+              <Package size={16} aria-hidden="true" />
+              Artifacts
+              {artifacts.length > 0 ? (
+                <span className="workspace-rail__count">
+                  {artifacts.length}
+                </span>
+              ) : null}
+            </button>
           </h2>
-          {todos.length > 0 ? (
-            <span className="workspace-rail__count">
-              {done}/{todos.length}
-            </span>
-          ) : null}
           {onClose ? (
             <IconButton
               className="workspace-rail__close"
@@ -217,87 +217,71 @@ export function WorkspaceRail({
           ) : null}
         </header>
 
-        {todos.length === 0 ? (
-          <p className="workspace-rail__empty">No plan yet.</p>
-        ) : (
-          <ol className="workspace-rail__todos">
-            {todos.map((todo, index) => {
-              const Icon = todoIcons[todo.status];
-              return (
-                <li
-                  key={`${todo.status}-${index}-${todo.content.slice(0, 24)}`}
-                  className={`todo todo--${todo.status}`}
-                >
-                  <Icon size={15} aria-hidden="true" />
-                  <span className="todo__content">{todo.content}</span>
-                  <span className="sr-only">{todoLabels[todo.status]}</span>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-
-        <header className="workspace-rail__header workspace-rail__header--artifacts">
-          <h2>
-            <Package size={16} aria-hidden="true" />
-            Artifacts
-          </h2>
-          {artifacts.length > 0 ? (
-            <span className="workspace-rail__count">{artifacts.length}</span>
-          ) : null}
-        </header>
-
-        {artifactsSyncError && !artifactsError ? (
-          <p className="workspace-rail__stale" role="status">
-            New files could not be checked.{" "}
-            <button
-              type="button"
-              className="workspace-rail__stale-retry"
-              onClick={onRetryArtifacts}
-            >
-              Retry
-            </button>
-          </p>
-        ) : null}
-
-        {artifactsError ? (
-          <div className="workspace-rail__empty">
-            <p>Artifacts could not be loaded.</p>
-            <Button
-              variant="secondary"
-              size="compact"
-              onClick={onRetryArtifacts}
-            >
-              Retry
-            </Button>
-          </div>
-        ) : artifacts.length === 0 ? (
-          <p className="workspace-rail__empty">No files yet.</p>
-        ) : (
-          <ul className="workspace-rail__artifacts">
-            {artifacts.map((artifact) => (
-              <li key={artifact.id}>
+        {listCollapsed ? null : (
+          <>
+            {artifactsSyncError && !artifactsError ? (
+              <p className="workspace-rail__stale" role="status">
+                New files could not be checked.{" "}
                 <button
                   type="button"
-                  className="artifact-link"
-                  aria-current={artifact.id === selectedArtifactId || undefined}
-                  onClick={() =>
-                    onSelectArtifact(
-                      artifact.id === selectedArtifactId ? null : artifact.id,
-                    )
-                  }
+                  className="workspace-rail__stale-retry"
+                  onClick={onRetryArtifacts}
                 >
-                  <FileText size={15} aria-hidden="true" />
-                  <span className="artifact-link__name" title={artifact.name}>
-                    {artifact.name}
-                  </span>
-                  {artifact.deletionState !== "none" ? (
-                    <span className="artifact-link__state">Deleting</span>
-                  ) : null}
+                  Retry
                 </button>
-              </li>
-            ))}
-          </ul>
+              </p>
+            ) : null}
+
+            {artifactsError ? (
+              <div className="workspace-rail__empty">
+                <p>Artifacts could not be loaded.</p>
+                <Button
+                  variant="secondary"
+                  size="compact"
+                  onClick={onRetryArtifacts}
+                >
+                  Retry
+                </Button>
+              </div>
+            ) : artifacts.length === 0 ? (
+              <p className="workspace-rail__empty">No files yet.</p>
+            ) : (
+              <ul
+                className="workspace-rail__artifacts"
+                id="workspace-rail-artifacts"
+              >
+                {artifacts.map((artifact) => (
+                  <li key={artifact.id}>
+                    <button
+                      type="button"
+                      className="artifact-link"
+                      aria-current={
+                        artifact.id === selectedArtifactId || undefined
+                      }
+                      onClick={() =>
+                        onSelectArtifact(
+                          artifact.id === selectedArtifactId
+                            ? null
+                            : artifact.id,
+                        )
+                      }
+                    >
+                      <FileText size={15} aria-hidden="true" />
+                      <span
+                        className="artifact-link__name"
+                        title={artifact.name}
+                      >
+                        {artifact.name}
+                      </span>
+                      {artifact.deletionState !== "none" ? (
+                        <span className="artifact-link__state">Deleting</span>
+                      ) : null}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
         )}
       </div>
 

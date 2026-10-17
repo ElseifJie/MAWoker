@@ -899,8 +899,16 @@ export class PlatformAgentService {
       // Preset Agents host user memory sessions: the framework prompt rides
       // on every upstream write; the stored prompt stays the admin's own.
       systemPrompt: withMemoryFramework(input.systemPrompt),
-      toolsetId: PLATFORM_AGENT_TOOLSET_ID,
-      toolPermission: PLATFORM_AGENT_TOOL_PERMISSION,
+      // The documented v3 shape: the built-in toolset is a `tools` entry, not
+      // the legacy top-level `toolsetId` / `toolPermission` shortcut.
+      tools: [
+        {
+          type: PLATFORM_AGENT_TOOLSET_ID,
+          defaultConfig: {
+            permissionPolicy: { type: PLATFORM_AGENT_TOOL_PERMISSION },
+          },
+        },
+      ],
     };
   }
 

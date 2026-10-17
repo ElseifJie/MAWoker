@@ -929,7 +929,6 @@ function SessionPageContent({
       </div>
       {railOpen ? (
         <WorkspaceRail
-          todos={timeline.todos}
           artifacts={artifacts}
           artifactsError={artifactsError}
           artifactsSyncError={artifactsSyncError}

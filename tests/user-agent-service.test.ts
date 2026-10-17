@@ -426,8 +426,14 @@ describe("UserAgentService", () => {
       input: {
         ...input,
         systemPrompt: expect.stringContaining(MEMORY_STORE_FRAMEWORK_PROMPT),
-        toolsetId: "agent_toolset_20260701",
-        toolPermission: "always_allow",
+        tools: [
+          {
+            type: "agent_toolset_20260701",
+            defaultConfig: {
+              permissionPolicy: { type: "always_allow" },
+            },
+          },
+        ],
       },
     });
     await expect(

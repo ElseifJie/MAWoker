@@ -4,6 +4,7 @@ import { ArkGatewayError } from "./errors.js";
 import type {
   ArkAgent,
   ArkAgentInput,
+  ArkAgentToolInput,
   ArkAgentUpdate,
   ArkArtifact,
   ArkEvent,
@@ -24,6 +25,8 @@ import type {
   ArkSessionInput,
   ArkSkill,
   ArkSkillInput,
+  ArkToolConfigInput,
+  ArkToolDefaultConfigInput,
 } from "./types.js";
 
 const agentSchema = z
@@ -45,16 +48,50 @@ type ArkAgentResponse = z.infer<typeof agentSchema>;
  * the managed-agents wire format: an omitted `skills` key leaves the upstream
  * binding untouched, while an explicit array (even empty) replaces it.
  */
+function arkToolDefaultConfig(
+  input: ArkToolDefaultConfigInput,
+): Record<string, unknown> {
+  return {
+    ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+    ...(input.permissionPolicy !== undefined
+      ? { permission_policy: { type: input.permissionPolicy.type } }
+      : {}),
+  };
+}
+
+function arkToolConfig(input: ArkToolConfigInput): Record<string, unknown> {
+  return { name: input.name, ...arkToolDefaultConfig(input) };
+}
+
+function arkAgentTool(input: ArkAgentToolInput): Record<string, unknown> {
+  if (input.type === "custom") {
+    return {
+      type: "custom",
+      name: input.name,
+      description: input.description,
+      input_schema: input.inputSchema,
+    };
+  }
+  return {
+    type: input.type,
+    ...(input.type === "mcp_toolset"
+      ? { mcp_server_name: input.mcpServerName }
+      : {}),
+    ...(input.defaultConfig !== undefined
+      ? { default_config: arkToolDefaultConfig(input.defaultConfig) }
+      : {}),
+    ...(input.configs !== undefined
+      ? { configs: input.configs.map(arkToolConfig) }
+      : {}),
+  };
+}
+
 function arkAgentWriteBody(input: ArkAgentInput): Record<string, unknown> {
   return {
     name: input.name,
     description: input.description,
     model: { id: input.modelId },
     instructions: input.systemPrompt,
-    ...(input.toolsetId !== undefined ? { toolsetId: input.toolsetId } : {}),
-    ...(input.toolPermission !== undefined
-      ? { toolPermission: input.toolPermission }
-      : {}),
     ...(input.skills !== undefined
       ? {
           skills: input.skills.map((skill) => ({
@@ -63,6 +100,18 @@ function arkAgentWriteBody(input: ArkAgentInput): Record<string, unknown> {
             ...(skill.version !== undefined ? { version: skill.version } : {}),
           })),
         }
+      : {}),
+    ...(input.mcpServers !== undefined
+      ? {
+          mcp_servers: input.mcpServers.map((server) => ({
+            type: server.type,
+            ...(server.name !== undefined ? { name: server.name } : {}),
+            url: server.url,
+          })),
+        }
+      : {}),
+    ...(input.tools !== undefined
+      ? { tools: input.tools.map(arkAgentTool) }
       : {}),
   };
 }
@@ -1013,6 +1062,7 @@ export class HttpArkGateway implements ArkGateway {
                 mount_path: resource.mountPath,
               },
         ),
+        ...(input.vaultIds !== undefined ? { vault_ids: input.vaultIds } : {}),
       }),
       contentType: "application/json",
       schema: sessionSchema,

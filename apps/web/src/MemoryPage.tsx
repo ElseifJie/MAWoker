@@ -8,7 +8,7 @@ import {
 } from "react";
 import { ChevronDown, ChevronRight, FileText, Folder } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { memoryFileLabel, presentMemory } from "./memory-presentation.js";
+import { memoryFileLabel } from "./memory-presentation.js";
 import {
   ApiClientError,
   apiClient,
@@ -116,8 +116,10 @@ function buildPathTree(paths: string[]): PathNode[] {
     }
   }
   const sort = (nodes: PathNode[]): PathNode[] => {
+    // Files before subfolders: a folder's subtree otherwise renders between
+    // the level's own files, which read as misaligned siblings.
     nodes.sort((a, b) =>
-      a.folder === b.folder ? a.name.localeCompare(b.name) : a.folder ? -1 : 1,
+      a.folder === b.folder ? a.name.localeCompare(b.name) : a.folder ? 1 : -1,
     );
     for (const node of nodes) if (node.folder) sort(node.children);
     return nodes;
@@ -655,17 +657,14 @@ function MemoryStoreDetail({
             </p>
           ) : null}
           <div className="memory-detail__meta">
-            <details className="memory-detail__store-id">
-              <summary>存储信息</summary>
-              <span className="memory-mono">{list?.store.id ?? "…"}</span>
-            </details>
+            <span className="memory-mono">{list?.store.id ?? "…"}</span>
             {list ? (
               <>
                 <span>
-                  记忆条目：{list.capacity.count} (
-                  {formatBytes(list.capacity.bytes)})
+                  记忆条目 {list.capacity.count}（
+                  {formatBytes(list.capacity.bytes)}）
                 </span>
-                <span>关联任务：{list.sessionCount}</span>
+                <span>关联任务 {list.sessionCount}</span>
                 <span>更新于 {formatDateTime(list.store.updatedAt)}</span>
               </>
             ) : null}
@@ -686,32 +685,6 @@ function MemoryStoreDetail({
         ) : null
       ) : (
         <>
-          <section className="memory-catalog" aria-label="记忆分类与来源">
-            <h2>偏好、事实与协作习惯</h2>
-            <p>
-              关闭自动整理只停止后台整理，不会关闭助手原生记忆读写。删除任务与删除记忆是独立操作。
-            </p>
-            <ul className="memory-catalog__list">
-              {entries.map((entry) => (
-                <li key={entry.path}>
-                  <Button
-                    variant="text"
-                    onClick={() => {
-                      setEditor(entry);
-                      setBaseHash(entry.hash ?? null);
-                      setExisting(true);
-                      setVersionNotice(null);
-                    }}
-                  >
-                    {presentMemory(entry).category} ·{" "}
-                    {entry.path.split("/").at(-1)}
-                  </Button>
-                  <p>{entry.content.slice(0, 300)}</p>
-                  <p className="muted">{presentMemory(entry).source}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
           <div className="memory-detail__body">
             <aside className="memory-tree" aria-label="记忆文件">
               <div className="memory-tree__head">
@@ -781,10 +754,7 @@ function MemoryStoreDetail({
                     );
                   }}
                 >
-                  <Field
-                    label="路径"
-                    hint="可使用 /memories/、/procedures/、/episodes/ 或 /resources/。"
-                  >
+                  <Field label="路径">
                     <Input
                       value={editor.path}
                       required
@@ -795,20 +765,21 @@ function MemoryStoreDetail({
                       }
                     />
                   </Field>
-                  <Field label="内容">
-                    <Textarea
-                      rows={16}
-                      value={editor.content}
-                      disabled={blocked}
-                      onChange={(event) =>
-                        setEditor({ ...editor, content: event.target.value })
-                      }
-                    />
-                  </Field>
-                  <Field
-                    label="保护（仅限制后台整理）"
-                    hint="保护不会关闭助手原生记忆写入；维护期间仍需等待锁释放。"
-                  >
+                  <div className="memory-editor__content">
+                    <Field label="内容">
+                      <Textarea
+                        rows={16}
+                        value={editor.content}
+                        disabled={blocked}
+                        onChange={(event) =>
+                          setEditor({ ...editor, content: event.target.value })
+                        }
+                      />
+                    </Field>
+                  </div>
+                  {/* One sentence flows as a single text run: wrapping can only
+                      split it mid-clause, never strand the colon on a new line. */}
+                  <label className="memory-protect">
                     <Input
                       type="checkbox"
                       checked={
@@ -824,10 +795,15 @@ function MemoryStoreDetail({
                         )
                       }
                     />
-                  </Field>
+                    <span>
+                      保护（仅限制后台整理）：不会关闭助手原生记忆写入，维护期间仍需等待锁释放。
+                    </span>
+                  </label>
                   <div className="memory-editor__actions">
                     <Button
                       type="submit"
+                      variant="text"
+                      size="compact"
                       disabled={blocked || !editor.path}
                       loading={pending}
                     >
@@ -836,6 +812,8 @@ function MemoryStoreDetail({
                     {existing ? (
                       <Button
                         variant="danger"
+                        size="compact"
+                        className="memory-editor__delete"
                         disabled={blocked}
                         onClick={() =>
                           void mutate(
