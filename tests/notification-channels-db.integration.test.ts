@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRepositories } from "../packages/db/src/index.js";
 import {
+  createCredentialCipher,
   InvalidChannelUrlError,
   maskWebhookUrl,
   NotificationChannelNameConflictError,
@@ -27,16 +28,27 @@ describe("notification channels", () => {
     const repositories = createRepositories(database.db);
     const owner = await seedUser(database.client);
     const other = await seedUser(database.client);
+    const cipher = createCredentialCipher(
+      Buffer.alloc(32, 3).toString("base64"),
+    );
     const service = new NotificationChannelService({
       repository: repositories.notificationChannels,
       createId: id,
       validateUrl: async (url) => url,
+      cipher,
     });
 
     const channel = await service.create(owner, {
       name: "Feishu",
       url: "https://open.feishu.cn/open-apis/bot/v2/hook/secret-token",
     });
+    const stored = await database.client.query<{ url: string }>(
+      "select url from notification_channels where id = $1",
+      [channel.id],
+    );
+    expect(stored.rows[0]!.url).toMatch(/^v1\./);
+    expect(stored.rows[0]!.url).not.toContain("secret-token");
+    expect((await service.list(owner))[0]!.url).toContain("secret-token");
     expect(maskWebhookUrl(channel.url)).toBe("https://open.feishu.cn/…oken");
     expect(await service.list(other)).toEqual([]);
     await expect(

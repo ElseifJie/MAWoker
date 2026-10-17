@@ -3,6 +3,7 @@ import { HttpArkGateway } from "@pwa/ark-client";
 import { parseServerConfig } from "@pwa/config";
 import { createDatabase, createRepositories } from "@pwa/db";
 import {
+  createCredentialCipher,
   ArtifactService,
   DeletionLogStore,
   DriveFileService,
@@ -34,6 +35,7 @@ import { UploadCleanupProcessor } from "./upload-cleanup.js";
 import { UsageReconciliationProcessor } from "./usage-reconciliation.js";
 
 const config = parseServerConfig(process.env);
+const credentialCipher = createCredentialCipher(config.credentialEncryptionKey);
 const logger = createWorkerLogger();
 const reportWorkerError = (_message: string, error: unknown) => {
   logWorkerFailure(logger, "worker.operation.failed", error);
@@ -57,8 +59,12 @@ const automationWorker = createAutomationWorker({
     );
   },
   notifyExternal: async ({ ownerUserId, title, text }) => {
-    const channels =
-      await repositories.notificationChannels.listEnabled(ownerUserId);
+    const channels = (
+      await repositories.notificationChannels.listEnabled(ownerUserId)
+    ).map((channel) => ({
+      ...channel,
+      url: credentialCipher.decrypt(channel.url),
+    }));
     if (channels.length === 0) return;
     await sendWebhookNotifications({
       channels,

@@ -112,6 +112,20 @@ const systemAgentIds = z
     }
   });
 
+const credentialEncryptionKey = z
+  .string()
+  .trim()
+  .optional()
+  .superRefine((value, context) => {
+    if (value === undefined) return;
+    if (Buffer.from(value, "base64").length !== 32) {
+      context.addIssue({
+        code: "custom",
+        message: "must decode to exactly 32 bytes",
+      });
+    }
+  });
+
 const environmentSchema = z
   .object({
     NODE_ENV: z
@@ -138,6 +152,7 @@ const environmentSchema = z
     TOS_SESSION_TOKEN: z.string().trim().min(1).optional(),
     MODEL_ALLOWLIST: nonEmptyCsv,
     OUTBOUND_HOST_ALLOWLIST: nonEmptyCsv,
+    CREDENTIAL_ENCRYPTION_KEY: credentialEncryptionKey,
     /**
      * How long an unreferenced drive object survives before the GC reaps it.
      * Zero means "as soon as it is orphaned", preserving phase-1 semantics:
@@ -290,6 +305,7 @@ export function parseServerConfig(
     modelAllowlist: publicConfig.modelAllowlist,
     systemAgentIds: env.SYSTEM_AGENT_IDS,
     outboundHostAllowlist: csv(env.OUTBOUND_HOST_ALLOWLIST),
+    credentialEncryptionKey: env.CREDENTIAL_ENCRYPTION_KEY,
     driveOrphanRetentionMs: env.DRIVE_ORPHAN_RETENTION_MS,
     memory: {
       byteBudget: env.MEMORY_BYTE_BUDGET,

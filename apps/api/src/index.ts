@@ -5,6 +5,7 @@ import { ApplicationSessionService, hashPassword } from "@pwa/auth";
 import { parseServerConfig } from "@pwa/config";
 import { createAuthStore, createDatabase, createRepositories } from "@pwa/db";
 import {
+  createCredentialCipher,
   AdminUsageService,
   AdminUserDetailService,
   ArtifactService,
@@ -140,9 +141,11 @@ const automationService = new AutomationService({
   repository: repositories.automations,
   createId: randomUUID,
 });
+const credentialCipher = createCredentialCipher(config.credentialEncryptionKey);
 const notificationChannels = new NotificationChannelService({
   repository: repositories.notificationChannels,
   createId: randomUUID,
+  cipher: credentialCipher,
 });
 const mcpServers = new McpServerService({
   repository: repositories.mcpServers,

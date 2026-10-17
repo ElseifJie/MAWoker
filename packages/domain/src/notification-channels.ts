@@ -1,3 +1,7 @@
+import {
+  createCredentialCipher,
+  type CredentialCipher,
+} from "./credential-cipher.js";
 import { ResourceNotFoundError } from "./errors.js";
 import { McpUrlUnsafeError, validateMcpUrl } from "./mcp-url.js";
 
@@ -70,12 +74,17 @@ export class NotificationChannelService {
       repository: NotificationChannelRepository;
       createId: () => string;
       validateUrl?: typeof validateMcpUrl;
+      cipher?: CredentialCipher;
       now?: () => Date;
     },
   ) {}
 
   private now(): Date {
     return this.dependencies.now?.() ?? new Date();
+  }
+
+  private cipher(): CredentialCipher {
+    return this.dependencies.cipher ?? createCredentialCipher();
   }
 
   async create(
@@ -96,19 +105,23 @@ export class NotificationChannelService {
       }
       throw error;
     }
+    const cipher = this.cipher();
     const row = await this.dependencies.repository.create({
       id: this.dependencies.createId(),
       ownerUserId,
       name,
-      url,
+      url: cipher.encrypt(url),
       now: this.now(),
     });
     if (!row) throw new NotificationChannelNameConflictError();
-    return row;
+    return { ...row, url };
   }
 
-  list(ownerUserId: string): PromiseLike<NotificationChannelRecord[]> {
-    return this.dependencies.repository.listOwned(ownerUserId);
+  async list(ownerUserId: string): Promise<NotificationChannelRecord[]> {
+    const cipher = this.cipher();
+    return (await this.dependencies.repository.listOwned(ownerUserId)).map(
+      (row) => ({ ...row, url: cipher.decrypt(row.url) }),
+    );
   }
 
   async setEnabled(
@@ -123,7 +136,7 @@ export class NotificationChannelService {
       now: this.now(),
     });
     if (!row) throw new ResourceNotFoundError();
-    return row;
+    return { ...row, url: this.cipher().decrypt(row.url) };
   }
 
   async delete(ownerUserId: string, id: string): Promise<void> {
