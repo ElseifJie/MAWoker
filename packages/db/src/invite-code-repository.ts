@@ -21,7 +21,7 @@ export interface InviteCodeRow extends Row {
 }
 
 export type InviteAcceptResult =
-  | { kind: "accepted"; userId: string; email: string }
+  | { kind: "accepted"; userId: string; email: string; inviteId: string }
   | { kind: "invalid" }
   | { kind: "email_conflict" };
 
@@ -135,7 +135,12 @@ export function createInviteRepository(db: Database) {
                      updated_at = ${input.now}
                where id = ${row.id}`,
           );
-          return { kind: "accepted", userId: user.id, email: row.email };
+          return {
+            kind: "accepted",
+            userId: user.id,
+            email: row.email,
+            inviteId: row.id,
+          };
         },
       );
     },

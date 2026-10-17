@@ -45,6 +45,7 @@ function invites() {
     accept: vi.fn(async () => ({
       userId: "00000000-0000-4000-8000-000000000020",
       email: "invitee@example.com",
+      inviteId,
     })),
   };
 }
@@ -118,7 +119,7 @@ describe("invite API", () => {
       "password123",
     );
     expect(audit.recordInvite).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "invite.accept" }),
+      expect.objectContaining({ action: "invite.accept", inviteId }),
     );
     await app.close();
   });

@@ -594,7 +594,7 @@ export interface InviteApiService {
   accept(
     code: string,
     password: string,
-  ): PromiseLike<{ userId: string; email: string }>;
+  ): PromiseLike<{ userId: string; email: string; inviteId: string }>;
 }
 
 interface BuildAppOptions {
@@ -2974,10 +2974,12 @@ export function buildApp(options: BuildAppOptions = {}) {
               actorUserId: user.userId,
               ownerUserId: user.userId,
               action: "invite.accept",
-              inviteId: user.userId,
+              inviteId: user.inviteId,
               requestId: request.id,
             });
-            return reply.code(201).send({ user });
+            return reply.code(201).send({
+              user: { userId: user.userId, email: user.email },
+            });
           } catch (error) {
             if (hasErrorName(error, "InvalidInviteError")) {
               return reply

@@ -23,7 +23,7 @@ export interface InviteCodeRecord extends Omit<InviteCodeRow, "codeHash"> {
 }
 
 export type InviteAcceptResult =
-  | { kind: "accepted"; userId: string; email: string }
+  | { kind: "accepted"; userId: string; email: string; inviteId: string }
   | { kind: "invalid" }
   | { kind: "email_conflict" };
 
@@ -141,7 +141,7 @@ export class InviteCodeService {
   async accept(
     code: string,
     password: string,
-  ): Promise<{ userId: string; email: string }> {
+  ): Promise<{ userId: string; email: string; inviteId: string }> {
     const trimmed = code.trim();
     if (trimmed.length < 16) throw new InvalidInviteError();
     const parsedPassword = passwordSchema.parse(password);
@@ -155,6 +155,10 @@ export class InviteCodeService {
     });
     if (result.kind === "invalid") throw new InvalidInviteError();
     if (result.kind === "email_conflict") throw new UserEmailConflictError();
-    return { userId: result.userId, email: result.email };
+    return {
+      userId: result.userId,
+      email: result.email,
+      inviteId: result.inviteId,
+    };
   }
 }
