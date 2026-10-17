@@ -303,3 +303,28 @@
   color: var(--ui-color-text-secondary);
   font-size: var(--ui-font-size-control);
 }
+
+.admin-system-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--ui-space-3);
+  margin: 0 0 var(--ui-space-6);
+}
+
+.admin-system-cards > div {
+  padding: var(--ui-space-4);
+  border: 1px solid var(--ui-color-border);
+  border-radius: 8px;
+  background: var(--ui-color-surface-subtle);
+}
+
+.admin-system-cards dt {
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+}
+
+.admin-system-cards dd {
+  margin: var(--ui-space-1) 0 0;
+  font-size: var(--ui-font-size-section-large);
+  font-weight: 600;
+}

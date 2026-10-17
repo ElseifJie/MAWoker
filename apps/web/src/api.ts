@@ -341,6 +341,22 @@ export interface AdminUserEffectiveQuota extends AdminQuota {
   inherited: AdminQuotaInheritance;
 }
 
+export interface AdminSystemSnapshot {
+  generatedAt: string;
+  database: { latencyMs: number };
+  jobs: {
+    pending: number;
+    running: number;
+    failedLast24h: number;
+    oldestPendingSeconds: number | null;
+  };
+  runs: Record<string, number>;
+  sessions: { running: number };
+  automations: { active: number; pending: number; overdue: number };
+  notifications: { unread: number };
+  users: { active: number; disabled: number };
+}
+
 export interface AdminInvite {
   id: string;
   email: string;
@@ -681,6 +697,7 @@ export const apiClient = {
   },
   getAdminUsageByAgents: () =>
     request<AdminUsageByAgents>("/admin/usage/agents"),
+  getAdminSystem: () => request<AdminSystemSnapshot>("/admin/system"),
   getAdminQuotaPolicy: () => request<AdminQuotaPolicy>("/admin/quota-policy"),
   listAdminInvites: () => request<{ invites: AdminInvite[] }>("/admin/invites"),
   createAdminInvite: (email: string, expiresInDays: number) =>

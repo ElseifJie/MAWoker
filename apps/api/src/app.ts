@@ -591,6 +591,9 @@ interface BuildAppOptions {
   accountExport?: {
     export(userId: string): PromiseLike<Record<string, unknown>>;
   };
+  adminSystem?: {
+    snapshot(now?: Date): PromiseLike<unknown>;
+  };
   assistant?: {
     get(userId: string): PromiseLike<AssistantView>;
     update(
@@ -2304,6 +2307,7 @@ const ADMIN_ROUTE_PERMISSIONS: Record<string, AdminPermission> = {
   "/api/v1/admin/quota-policy": "SETTINGS_MANAGE",
   "/api/v1/admin/usage/agents": "USAGE_VIEW",
   "/api/v1/admin/usage/overview": "USAGE_VIEW",
+  "/api/v1/admin/system": "USAGE_VIEW",
 };
 
 function adminRoutePermission(route: string): AdminPermission | undefined {
@@ -4922,6 +4926,12 @@ export function buildApp(options: BuildAppOptions = {}) {
             return sendAdminError(error, request, reply);
           }
         },
+      );
+    }
+
+    if (options.adminSystem) {
+      app.get("/api/v1/admin/system", async () =>
+        options.adminSystem!.snapshot(new Date()),
       );
     }
 

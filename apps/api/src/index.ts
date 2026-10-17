@@ -167,6 +167,7 @@ const app = buildApp({
   invites: inviteCodes,
   automations: automationService,
   accountExport: accountExportService,
+  adminSystem: repositories.adminSystem,
   assistant: assistantProfile,
   admin,
   audit,

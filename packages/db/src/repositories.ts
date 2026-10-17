@@ -10,6 +10,7 @@ import { createAssistantProfileRepository } from "./assistant-profile-repository
 import { createInviteRepository } from "./invite-code-repository.js";
 import { createAutomationRepository } from "./automation-repository.js";
 import { createAccountExportRepository } from "./account-export-repository.js";
+import { createAdminSystemRepository } from "./admin-system-repository.js";
 import {
   appendAccountChange,
   createSyncRepository,
@@ -1022,6 +1023,7 @@ export function createRepositories(database: unknown) {
     inviteCodes: createInviteRepository(db),
     automations: createAutomationRepository(db),
     accountExport: createAccountExportRepository(db),
+    adminSystem: createAdminSystemRepository(db),
     sync: createSyncRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),
