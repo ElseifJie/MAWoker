@@ -319,6 +319,24 @@ export interface AdminUserEffectiveQuota extends AdminQuota {
   inherited: AdminQuotaInheritance;
 }
 
+export interface AdminInvite {
+  id: string;
+  email: string;
+  createdBy: string;
+  usedByUserId: string | null;
+  status: "pending" | "used" | "revoked" | "expired";
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminInviteCreated {
+  invite: AdminInvite;
+  code: string;
+}
+
 export interface AdminAuditEntry {
   id: string;
   actorUserId: string | null;
@@ -642,6 +660,17 @@ export const apiClient = {
   getAdminUsageByAgents: () =>
     request<AdminUsageByAgents>("/admin/usage/agents"),
   getAdminQuotaPolicy: () => request<AdminQuotaPolicy>("/admin/quota-policy"),
+  listAdminInvites: () => request<{ invites: AdminInvite[] }>("/admin/invites"),
+  createAdminInvite: (email: string, expiresInDays: number) =>
+    request<AdminInviteCreated>("/admin/invites", {
+      method: "POST",
+      body: JSON.stringify({ email, expiresInDays }),
+    }),
+  revokeAdminInvite: (id: string) =>
+    request<{ invite: AdminInvite }>(
+      `/admin/invites/${encodeURIComponent(id)}/revoke`,
+      { method: "POST" },
+    ),
   updateAdminQuotaPolicy: (quota: AdminQuota) =>
     request<AdminQuotaPolicy>("/admin/quota-policy", {
       method: "PUT",

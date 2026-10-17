@@ -286,3 +286,20 @@
     min-height: 2.75rem;
   }
 }
+
+.admin-invite-created {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ui-space-2);
+  margin-top: var(--ui-space-4);
+  padding: var(--ui-space-4);
+  border: 1px solid var(--ui-color-border);
+  border-radius: 8px;
+  background: var(--ui-color-surface-subtle);
+}
+
+.admin-invite-created p {
+  margin: 0;
+  color: var(--ui-color-text-secondary);
+  font-size: var(--ui-font-size-control);
+}

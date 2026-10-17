@@ -1,6 +1,7 @@
 import {
   Bot,
   ChartNoAxesColumn,
+  MailPlus,
   ScrollText,
   Settings,
   Users,
@@ -15,6 +16,7 @@ import {
 } from "../api.js";
 import { AppShell, Button } from "../ui/index.js";
 import { AdminAuditPage } from "./AdminAuditPage.js";
+import { AdminInvitesPage } from "./AdminInvitesPage.js";
 import { AdminPlatformAgentsPage } from "./AdminPlatformAgentsPage.js";
 import { AdminSettingsPage } from "./AdminSettingsPage.js";
 import { AdminUserDetailPage } from "./AdminUserDetailPage.js";
@@ -82,6 +84,7 @@ export function AdminWorkspace({
       navigationLabel="管理工作台"
       navigation={[
         { to: "/admin/users", label: "用户管理", icon: Users },
+        { to: "/admin/invites", label: "邀请", icon: MailPlus },
         { to: "/admin/usage", label: "用量", icon: ChartNoAxesColumn },
         { to: "/admin/audit", label: "审计记录", icon: ScrollText },
         {
@@ -116,6 +119,10 @@ export function AdminWorkspace({
               onAuthRequired={onAuthRequired}
             />
           }
+        />
+        <Route
+          path="/admin/invites"
+          element={<AdminInvitesPage onAuthRequired={onAuthRequired} />}
         />
         <Route
           path="/admin/usage"
