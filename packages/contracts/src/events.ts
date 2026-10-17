@@ -1,0 +1,325 @@
+import { z } from "zod";
+import {
+  boundToolErrorCode,
+  extractTodos,
+  redactCredentials,
+  redactPreview,
+  redactText,
+  redactToolArgsSummary,
+  redactToolErrorMessage,
+  summarizeToolArgs,
+  summarizeToolResult,
+} from "./redact.js";
+import { sessionStatusSchema } from "./sessions.js";
+
+export const arkEventSchema = z
+  .object({
+    id: z.string().min(1),
+    type: z.string().min(1),
+    createdAt: z.string().datetime(),
+    data: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+export type ArkEvent = z.infer<typeof arkEventSchema>;
+
+export type UiEventType =
+  | "message"
+  | "thinking"
+  | "tool_use"
+  | "tool_result"
+  | "status"
+  | "error"
+  | "unknown";
+
+export interface UiEvent {
+  id: string;
+  sourceType: string;
+  type: UiEventType;
+  createdAt: string;
+  payload: Record<string, unknown>;
+}
+
+// Derived from 287 events captured across 46 live sessions. That account was
+// healthy, so `session.error` and `session.status_rescheduled` never occurred:
+// their payload shapes below come from existing test fixtures, not observation.
+const eventTypes: Record<string, UiEventType> = {
+  "user.message": "message",
+  "agent.message": "message",
+  "agent.thinking": "thinking",
+  "agent.tool_use": "tool_use",
+  "agent.mcp_tool_use": "tool_use",
+  "agent.custom_tool_use": "tool_use",
+  "tool.call": "tool_use",
+  "agent.tool_result": "tool_result",
+  "agent.mcp_tool_result": "tool_result",
+  "tool.result": "tool_result",
+  "session.status": "status",
+  "session.status_running": "status",
+  "session.status_rescheduled": "status",
+  "session.status_idle": "status",
+  "session.status_terminated": "status",
+  "session.error": "error",
+};
+
+function stringField(
+  data: Record<string, unknown>,
+  ...names: string[]
+): string | undefined {
+  for (const name of names) {
+    if (typeof data[name] === "string") return data[name];
+  }
+  return undefined;
+}
+
+/**
+ * The UI type for an Ark event name. Exported so a stored event can be
+ * re-projected on read rather than trusting a denormalized column, which keeps
+ * rows written by an older release rendering correctly.
+ */
+export function uiEventType(sourceType: string): UiEventType {
+  return eventTypes[sourceType] ?? "unknown";
+}
+
+// The `retry_status.type` probe is unverified: no `session.error` appeared in the
+// captured traffic, so this shape has never been observed on the wire.
+export function isRecoverableArkError(data: Record<string, unknown>): boolean {
+  if (data.recoverable === true || data.retryable === true) return true;
+  if (typeof data.error !== "object" || data.error === null) return false;
+  const retryStatus = (data.error as Record<string, unknown>).retry_status;
+  return (
+    typeof retryStatus === "object" &&
+    retryStatus !== null &&
+    (retryStatus as Record<string, unknown>).type === "retrying"
+  );
+}
+
+function messagePayload(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const content = typeof data.content === "string" ? data.content : undefined;
+  return content === undefined ? {} : { content: redactCredentials(content) };
+}
+
+function toolUsePayload(event: ArkEvent): Record<string, unknown> {
+  const data = event.data;
+  const name = stringField(data, "name");
+  const input = data.input ?? data.arguments;
+  const argsSummary = summarizeToolArgs(name, input);
+  const todos = extractTodos(input);
+  const serverName = stringField(data, "mcp_server_name");
+  return {
+    // Ark reuses the tool_use event's own id as the call id that tool_result references.
+    callId: event.id,
+    ...(name === undefined ? {} : { name }),
+    ...(serverName === undefined ? {} : { serverName }),
+    ...(argsSummary === undefined ? {} : { argsSummary }),
+    ...(todos === undefined ? {} : { todos }),
+  };
+}
+
+function toolResultPayload(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const callId = stringField(
+    data,
+    "tool_use_id",
+    "mcp_tool_use_id",
+    "tool_call_id",
+  );
+  const summary = summarizeToolResult(data.content, data.is_error);
+  return {
+    ...(callId === undefined ? {} : { callId }),
+    status: summary.status,
+    ...(summary.preview === undefined ? {} : { preview: summary.preview }),
+    ...(summary.errorCode === undefined
+      ? {}
+      : { errorCode: summary.errorCode }),
+    ...(summary.errorMessage === undefined
+      ? {}
+      : { errorMessage: summary.errorMessage }),
+  };
+}
+
+function stopReason(data: Record<string, unknown>): Record<string, unknown> {
+  const reason = data.stop_reason;
+  if (typeof reason !== "object" || reason === null) return {};
+  const type = stringField(reason as Record<string, unknown>, "type");
+  return type === undefined ? {} : { stopReason: type };
+}
+
+function publicEventPayload(event: ArkEvent): Record<string, unknown> {
+  const data = event.data;
+  if (event.type === "agent.thinking") {
+    // Requirement 7.2: reasoning text is never transmitted to the browser.
+    return {};
+  }
+  if (event.type === "user.message" || event.type === "agent.message") {
+    return messagePayload(data);
+  }
+  if (
+    event.type === "agent.tool_use" ||
+    event.type === "agent.mcp_tool_use" ||
+    event.type === "agent.custom_tool_use" ||
+    event.type === "tool.call"
+  ) {
+    return toolUsePayload(event);
+  }
+  if (
+    event.type === "agent.tool_result" ||
+    event.type === "agent.mcp_tool_result" ||
+    event.type === "tool.result"
+  ) {
+    return toolResultPayload(data);
+  }
+  if (event.type === "session.status") {
+    const status = stringField(data, "status");
+    return {
+      ...(status === undefined ? {} : { status }),
+      ...stopReason(data),
+    };
+  }
+  if (event.type.startsWith("session.status_")) {
+    return {
+      status: event.type.slice("session.status_".length),
+      ...stopReason(data),
+    };
+  }
+  if (event.type === "session.error") {
+    const code = stringField(data, "code");
+    const message = stringField(data, "message");
+    return {
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message: redactText(message) }),
+      recoverable: isRecoverableArkError(data),
+    };
+  }
+  // No raw passthrough: unlisted Ark events (span.*, session.thread_status_*,
+  // session.deleted, anything new) carry an empty payload rather than their data.
+  return {};
+}
+
+function projectedPayloadRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function projectedString(
+  payload: Record<string, unknown>,
+  name: string,
+): string | undefined {
+  return typeof payload[name] === "string"
+    ? (payload[name] as string)
+    : undefined;
+}
+
+function projectedEventPayload(
+  type: UiEventType,
+  id: string,
+  sourceType: string,
+  value: unknown,
+): Record<string, unknown> {
+  const payload = projectedPayloadRecord(value);
+  if (type === "message") {
+    const content = projectedString(payload, "content");
+    return content === undefined ? {} : { content: redactCredentials(content) };
+  }
+  if (type === "tool_use") {
+    const name = projectedString(payload, "name");
+    const serverName = projectedString(payload, "serverName");
+    const argsSummary = projectedString(payload, "argsSummary");
+    const redactedArgs =
+      argsSummary === undefined
+        ? undefined
+        : redactToolArgsSummary(argsSummary);
+    const todos = extractTodos({ todos: payload.todos });
+    return {
+      callId: id,
+      ...(name === undefined ? {} : { name }),
+      ...(serverName === undefined ? {} : { serverName }),
+      ...(redactedArgs === undefined ? {} : { argsSummary: redactedArgs }),
+      ...(todos === undefined ? {} : { todos }),
+    };
+  }
+  if (type === "tool_result") {
+    const callId = projectedString(payload, "callId");
+    const preview = projectedString(payload, "preview");
+    const errorCode = projectedString(payload, "errorCode");
+    const errorMessage = projectedString(payload, "errorMessage");
+    const status =
+      payload.status === "ok" || payload.status === "failed"
+        ? payload.status
+        : undefined;
+    return {
+      ...(callId === undefined ? {} : { callId }),
+      ...(status === undefined ? {} : { status }),
+      ...(preview === undefined ? {} : { preview: redactPreview(preview) }),
+      ...(errorCode === undefined
+        ? {}
+        : { errorCode: boundToolErrorCode(errorCode) }),
+      ...(errorMessage === undefined
+        ? {}
+        : { errorMessage: redactToolErrorMessage(errorMessage) }),
+    };
+  }
+  if (type === "status") {
+    const statusCandidate = sourceType.startsWith("session.status_")
+      ? sourceType.slice("session.status_".length)
+      : payload.status;
+    const statusResult = sessionStatusSchema.safeParse(statusCandidate);
+    const status = statusResult.success ? statusResult.data : undefined;
+    const stopReason = projectedString(payload, "stopReason");
+    return {
+      ...(status === undefined ? {} : { status }),
+      ...(stopReason === undefined ? {} : { stopReason }),
+    };
+  }
+  if (type === "error") {
+    const code = projectedString(payload, "code");
+    const message = projectedString(payload, "message");
+    const recoverable =
+      typeof payload.recoverable === "boolean"
+        ? payload.recoverable
+        : undefined;
+    return {
+      ...(code === undefined ? {} : { code }),
+      ...(message === undefined ? {} : { message: redactText(message) }),
+      ...(recoverable === undefined ? {} : { recoverable }),
+    };
+  }
+  return {};
+}
+
+/**
+ * Rebuilds an already-public event from its current allowlist.
+ *
+ * This accepts the projected UiEvent shape, not raw Ark `data`, so persisted
+ * events can be re-projected without pretending they are upstream events.
+ */
+export function projectUiEvent(input: UiEvent): UiEvent {
+  const type = uiEventType(input.sourceType);
+  return {
+    id: input.id,
+    sourceType: input.sourceType,
+    type,
+    createdAt: input.createdAt,
+    payload: projectedEventPayload(
+      type,
+      input.id,
+      input.sourceType,
+      input.payload,
+    ),
+  };
+}
+
+export function normalizeArkEvent(input: ArkEvent): UiEvent {
+  const event = arkEventSchema.parse(input);
+  return projectUiEvent({
+    id: event.id,
+    sourceType: event.type,
+    type: uiEventType(event.type),
+    createdAt: event.createdAt,
+    payload: publicEventPayload(event),
+  });
+}
