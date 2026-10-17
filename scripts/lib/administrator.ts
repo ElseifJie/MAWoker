@@ -30,8 +30,8 @@ export async function ensureDefaultQuotaPolicy(
   await pool.query(
     `insert into quota_policies
        (key, personal_agent_limit, concurrent_session_limit,
-        daily_session_limit, monthly_token_limit)
-     values ('default', $1, $2, $3, $4)
+        daily_session_limit, monthly_token_limit, mode)
+     values ('default', $1, $2, $3, $4, 'unlimited')
      on conflict (key) do update
        set personal_agent_limit = excluded.personal_agent_limit,
            concurrent_session_limit = excluded.concurrent_session_limit,

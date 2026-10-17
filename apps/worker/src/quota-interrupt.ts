@@ -37,6 +37,12 @@ export class QuotaInterruptProcessor {
       ark: Pick<ArkGateway, "getSession" | "submitEvent">;
       workerId: string;
       batchSize?: number;
+      /**
+       * Present only when the deployment can resolve the policy. Returning
+       * false retires the job without interrupting: unlimited mode keeps usage
+       * accounting but must not stop running Sessions.
+       */
+      isEnforced?: (userId: string) => PromiseLike<boolean>;
     },
   ) {}
 
@@ -51,6 +57,17 @@ export class QuotaInterruptProcessor {
 
   private async process(job: QuotaInterruptJob): Promise<void> {
     try {
+      if (
+        this.dependencies.isEnforced &&
+        !(await this.dependencies.isEnforced(job.userId))
+      ) {
+        await this.dependencies.jobs.succeed(
+          job.id,
+          this.dependencies.workerId,
+          job.leaseGeneration,
+        );
+        return;
+      }
       const session = await this.dependencies.ark.getSession(job.arkSessionId, {
         correlationId: `quota-observe:${job.id}:${job.attempts}`,
       });

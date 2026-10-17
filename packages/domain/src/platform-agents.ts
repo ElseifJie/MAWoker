@@ -233,7 +233,9 @@ export interface PlatformAgentRepository {
   }): PromiseLike<
     | {
         previous: Omit<UserQuota, "userId">;
-        effective: Omit<UserQuota, "userId">;
+        effective: Omit<UserQuota, "userId"> & {
+          mode: "enforced" | "unlimited";
+        };
         overridden: Record<QuotaDimensionKey, boolean>;
         monthTokens: number;
       }
@@ -762,7 +764,11 @@ export class PlatformAgentService {
         },
       });
       const notifier = this.dependencies.notifier;
-      if (notifier && result.effective.monthlyTokenLimit > 0) {
+      if (
+        notifier &&
+        result.effective.mode === "enforced" &&
+        result.effective.monthlyTokenLimit > 0
+      ) {
         if (result.monthTokens >= result.effective.monthlyTokenLimit) {
           await notifier.quotaExhausted(userId, "monthlyTokens");
         } else if (
@@ -779,7 +785,10 @@ export class PlatformAgentService {
       }
       return {
         userId,
-        ...result.effective,
+        personalAgentLimit: result.effective.personalAgentLimit,
+        concurrentSessionLimit: result.effective.concurrentSessionLimit,
+        dailySessionLimit: result.effective.dailySessionLimit,
+        monthlyTokenLimit: result.effective.monthlyTokenLimit,
         inherited: {
           personalAgentLimit: !result.overridden.personalAgentLimit,
           concurrentSessionLimit: !result.overridden.concurrentSessionLimit,

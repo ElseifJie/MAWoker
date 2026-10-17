@@ -3,6 +3,8 @@ import { ResourceNotFoundError } from "./errors.js";
 
 export interface QuotaPolicyRecord extends Quota {
   key: "default";
+  mode: "enforced" | "unlimited";
+  version: number;
   updatedBy: string | null;
   updatedAt: Date;
 }
@@ -16,6 +18,7 @@ export interface QuotaPolicyRepository {
    */
   updateDefault(input: {
     quota: Quota;
+    mode?: "enforced" | "unlimited";
     updatedBy: string;
     now: Date;
   }): PromiseLike<
@@ -56,14 +59,16 @@ export class QuotaPolicyService {
   }
 
   async updateDefault(
-    quota: Quota,
+    quota: Quota & { mode?: "enforced" | "unlimited" },
     context: { adminId: string; requestId: string },
     now = new Date(),
   ): Promise<{ updated: QuotaPolicyRecord; overLimitUserIds: string[] }> {
-    const validated = quotaSchema.parse(quota);
+    const { mode, ...limits } = quota;
+    const validated = quotaSchema.parse(limits);
     try {
       const result = await this.dependencies.repository.updateDefault({
         quota: validated,
+        ...(mode === undefined ? {} : { mode }),
         updatedBy: context.adminId,
         now,
       });
@@ -81,8 +86,9 @@ export class QuotaPolicyService {
             concurrentSessionLimit: result.previous.concurrentSessionLimit,
             dailySessionLimit: result.previous.dailySessionLimit,
             monthlyTokenLimit: result.previous.monthlyTokenLimit,
+            mode: result.previous.mode,
           },
-          to: { ...validated },
+          to: { ...validated, mode: result.updated.mode },
         },
       });
       for (const userId of result.overLimitUserIds) {

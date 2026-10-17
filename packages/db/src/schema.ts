@@ -130,6 +130,7 @@ export const quotaReservationStatus = pgEnum("quota_reservation_status", [
   "consumed",
   "released",
 ]);
+export const quotaMode = pgEnum("quota_mode", ["enforced", "unlimited"]);
 export const backgroundJobType = pgEnum("background_job_type", [
   "delete_session",
   "delete_artifact",
@@ -778,6 +779,12 @@ export const quotaPolicies = pgTable(
     monthlyTokenLimit: bigint("monthly_token_limit", {
       mode: "number",
     }).notNull(),
+    /**
+     * `unlimited` keeps usage/reservation accounting for audit and abuse
+     * signals but skips product quota rejections and quota interrupts.
+     */
+    mode: quotaMode("mode").default("enforced").notNull(),
+    version: integer("version").default(1).notNull(),
     updatedBy: uuid("updated_by").references(() => users.id, {
       onDelete: "set null",
     }),

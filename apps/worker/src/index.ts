@@ -159,6 +159,8 @@ const quotaInterruptProcessor = new QuotaInterruptProcessor({
   jobs: repositories.quotaInterrupts,
   ark,
   workerId: `quota-interrupt-worker:${process.pid}:${randomUUID()}`,
+  isEnforced: async (userId) =>
+    (await repositories.quotas.getEffective(userId)).mode === "enforced",
 });
 const uploadCleanupProcessor = new UploadCleanupProcessor({
   jobs: repositories.jobs,

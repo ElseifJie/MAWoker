@@ -396,6 +396,8 @@ interface EffectiveQuota extends Row {
   concurrentSessionLimit: number;
   dailySessionLimit: number;
   monthlyTokenLimit: number;
+  mode: "enforced" | "unlimited";
+  version: number;
 }
 
 type UsageMetricType =
@@ -663,7 +665,8 @@ async function effectiveQuota(
           coalesce(o.daily_session_limit, p.daily_session_limit)::integer
             as "dailySessionLimit",
           coalesce(o.monthly_token_limit, p.monthly_token_limit)::bigint
-            as "monthlyTokenLimit"
+            as "monthlyTokenLimit",
+          p.mode, p.version
         from quota_policies p
         left join user_quota_overrides o on o.user_id = ${userId}
         where p.key = 'default'`,
@@ -677,6 +680,8 @@ async function effectiveQuota(
     concurrentSessionLimit: Number(quota.concurrentSessionLimit),
     dailySessionLimit: Number(quota.dailySessionLimit),
     monthlyTokenLimit: Number(quota.monthlyTokenLimit),
+    mode: quota.mode === "unlimited" ? "unlimited" : "enforced",
+    version: Number(quota.version),
   };
 }
 
@@ -1198,6 +1203,8 @@ export function createRepositories(database: unknown) {
           concurrentSessionLimit: number;
           dailySessionLimit: number;
           monthlyTokenLimit: number;
+          mode: "enforced" | "unlimited";
+          version: number;
           updatedBy: string | null;
           updatedAt: Date;
         }>(
@@ -1206,6 +1213,7 @@ export function createRepositories(database: unknown) {
                      concurrent_session_limit as "concurrentSessionLimit",
                      daily_session_limit as "dailySessionLimit",
                      monthly_token_limit::bigint as "monthlyTokenLimit",
+                     mode, version,
                      updated_by as "updatedBy", updated_at as "updatedAt"
                 from quota_policies where key = 'default'`,
         );
@@ -1217,6 +1225,7 @@ export function createRepositories(database: unknown) {
           dailySessionLimit: number;
           monthlyTokenLimit: number;
         };
+        mode?: "enforced" | "unlimited";
         updatedBy: string;
         now: Date;
       }) {
@@ -1227,6 +1236,8 @@ export function createRepositories(database: unknown) {
             concurrentSessionLimit: number;
             dailySessionLimit: number;
             monthlyTokenLimit: number;
+            mode: "enforced" | "unlimited";
+            version: number;
             updatedBy: string | null;
             updatedAt: Date;
           }>(
@@ -1235,6 +1246,7 @@ export function createRepositories(database: unknown) {
                        concurrent_session_limit as "concurrentSessionLimit",
                        daily_session_limit as "dailySessionLimit",
                        monthly_token_limit::bigint as "monthlyTokenLimit",
+                       mode, version,
                        updated_by as "updatedBy", updated_at as "updatedAt"
                   from quota_policies where key = 'default' for update`,
           );
@@ -1245,6 +1257,8 @@ export function createRepositories(database: unknown) {
             concurrentSessionLimit: number;
             dailySessionLimit: number;
             monthlyTokenLimit: number;
+            mode: "enforced" | "unlimited";
+            version: number;
             updatedBy: string | null;
             updatedAt: Date;
           }>(
@@ -1254,6 +1268,8 @@ export function createRepositories(database: unknown) {
                        concurrent_session_limit = ${input.quota.concurrentSessionLimit},
                        daily_session_limit = ${input.quota.dailySessionLimit},
                        monthly_token_limit = ${input.quota.monthlyTokenLimit},
+                       mode = coalesce(${input.mode ?? null}::quota_mode, mode),
+                       version = version + 1,
                        updated_by = ${input.updatedBy},
                        updated_at = now()
                  where key = 'default'
@@ -1261,25 +1277,29 @@ export function createRepositories(database: unknown) {
                            concurrent_session_limit as "concurrentSessionLimit",
                            daily_session_limit as "dailySessionLimit",
                            monthly_token_limit::bigint as "monthlyTokenLimit",
+                           mode, version,
                            updated_by as "updatedBy", updated_at as "updatedAt"`,
           );
           if (!updated) return undefined;
           const window = utcMonthWindow(input.now);
-          const overLimit = await rows<{ userId: string }>(
-            transaction,
-            sql`select u.id as "userId"
-                  from users u
-                  join quota_policies p on p.key = 'default'
-                  left join user_quota_overrides o on o.user_id = u.id
-                 where (
-                   select coalesce(sum(ul.quantity), 0)
-                     from usage_ledger ul
-                    where ul.user_id = u.id
-                      and ul.metric_type in ('input_tokens', 'output_tokens')
-                      and ul.recorded_at >= ${window.start}
-                      and ul.recorded_at < ${window.end}
-                 ) >= coalesce(o.monthly_token_limit, p.monthly_token_limit)`,
-          );
+          const overLimit =
+            updated.mode === "enforced"
+              ? await rows<{ userId: string }>(
+                  transaction,
+                  sql`select u.id as "userId"
+                        from users u
+                        join quota_policies p on p.key = 'default'
+                        left join user_quota_overrides o on o.user_id = u.id
+                       where (
+                         select coalesce(sum(ul.quantity), 0)
+                           from usage_ledger ul
+                          where ul.user_id = u.id
+                            and ul.metric_type in ('input_tokens', 'output_tokens')
+                            and ul.recorded_at >= ${window.start}
+                            and ul.recorded_at < ${window.end}
+                       ) >= coalesce(o.monthly_token_limit, p.monthly_token_limit)`,
+                )
+              : [];
           for (const { userId } of overLimit) {
             await enqueueQuotaInterrupts(
               transaction,
@@ -1868,7 +1888,10 @@ export function createRepositories(database: unknown) {
                    and recorded_at < ${window.end}`,
           );
           const monthTokens = Number(usage?.total ?? 0);
-          if (monthTokens >= effective.monthlyTokenLimit) {
+          if (
+            effective.mode === "enforced" &&
+            monthTokens >= effective.monthlyTokenLimit
+          ) {
             await enqueueQuotaInterrupts(
               transaction,
               input.userId,
@@ -2120,7 +2143,11 @@ export function createRepositories(database: unknown) {
                      and ark_agent_id like 'pending:%'
                    )`,
           );
-          if ((usage?.count ?? 0) >= quota.personalAgentLimit) return undefined;
+          if (
+            quota.mode === "enforced" &&
+            (usage?.count ?? 0) >= quota.personalAgentLimit
+          )
+            return undefined;
           const created = await requiredFirst<PersonalAgentRecord>(
             transaction,
             sql`insert into personal_agents
@@ -3038,8 +3065,9 @@ export function createRepositories(database: unknown) {
             (select count(*)::integer from sessions where owner_user_id=${userId} and status in ('running','rescheduled') and deletion_state <> 'deleted') as concurrent`,
           );
           if (
-            usage.tokens >= quota.monthlyTokenLimit ||
-            usage.concurrent > quota.concurrentSessionLimit
+            quota.mode === "enforced" &&
+            (usage.tokens >= quota.monthlyTokenLimit ||
+              usage.concurrent > quota.concurrentSessionLimit)
           )
             throw Object.assign(new Error("Quota exceeded"), {
               code: "QUOTA_EXCEEDED",
@@ -3371,11 +3399,13 @@ export function createRepositories(database: unknown) {
                     as "monthlyTokens"`,
           );
           if (!counters) throw new Error("Unable to read quota counters");
-          if (counters.dailyCreateIntents >= quota.dailySessionLimit) {
-            return { quotaExceeded: "daily_sessions" as const };
-          }
-          if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
-            return { quotaExceeded: "monthly_tokens" as const };
+          if (quota.mode === "enforced") {
+            if (counters.dailyCreateIntents >= quota.dailySessionLimit) {
+              return { quotaExceeded: "daily_sessions" as const };
+            }
+            if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
+              return { quotaExceeded: "monthly_tokens" as const };
+            }
           }
 
           await transaction.execute(
@@ -3977,7 +4007,10 @@ export function createRepositories(database: unknown) {
                     as "monthlyTokens"`,
           );
           if (!usage) throw new Error("Unable to read message quota");
-          if (usage.monthlyTokens >= quota.monthlyTokenLimit) {
+          if (
+            quota.mode === "enforced" &&
+            usage.monthlyTokens >= quota.monthlyTokenLimit
+          ) {
             throw new QuotaExceededError("monthly_tokens");
           }
           if (session.status !== "idle") {
@@ -4005,7 +4038,10 @@ export function createRepositories(database: unknown) {
               started: false,
             };
           }
-          if (usage.concurrentSessions >= quota.concurrentSessionLimit) {
+          if (
+            quota.mode === "enforced" &&
+            usage.concurrentSessions >= quota.concurrentSessionLimit
+          ) {
             throw new QuotaExceededError("concurrent_sessions");
           }
 
@@ -4224,7 +4260,10 @@ export function createRepositories(database: unknown) {
                      and recorded_at >= ${window.start}
                      and recorded_at < ${window.end}`,
             );
-            if (Number(usage?.total ?? 0) >= quota.monthlyTokenLimit) {
+            if (
+              quota.mode === "enforced" &&
+              Number(usage?.total ?? 0) >= quota.monthlyTokenLimit
+            ) {
               await enqueueQuotaInterrupts(
                 transaction,
                 userId,
@@ -5407,17 +5446,19 @@ export function createRepositories(database: unknown) {
             throw new Error("Unable to read quota counters");
           }
 
-          if (
-            counters.concurrentSessions + counters.activeReservations >=
-            quota.concurrentSessionLimit
-          ) {
-            return { quotaExceeded: "concurrent_sessions" as const };
-          }
-          if (counters.dailySessions >= quota.dailySessionLimit) {
-            return { quotaExceeded: "daily_sessions" as const };
-          }
-          if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
-            return { quotaExceeded: "monthly_tokens" as const };
+          if (quota.mode === "enforced") {
+            if (
+              counters.concurrentSessions + counters.activeReservations >=
+              quota.concurrentSessionLimit
+            ) {
+              return { quotaExceeded: "concurrent_sessions" as const };
+            }
+            if (counters.dailySessions >= quota.dailySessionLimit) {
+              return { quotaExceeded: "daily_sessions" as const };
+            }
+            if (counters.monthlyTokens >= quota.monthlyTokenLimit) {
+              return { quotaExceeded: "monthly_tokens" as const };
+            }
           }
 
           await transaction.execute(

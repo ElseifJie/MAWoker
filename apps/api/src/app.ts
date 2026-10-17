@@ -314,6 +314,8 @@ export interface QuotaPolicyApiService {
         concurrentSessionLimit: number;
         dailySessionLimit: number;
         monthlyTokenLimit: number;
+        mode: "enforced" | "unlimited";
+        version: number;
         updatedBy: string | null;
         updatedAt: Date;
       }
@@ -325,6 +327,7 @@ export interface QuotaPolicyApiService {
       concurrentSessionLimit: number;
       dailySessionLimit: number;
       monthlyTokenLimit: number;
+      mode?: "enforced" | "unlimited";
     },
     context: { adminId: string; requestId: string },
   ): PromiseLike<{
@@ -333,6 +336,8 @@ export interface QuotaPolicyApiService {
       concurrentSessionLimit: number;
       dailySessionLimit: number;
       monthlyTokenLimit: number;
+      mode: "enforced" | "unlimited";
+      version: number;
       updatedBy: string | null;
       updatedAt: Date;
     };
@@ -794,6 +799,7 @@ const quotaPolicyBodySchema = {
       minimum: 0,
       maximum: Number.MAX_SAFE_INTEGER,
     },
+    mode: { type: "string", enum: ["enforced", "unlimited"] },
   },
 } as const;
 
@@ -4480,6 +4486,8 @@ export function buildApp(options: BuildAppOptions = {}) {
           concurrentSessionLimit: policy.concurrentSessionLimit,
           dailySessionLimit: policy.dailySessionLimit,
           monthlyTokenLimit: policy.monthlyTokenLimit,
+          mode: policy.mode,
+          version: policy.version,
           updatedBy: policy.updatedBy,
           updatedAt: policy.updatedAt.toISOString(),
         });
@@ -4491,6 +4499,7 @@ export function buildApp(options: BuildAppOptions = {}) {
           concurrentSessionLimit: number;
           dailySessionLimit: number;
           monthlyTokenLimit: number;
+          mode?: "enforced" | "unlimited";
         };
       }>(
         "/api/v1/admin/quota-policy",
@@ -4506,6 +4515,8 @@ export function buildApp(options: BuildAppOptions = {}) {
               concurrentSessionLimit: result.updated.concurrentSessionLimit,
               dailySessionLimit: result.updated.dailySessionLimit,
               monthlyTokenLimit: result.updated.monthlyTokenLimit,
+              mode: result.updated.mode,
+              version: result.updated.version,
               updatedBy: result.updated.updatedBy,
               updatedAt: result.updated.updatedAt.toISOString(),
             });

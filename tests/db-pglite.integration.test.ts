@@ -561,6 +561,39 @@ describe("repositories in PGlite", () => {
     await database.close();
   });
 
+  it("skips quota rejection in unlimited mode and enforces when switched", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const ownerId = id();
+    await seedUser(database.client, { id: ownerId });
+    await database.client.query(
+      `insert into quota_policies
+        (key, personal_agent_limit, concurrent_session_limit,
+         daily_session_limit, monthly_token_limit, mode)
+       values ('default', 0, 0, 0, 0, 'unlimited')`,
+    );
+
+    await expect(
+      repositories.quotas.reserveSession({
+        userId: ownerId,
+        reservationId: id(),
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+    ).resolves.toMatchObject({ quota: { mode: "unlimited" } });
+
+    await database.client.query(
+      `update quota_policies set mode = 'enforced' where key = 'default'`,
+    );
+    await expect(
+      repositories.quotas.reserveSession({
+        userId: ownerId,
+        reservationId: id(),
+        expiresAt: new Date(Date.now() + 60_000),
+      }),
+    ).rejects.toBeInstanceOf(QuotaExceededError);
+    await database.close();
+  });
+
   it("scopes every tenant authorization lookup and active assignment", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);

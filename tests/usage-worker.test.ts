@@ -294,6 +294,30 @@ describe("quota interrupt worker", () => {
     expect(ark.submitEvent).not.toHaveBeenCalled();
     expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1", 1);
   });
+
+  it("retires interrupts without touching the Session in unlimited mode", async () => {
+    const jobs = {
+      claim: vi.fn().mockResolvedValue([job]),
+      succeed: vi.fn(),
+      retry: vi.fn(),
+    };
+    const ark = {
+      getSession: vi.fn(),
+      submitEvent: vi.fn(),
+    };
+    const processor = new QuotaInterruptProcessor({
+      jobs,
+      ark,
+      workerId: "quota-worker-1",
+      isEnforced: async () => false,
+    });
+
+    await expect(processor.runOnce()).resolves.toBe(1);
+    expect(ark.getSession).not.toHaveBeenCalled();
+    expect(ark.submitEvent).not.toHaveBeenCalled();
+    expect(jobs.succeed).toHaveBeenCalledWith("job-1", "quota-worker-1", 1);
+    expect(jobs.retry).not.toHaveBeenCalled();
+  });
 });
 
 describe("usage ledger attribution structure", () => {
