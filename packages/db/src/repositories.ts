@@ -5,6 +5,7 @@ import { createSessionEventRepository } from "./session-event-repository.js";
 import { createSessionDeliveryRepository } from "./session-delivery-repository.js";
 import { createFileReuseRepository } from "./file-reuse-repository.js";
 import { createRunRepository } from "./run-repository.js";
+import { createEventIngestorRepository } from "./event-ingestor-repository.js";
 import {
   appendAccountChange,
   createSyncRepository,
@@ -1012,6 +1013,7 @@ export function createRepositories(database: unknown) {
   return {
     memories: createMemoryRepository(db),
     runs: createRunRepository(db),
+    eventConsumers: createEventIngestorRepository(db),
     sync: createSyncRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),

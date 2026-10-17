@@ -246,6 +246,13 @@
       "when": 1792249301973,
       "tag": "0034_cuddly_gabe_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792250500581,
+      "tag": "0035_opposite_mac_gargan",
+      "breakpoints": true
     }
   ]
 }

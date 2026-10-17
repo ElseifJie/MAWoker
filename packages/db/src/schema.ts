@@ -1205,3 +1205,31 @@ export const accountChanges = pgTable(
     ),
   ],
 );
+
+/**
+ * Single-consumer lease for a runtime Session's upstream event stream. The
+ * worker that holds the lease is the only component allowed to persist live
+ * events and drive their side effects; SSE readers consume the local log.
+ */
+export const sessionEventConsumers = pgTable(
+  "session_event_consumers",
+  {
+    sessionId: uuid("session_id").primaryKey(),
+    ownerUserId: uuid("owner_user_id").notNull(),
+    consumerId: text("consumer_id").notNull(),
+    leaseUntil: timestamp("lease_until", { withTimezone: true }).notNull(),
+    generation: integer("generation").notNull().default(0),
+    lastEventId: text("last_event_id"),
+    lastConsumedAt: timestamp("last_consumed_at", { withTimezone: true }),
+    lastErrorCode: text("last_error_code"),
+    ...timestamps,
+  },
+  (table) => [
+    foreignKey({
+      name: "session_event_consumers_owner_session_fk",
+      columns: [table.ownerUserId, table.sessionId],
+      foreignColumns: [sessions.ownerUserId, sessions.id],
+    }).onDelete("cascade"),
+    index("session_event_consumers_lease_idx").on(table.leaseUntil),
+  ],
+);

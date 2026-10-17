@@ -19,6 +19,7 @@ export function runProductionWorkerPoll(
   processors: {
     personalAgent: WorkerProcessor;
     session: WorkerProcessor;
+    eventIngestor?: WorkerProcessor;
     sessionDeletion: WorkerProcessor;
     usage: WorkerProcessor;
     quotaInterrupt: WorkerProcessor;
@@ -37,6 +38,7 @@ export function runProductionWorkerPoll(
     [
       processors.personalAgent,
       processors.session,
+      ...(processors.eventIngestor ? [processors.eventIngestor] : []),
       ...(processors.delivery ? [processors.delivery] : []),
       processors.sessionDeletion,
       processors.usage,

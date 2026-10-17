@@ -177,6 +177,14 @@ const environmentSchema = z
     SESSION_HISTORY_TIMEOUT_MS: positiveInteger.max(120_000).default(30_000),
     SESSION_DELIVERY_BATCH_SIZE: positiveInteger.max(25).default(2),
     SESSION_DELIVERY_TIMEOUT_MS: positiveInteger.max(120_000).default(30_000),
+    SESSION_EVENT_INGESTOR_ENABLED: featureSwitch.default(false),
+    SESSION_EVENT_INGESTOR_LEASE_MS: positiveInteger
+      .max(300_000)
+      .default(30_000),
+    SESSION_EVENT_INGESTOR_BUDGET_MS: positiveInteger
+      .max(60_000)
+      .default(5_000),
+    SESSION_EVENT_INGESTOR_BATCH_SIZE: positiveInteger.max(10).default(2),
     SESSION_ARTIFACT_RETRY_WINDOW_MS: positiveInteger
       .max(3_600_000)
       .default(300_000),
@@ -315,6 +323,10 @@ export function parseServerConfig(
       historyTimeoutMs: env.SESSION_HISTORY_TIMEOUT_MS,
       deliveryBatchSize: env.SESSION_DELIVERY_BATCH_SIZE,
       deliveryTimeoutMs: env.SESSION_DELIVERY_TIMEOUT_MS,
+      eventIngestorEnabled: env.SESSION_EVENT_INGESTOR_ENABLED,
+      eventIngestorLeaseMs: env.SESSION_EVENT_INGESTOR_LEASE_MS,
+      eventIngestorBudgetMs: env.SESSION_EVENT_INGESTOR_BUDGET_MS,
+      eventIngestorBatchSize: env.SESSION_EVENT_INGESTOR_BATCH_SIZE,
       artifactRetryWindowMs: env.SESSION_ARTIFACT_RETRY_WINDOW_MS,
       artifactEmptyGraceMs: env.SESSION_ARTIFACT_EMPTY_GRACE_MS,
     },

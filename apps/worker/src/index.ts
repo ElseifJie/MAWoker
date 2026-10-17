@@ -22,6 +22,7 @@ import { DriveOrphanGcProcessor } from "./drive-orphan-gc.js";
 import { startWorkerLivenessServer } from "./health.js";
 import { createWorkerLogger, logWorkerFailure } from "./logger.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
+import { EventIngestorProcessor } from "./event-ingestor.js";
 import { runProductionWorkerPoll } from "./poll.js";
 import { QuotaInterruptProcessor } from "./quota-interrupt.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
@@ -74,6 +75,15 @@ const sessionService = new SessionService({
   environmentId: config.ark.environmentId,
   createId: randomUUID,
   memory,
+});
+const eventIngestorProcessor = new EventIngestorProcessor({
+  repository: repositories.eventConsumers,
+  sessions: sessionService,
+  workerId: `event-ingestor:${process.pid}:${randomUUID()}`,
+  enabled: config.reliability.eventIngestorEnabled,
+  leaseMs: config.reliability.eventIngestorLeaseMs,
+  budgetMs: config.reliability.eventIngestorBudgetMs,
+  batchSize: config.reliability.eventIngestorBatchSize,
 });
 const sessionHistoryProcessor = new SessionHistoryProcessor({
   repository: repositories.sessionLifecycle,
@@ -232,6 +242,7 @@ await new Promise<void>((resolve) => {
         {
           personalAgent: personalAgentProcessor,
           session: sessionProcessor,
+          eventIngestor: eventIngestorProcessor,
           sessionDeletion: sessionDeletionProcessor,
           usage: usageProcessor,
           history: sessionHistoryProcessor,
