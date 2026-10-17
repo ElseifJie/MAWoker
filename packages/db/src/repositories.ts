@@ -4,6 +4,7 @@ import { createMemoryRepository } from "./memory-repository.js";
 import { createSessionEventRepository } from "./session-event-repository.js";
 import { createSessionDeliveryRepository } from "./session-delivery-repository.js";
 import { createFileReuseRepository } from "./file-reuse-repository.js";
+import { createRunRepository } from "./run-repository.js";
 
 type Row = Record<string, unknown>;
 
@@ -1001,6 +1002,7 @@ export function createRepositories(database: unknown) {
 
   return {
     memories: createMemoryRepository(db),
+    runs: createRunRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),
     users: {
@@ -2906,6 +2908,13 @@ export function createRepositories(database: unknown) {
             (id,owner_user_id,session_id,submission_id,request_hash,content,temporary)
             values (${input.id},${input.ownerUserId},${input.sessionId},${input.submissionId},${input.requestHash},${input.content},${temporary}) returning ${submissionSelection}`,
           );
+          // The Run is the product-visible execution and shares the durable
+          // submission transaction, so a replayed submission cannot create a
+          // second one.
+          await transaction.execute(sql`insert into runs
+            (id,owner_user_id,conversation_id,trigger_kind,submission_id,status)
+            values (gen_random_uuid(),${input.ownerUserId},${input.sessionId},'manual',${input.submissionId},'queued')
+            on conflict (owner_user_id,submission_id) do nothing`);
           await transaction.execute(sql`insert into background_jobs (id,owner_user_id,type,status,priority,payload,run_after)
             values (${input.id},${input.ownerUserId},'reconcile_session','pending',100,${JSON.stringify({ operation: "deliver", sessionId: input.sessionId })}::jsonb,now())`);
           return submission;

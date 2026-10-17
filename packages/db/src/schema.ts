@@ -52,6 +52,21 @@ export const sessionStatus = pgEnum("session_status", [
   "upgrading",
   "failed",
 ]);
+export const runTriggerKind = pgEnum("run_trigger_kind", [
+  "manual",
+  "automation",
+]);
+export const runStatus = pgEnum("run_status", [
+  "queued",
+  "starting",
+  "running",
+  "waiting_user",
+  "waiting_device",
+  "completed",
+  "failed",
+  "canceled",
+  "unknown",
+]);
 export const configSnapshotState = pgEnum("config_snapshot_state", [
   "unverified",
   "verified",
@@ -1083,6 +1098,59 @@ export const messageSubmissions = pgTable(
     check(
       "message_submissions_status_check",
       sql`${table.status} in ('queued','sending','accepted','failed','unknown')`,
+    ),
+  ],
+);
+
+/**
+ * One user-visible execution. A submission is the durable intent; a Run is
+ * what the product shows and what automation/notifications attach to. Both are
+ * created in the same transaction so a replay cannot produce a second Run.
+ */
+export const runs = pgTable(
+  "runs",
+  {
+    id: uuid("id").primaryKey(),
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").notNull(),
+    triggerKind: runTriggerKind("trigger_kind").notNull().default("manual"),
+    submissionId: uuid("submission_id").notNull(),
+    status: runStatus("status").notNull().default("queued"),
+    arkSessionId: text("ark_session_id"),
+    turnId: uuid("turn_id"),
+    automationId: uuid("automation_id"),
+    errorCode: text("error_code"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    endedAt: timestamp("ended_at", { withTimezone: true }),
+    version: integer("version").notNull().default(1),
+    ...timestamps,
+  },
+  (table) => [
+    unique("runs_owner_submission_key").on(
+      table.ownerUserId,
+      table.submissionId,
+    ),
+    foreignKey({
+      name: "runs_owner_conversation_fk",
+      columns: [table.ownerUserId, table.conversationId],
+      foreignColumns: [sessions.ownerUserId, sessions.id],
+    }).onDelete("cascade"),
+    foreignKey({
+      name: "runs_owner_submission_fk",
+      columns: [table.ownerUserId, table.submissionId],
+      foreignColumns: [
+        messageSubmissions.ownerUserId,
+        messageSubmissions.submissionId,
+      ],
+    }).onDelete("cascade"),
+    check("runs_version_positive_check", sql`${table.version} > 0`),
+    index("runs_owner_status_idx").on(table.ownerUserId, table.status),
+    index("runs_owner_conversation_created_idx").on(
+      table.ownerUserId,
+      table.conversationId,
+      table.createdAt,
     ),
   ],
 );

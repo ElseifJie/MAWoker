@@ -381,6 +381,58 @@ describe("database schema in PGlite", () => {
 });
 
 describe("repositories in PGlite", () => {
+  it("creates one queued Run per durable submission and scopes it to the owner", async () => {
+    const database = await createTestDatabase();
+    const repositories = createRepositories(database.db);
+    const ownerId = id();
+    await seedUser(database.client, { id: ownerId });
+    const session = await seedPersonalSession(database.client, {
+      ownerUserId: ownerId,
+    });
+    await database.client.query(
+      `insert into quota_policies
+        (key, personal_agent_limit, concurrent_session_limit,
+         daily_session_limit, monthly_token_limit)
+       values ('default', 10, 5, 100, 1000000)`,
+    );
+    const submissionId = id();
+    const input = {
+      id: id(),
+      ownerUserId: ownerId,
+      sessionId: session.sessionId,
+      submissionId,
+      requestHash: "hash-run-1",
+      content: "hello",
+      temporary: true,
+    };
+
+    await repositories.sessionLifecycle.enqueueSubmission(input);
+
+    await expect(
+      repositories.runs.findBySubmission(ownerId, submissionId),
+    ).resolves.toMatchObject({
+      ownerUserId: ownerId,
+      conversationId: session.sessionId,
+      submissionId,
+      triggerKind: "manual",
+      status: "queued",
+    });
+
+    // Replaying the same submission ID returns the existing receipt and must
+    // not create a second Run.
+    await repositories.sessionLifecycle.enqueueSubmission(input);
+    const count = await database.client.query<{ count: number }>(
+      `select count(*)::int as count from runs where owner_user_id = $1`,
+      [ownerId],
+    );
+    expect(count.rows[0]?.count).toBe(1);
+
+    await expect(
+      repositories.runs.findBySubmission(id(), submissionId),
+    ).resolves.toBeUndefined();
+    await database.close();
+  });
+
   it("scopes every tenant authorization lookup and active assignment", async () => {
     const database = await createTestDatabase();
     const repositories = createRepositories(database.db);

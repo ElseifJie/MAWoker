@@ -225,6 +225,13 @@
       "when": 1791852850211,
       "tag": "0031_bumpy_lady_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792247874680,
+      "tag": "0032_flippant_gargoyle",
+      "breakpoints": true
     }
   ]
 }
