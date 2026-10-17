@@ -23,7 +23,7 @@ import { startWorkerLivenessServer } from "./health.js";
 import { createWorkerLogger, logWorkerFailure } from "./logger.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
 import { EventIngestorProcessor } from "./event-ingestor.js";
-import { runProductionWorkerPoll } from "./poll.js";
+import { startWorkerLanes } from "./lanes.js";
 import { QuotaInterruptProcessor } from "./quota-interrupt.js";
 import { SessionReconciliationProcessor } from "./session-reconciliation.js";
 import { SessionDeletionProcessor } from "./session-deletion.js";
@@ -232,43 +232,49 @@ const health = startWorkerLivenessServer({
 
 logger.info({ event: "worker.ready", result: "success" }, "Worker ready");
 
+const scheduler = startWorkerLanes({
+  reportError: reportWorkerError,
+  lanes: [
+    {
+      name: "realtime",
+      intervalMs: config.worker.pollIntervalMs,
+      processors: [
+        personalAgentProcessor,
+        sessionProcessor,
+        eventIngestorProcessor,
+        ...(config.reliability.deliveryEnabled
+          ? [{ runOnce: () => delivery.discoverOnce() }]
+          : []),
+      ],
+    },
+    {
+      name: "accounting",
+      intervalMs: Math.max(config.worker.pollIntervalMs * 5, 5_000),
+      processors: [
+        usageProcessor,
+        sessionHistoryProcessor,
+        quotaInterruptProcessor,
+      ],
+    },
+    {
+      name: "maintenance",
+      intervalMs: Math.max(config.worker.pollIntervalMs * 10, 10_000),
+      processors: [
+        sessionDeletionProcessor,
+        uploadCleanupProcessor,
+        artifactDeletionProcessor,
+        artifactObjectCleanupProcessor,
+        driveObjectCleanupProcessor,
+        driveOrphanGcProcessor,
+        memory,
+      ],
+    },
+  ],
+});
+
 await new Promise<void>((resolve) => {
-  let running = false;
-  const poll = async () => {
-    if (running) return;
-    running = true;
-    try {
-      await runProductionWorkerPoll(
-        {
-          personalAgent: personalAgentProcessor,
-          session: sessionProcessor,
-          eventIngestor: eventIngestorProcessor,
-          sessionDeletion: sessionDeletionProcessor,
-          usage: usageProcessor,
-          history: sessionHistoryProcessor,
-          ...(config.reliability.deliveryEnabled
-            ? {
-                delivery: { runOnce: () => delivery.discoverOnce() },
-              }
-            : {}),
-          quotaInterrupt: quotaInterruptProcessor,
-          uploadCleanup: uploadCleanupProcessor,
-          artifactDeletion: artifactDeletionProcessor,
-          artifactCleanup: artifactObjectCleanupProcessor,
-          driveCleanup: driveObjectCleanupProcessor,
-          driveOrphanGc: driveOrphanGcProcessor,
-          memory,
-        },
-        reportWorkerError,
-      );
-    } finally {
-      running = false;
-    }
-  };
-  const interval = setInterval(() => void poll(), config.worker.pollIntervalMs);
-  void poll();
   const shutdown = async () => {
-    clearInterval(interval);
+    scheduler.stop();
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     await health.close();
