@@ -16,6 +16,7 @@ import {
   QuotaPolicyService,
   QuotaUsageService,
   RunService,
+  SyncService,
   resolveSystemAgents,
   SessionInputService,
   FileReuseService,
@@ -114,6 +115,11 @@ const sessions = new SessionService({
   memory,
 });
 const runService = new RunService({ repository: repositories.runs });
+const syncService = new SyncService({
+  repository: repositories.sync,
+  runs: repositories.runs,
+  notifications: repositories.sessionDelivery,
+});
 const skills = new SkillService({
   repository: repositories.skills,
   ark,
@@ -148,6 +154,7 @@ const app = buildApp({
   skills,
   sessions,
   runs: runService,
+  sync: syncService,
   memory,
   inputs,
   artifacts,

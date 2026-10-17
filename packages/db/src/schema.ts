@@ -1154,3 +1154,47 @@ export const runs = pgTable(
     ),
   ],
 );
+
+/**
+ * Per-owner change feed for multi-browser/multi-device sync. The counter row is
+ * locked inside the same transaction as the mutation, so commit order and
+ * `seq` order agree; a client never sees a smaller `seq` committed later.
+ */
+export const syncCounters = pgTable("sync_counters", {
+  ownerUserId: uuid("owner_user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  seq: bigint("seq", { mode: "number" }).notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+});
+
+export const accountChanges = pgTable(
+  "account_changes",
+  {
+    ownerUserId: uuid("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    seq: bigint("seq", { mode: "number" }).notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id").notNull(),
+    revision: integer("revision"),
+    deleted: boolean("deleted").notNull().default(false),
+    changedAt: timestamp("changed_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerUserId, table.seq] }),
+    index("account_changes_owner_changed_idx").on(
+      table.ownerUserId,
+      table.changedAt,
+    ),
+    index("account_changes_owner_resource_idx").on(
+      table.ownerUserId,
+      table.resourceType,
+      table.resourceId,
+    ),
+  ],
+);

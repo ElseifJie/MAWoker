@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { sql, type SQL } from "drizzle-orm";
+import { appendAccountChange } from "./sync-repository.js";
 
 interface Database {
   execute<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -77,10 +78,21 @@ export function createSessionDeliveryRepository(db: Database) {
     turn: Turn,
     kind: Notification["kind"],
   ) {
-    await transaction.execute(sql`insert into user_notifications
-      (id,owner_user_id,session_id,turn_id,kind)
-      values(${randomUUID()},${turn.ownerUserId},${turn.sessionId},${turn.id},${kind})
-      on conflict (owner_user_id,session_id,turn_id,kind) do nothing`);
+    const inserted = await transaction.execute<{ id: string }>(
+      sql`insert into user_notifications
+        (id,owner_user_id,session_id,turn_id,kind)
+        values(${randomUUID()},${turn.ownerUserId},${turn.sessionId},${turn.id},${kind})
+        on conflict (owner_user_id,session_id,turn_id,kind) do nothing
+        returning id`,
+    );
+    const row = inserted.rows[0];
+    if (row) {
+      await appendAccountChange(transaction, {
+        ownerUserId: turn.ownerUserId,
+        resourceType: "notification",
+        resourceId: row.id,
+      });
+    }
   }
   async function ownedSession(
     transaction: Database,
@@ -235,7 +247,10 @@ export function createSessionDeliveryRepository(db: Database) {
           // Link the observed turn back to the Run created with its durable
           // submission. The status guard prevents a repeated discovery scan
           // from bumping the version once the Run already reached the target.
-          await transaction.execute(sql`update runs r
+          const linkedRun = await transaction.execute<{
+            id: string;
+            version: number;
+          }>(sql`update runs r
             set turn_id = ${turn.id},
                 started_at = coalesce(r.started_at, ${turn.startedAt}::timestamptz),
                 ended_at = case
@@ -270,7 +285,18 @@ export function createSessionDeliveryRepository(db: Database) {
                         else 'waiting_user'::run_status
                       end
                 )
-              )`);
+              )
+            returning id, version`);
+          const linked = linkedRun.rows[0];
+          if (linked) {
+            await appendAccountChange(transaction, {
+              ownerUserId: userId,
+              resourceType: "run",
+              resourceId: linked.id,
+              revision: linked.version,
+              now: input.now,
+            });
+          }
           if (
             turn.outcome === "completed" &&
             turn.artifactState === "pending"
@@ -336,10 +362,20 @@ export function createSessionDeliveryRepository(db: Database) {
       }));
     },
     async markNotificationRead(userId: string, id: string) {
-      const result =
-        await db.execute(sql`update user_notifications set read_at=coalesce(read_at,now())
-        where id=${id} and owner_user_id=${userId} returning id`);
-      return result.rows.length > 0;
+      return db.transaction(async (transaction) => {
+        const result = await transaction.execute<{ id: string }>(
+          sql`update user_notifications set read_at=coalesce(read_at,now())
+              where id=${id} and owner_user_id=${userId} returning id`,
+        );
+        const row = result.rows[0];
+        if (!row) return false;
+        await appendAccountChange(transaction, {
+          ownerUserId: userId,
+          resourceType: "notification",
+          resourceId: row.id,
+        });
+        return true;
+      });
     },
     async claimSync(
       userId: string,

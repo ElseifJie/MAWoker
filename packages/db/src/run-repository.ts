@@ -1,4 +1,5 @@
 import { sql, type SQL } from "drizzle-orm";
+import { appendAccountChange } from "./sync-repository.js";
 
 type Row = Record<string, unknown>;
 
@@ -115,32 +116,42 @@ export function createRunRepository(db: Database) {
         input.from.map((status) => sql`${status}::run_status`),
         sql`, `,
       );
-      const result = await db.execute<RunRecord>(
-        sql`update runs
-               set status = ${input.to}::run_status,
-                   error_code = ${input.errorCode ?? null}::text,
-                   ark_session_id = coalesce(
-                     ${input.arkSessionId ?? null}::text,
-                     ark_session_id
-                   ),
-                   turn_id = coalesce(
-                     ${input.turnId ?? null}::uuid,
-                     turn_id
-                   ),
-                   started_at = coalesce(
-                     ${input.startedAt ?? null}::timestamptz,
-                     started_at
-                   ),
-                   ended_at = ${input.endedAt ?? null}::timestamptz,
-                   version = version + 1,
-                   updated_at = ${now}::timestamptz
-             where owner_user_id = ${input.ownerUserId}
-               and id = ${input.id}
-               and status in (${from})
-             returning ${runSelection}`,
-      );
-      const row = result.rows[0];
-      return row ? dates(row) : undefined;
+      return db.transaction(async (transaction) => {
+        const result = await transaction.execute<RunRecord>(
+          sql`update runs
+                 set status = ${input.to}::run_status,
+                     error_code = ${input.errorCode ?? null}::text,
+                     ark_session_id = coalesce(
+                       ${input.arkSessionId ?? null}::text,
+                       ark_session_id
+                     ),
+                     turn_id = coalesce(
+                       ${input.turnId ?? null}::uuid,
+                       turn_id
+                     ),
+                     started_at = coalesce(
+                       ${input.startedAt ?? null}::timestamptz,
+                       started_at
+                     ),
+                     ended_at = ${input.endedAt ?? null}::timestamptz,
+                     version = version + 1,
+                     updated_at = ${now}::timestamptz
+               where owner_user_id = ${input.ownerUserId}
+                 and id = ${input.id}
+                 and status in (${from})
+               returning ${runSelection}`,
+        );
+        const row = result.rows[0];
+        if (!row) return undefined;
+        await appendAccountChange(transaction, {
+          ownerUserId: input.ownerUserId,
+          resourceType: "run",
+          resourceId: row.id,
+          revision: row.version,
+          now,
+        });
+        return dates(row);
+      });
     },
 
     async listForConversation(
@@ -155,6 +166,18 @@ export function createRunRepository(db: Database) {
                and conversation_id = ${conversationId}
              order by created_at desc
              limit ${limit}`,
+      );
+      return result.rows.map(dates);
+    },
+
+    async listForOwner(ownerUserId: string, limit = 50): Promise<RunRecord[]> {
+      const bounded = Math.max(1, Math.min(limit, 100));
+      const result = await db.execute<RunRecord>(
+        sql`select ${runSelection}
+              from runs
+             where owner_user_id = ${ownerUserId}
+             order by created_at desc, id desc
+             limit ${bounded}`,
       );
       return result.rows.map(dates);
     },

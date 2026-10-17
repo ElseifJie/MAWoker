@@ -423,6 +423,20 @@ describe("repositories in PGlite", () => {
       submissionId,
     );
     if (!createdRun) throw new Error("Run was not created");
+    await expect(repositories.sync.getCursor(ownerId)).resolves.toBe(1);
+    await expect(
+      repositories.sync.listChanges(ownerId, 0, 10),
+    ).resolves.toEqual({
+      hasMore: false,
+      changes: [
+        expect.objectContaining({
+          seq: 1,
+          resourceType: "run",
+          resourceId: createdRun.id,
+          revision: 1,
+        }),
+      ],
+    });
     const running = await repositories.runs.transition({
       ownerUserId: ownerId,
       id: createdRun.id,
@@ -435,6 +449,20 @@ describe("repositories in PGlite", () => {
       status: "running",
       arkSessionId: session.arkSessionId,
       version: 2,
+    });
+    await expect(repositories.sync.getCursor(ownerId)).resolves.toBe(2);
+    await expect(
+      repositories.sync.listChanges(ownerId, 1, 10),
+    ).resolves.toEqual({
+      hasMore: false,
+      changes: [
+        expect.objectContaining({
+          seq: 2,
+          resourceType: "run",
+          resourceId: createdRun.id,
+          revision: 2,
+        }),
+      ],
     });
     await expect(
       repositories.runs.transition({
@@ -452,6 +480,7 @@ describe("repositories in PGlite", () => {
         to: "completed",
       }),
     ).resolves.toBeUndefined();
+    await expect(repositories.sync.getCursor(id())).resolves.toBe(0);
 
     await database.client.query(
       `update message_submissions set upstream_event_id = $1
@@ -489,6 +518,20 @@ describe("repositories in PGlite", () => {
       turnId: expect.any(String),
     });
     const completedVersion = completed?.version;
+    await expect(repositories.sync.getCursor(ownerId)).resolves.toBe(3);
+    await expect(
+      repositories.sync.listChanges(ownerId, 2, 10),
+    ).resolves.toEqual({
+      hasMore: false,
+      changes: [
+        expect.objectContaining({
+          seq: 3,
+          resourceType: "run",
+          resourceId: createdRun.id,
+          revision: completedVersion,
+        }),
+      ],
+    });
 
     // A repeated discovery scan of the same boundary must not bump the Run.
     await repositories.sessionDelivery.recordObservations(
@@ -500,6 +543,8 @@ describe("repositories in PGlite", () => {
     await expect(
       repositories.runs.findBySubmission(ownerId, submissionId),
     ).resolves.toMatchObject({ version: completedVersion });
+    // The repeated scan must not append another account change either.
+    await expect(repositories.sync.getCursor(ownerId)).resolves.toBe(3);
 
     // Replaying the same submission ID returns the existing receipt and must
     // not create a second Run.

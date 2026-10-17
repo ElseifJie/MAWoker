@@ -97,3 +97,4 @@ export * from "./memory.js";
 export * from "./memory-policy.js";
 export * from "./system-agents.js";
 export * from "./file-reuse.js";
+export * from "./sync.js";

@@ -5,6 +5,10 @@ import { createSessionEventRepository } from "./session-event-repository.js";
 import { createSessionDeliveryRepository } from "./session-delivery-repository.js";
 import { createFileReuseRepository } from "./file-reuse-repository.js";
 import { createRunRepository } from "./run-repository.js";
+import {
+  appendAccountChange,
+  createSyncRepository,
+} from "./sync-repository.js";
 
 type Row = Record<string, unknown>;
 
@@ -1003,6 +1007,7 @@ export function createRepositories(database: unknown) {
   return {
     memories: createMemoryRepository(db),
     runs: createRunRepository(db),
+    sync: createSyncRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),
     users: {
@@ -2911,10 +2916,22 @@ export function createRepositories(database: unknown) {
           // The Run is the product-visible execution and shares the durable
           // submission transaction, so a replayed submission cannot create a
           // second one.
-          await transaction.execute(sql`insert into runs
-            (id,owner_user_id,conversation_id,trigger_kind,submission_id,status)
-            values (gen_random_uuid(),${input.ownerUserId},${input.sessionId},'manual',${input.submissionId},'queued')
-            on conflict (owner_user_id,submission_id) do nothing`);
+          const createdRun = await transaction.execute<{ id: string }>(
+            sql`insert into runs
+              (id,owner_user_id,conversation_id,trigger_kind,submission_id,status)
+              values (gen_random_uuid(),${input.ownerUserId},${input.sessionId},'manual',${input.submissionId},'queued')
+              on conflict (owner_user_id,submission_id) do nothing
+              returning id`,
+          );
+          const run = createdRun.rows[0];
+          if (run) {
+            await appendAccountChange(transaction, {
+              ownerUserId: input.ownerUserId,
+              resourceType: "run",
+              resourceId: run.id,
+              revision: 1,
+            });
+          }
           await transaction.execute(sql`insert into background_jobs (id,owner_user_id,type,status,priority,payload,run_after)
             values (${input.id},${input.ownerUserId},'reconcile_session','pending',100,${JSON.stringify({ operation: "deliver", sessionId: input.sessionId })}::jsonb,now())`);
           return submission;

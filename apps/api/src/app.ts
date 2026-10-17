@@ -569,6 +569,14 @@ interface BuildAppOptions {
   runs?: {
     get(userId: string, id: string): PromiseLike<RunRecord>;
   };
+  sync?: {
+    snapshot(userId: string): PromiseLike<unknown>;
+    changes(
+      userId: string,
+      cursor: number,
+      limit: number,
+    ): PromiseLike<unknown>;
+  };
   inputs?: SessionInputApiService;
   artifacts?: ArtifactApiService;
   fileReuse?: {
@@ -641,6 +649,15 @@ const uuidParamsSchema = {
   additionalProperties: false,
   required: ["id"],
   properties: { id: { type: "string", format: "uuid" } },
+} as const;
+
+const syncChangesQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    cursor: { type: "integer", minimum: 0, default: 0 },
+    limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
+  },
 } as const;
 
 const agentProperties = {
@@ -2677,6 +2694,23 @@ export function buildApp(options: BuildAppOptions = {}) {
             throw error;
           }
         },
+      );
+    }
+
+    if (options.sync) {
+      const sync = options.sync;
+      app.get("/api/v1/sync/snapshot", async (request) =>
+        sync.snapshot(request.auth!.userId),
+      );
+      app.get<{ Querystring: { cursor: number; limit: number } }>(
+        "/api/v1/sync/changes",
+        { schema: { querystring: syncChangesQuerySchema } },
+        async (request) =>
+          sync.changes(
+            request.auth!.userId,
+            request.query.cursor,
+            request.query.limit,
+          ),
       );
     }
 
