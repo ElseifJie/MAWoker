@@ -1,4 +1,9 @@
-import type { ArkAgentInput, ArkGateway } from "@pwa/ark-client";
+import type {
+  ArkAgentInput,
+  ArkGateway,
+  ArkMcpServerInput,
+  ArkMcpToolsetInput,
+} from "@pwa/ark-client";
 import {
   AgentConflictError,
   AgentReferencedError,
@@ -173,6 +178,10 @@ export interface UserAgentRepository {
   audit(entry: PersonalAgentAuditEntry): PromiseLike<void>;
 }
 
+function mcpUpstreamName(serverId: string): string {
+  return `mcp-${serverId.replace(/-/g, "").slice(0, 12)}`;
+}
+
 interface AgentConfiguration {
   name: string;
   description: string;
@@ -261,6 +270,11 @@ export class UserAgentService {
       >;
       modelAllowlist: readonly string[];
       createId: () => string;
+      mcpServers?: {
+        listActive(
+          ownerUserId: string,
+        ): PromiseLike<Array<{ id: string; name: string; url: string }>>;
+      };
     },
   ) {
     this.models = new Set(dependencies.modelAllowlist);
@@ -362,10 +376,14 @@ export class UserAgentService {
     let upstream;
     try {
       const operationId = createCorrelationId(id);
-      upstream = await this.dependencies.ark.createAgent(this.arkInput(input), {
-        correlationId: operationId,
-        idempotencyKey: operationId,
-      });
+      const mcpServers = await this.activeMcpServers(context.userId);
+      upstream = await this.dependencies.ark.createAgent(
+        this.arkInput(input, mcpServers),
+        {
+          correlationId: operationId,
+          idempotencyKey: operationId,
+        },
+      );
     } catch (error) {
       const errorCode = arkErrorCode(error);
       if (isArkCategory(error, "unknown_write_outcome")) {
@@ -820,7 +838,24 @@ export class UserAgentService {
     return this.models.values().next().value ?? "";
   }
 
-  private arkInput(input: AgentConfiguration): ArkAgentInput {
+  private async activeMcpServers(
+    userId: string,
+  ): Promise<Array<{ id: string; name: string; url: string }>> {
+    try {
+      const servers =
+        (await this.dependencies.mcpServers?.listActive(userId)) ?? [];
+      return servers.slice(0, 20);
+    } catch {
+      // Connector lookup is best-effort: a registry outage must not block the
+      // Agent itself from being created or updated.
+      return [];
+    }
+  }
+
+  private arkInput(
+    input: AgentConfiguration,
+    mcpServers: Array<{ id: string; name: string; url: string }> = [],
+  ): ArkAgentInput {
     return {
       name: input.name,
       description: input.description,
@@ -836,6 +871,15 @@ export class UserAgentService {
       })),
       // The documented v3 shape: the built-in toolset is a `tools` entry, not
       // the legacy top-level `toolsetId` / `toolPermission` shortcut.
+      ...(mcpServers.length === 0
+        ? {}
+        : {
+            mcpServers: mcpServers.map((server): ArkMcpServerInput => ({
+              type: "url",
+              name: mcpUpstreamName(server.id),
+              url: server.url,
+            })),
+          }),
       tools: [
         {
           type: PLATFORM_AGENT_TOOLSET_ID,
@@ -843,6 +887,13 @@ export class UserAgentService {
             permissionPolicy: { type: PLATFORM_AGENT_TOOL_PERMISSION },
           },
         },
+        ...mcpServers.map((server): ArkMcpToolsetInput => ({
+          type: "mcp_toolset",
+          mcpServerName: mcpUpstreamName(server.id),
+          defaultConfig: {
+            permissionPolicy: { type: "always_ask" },
+          },
+        })),
       ],
     };
   }

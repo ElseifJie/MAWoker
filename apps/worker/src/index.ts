@@ -59,6 +59,14 @@ const service = new UserAgentService({
   ark,
   modelAllowlist: config.modelAllowlist,
   createId: randomUUID,
+  mcpServers: {
+    async listActive(ownerUserId) {
+      const rows = await repositories.mcpServers.listOwned(ownerUserId);
+      return rows
+        .filter((row) => row.status === "active")
+        .map((row) => ({ id: row.id, name: row.name, url: row.url }));
+    },
+  },
 });
 const memory = new MemoryService({
   repository: repositories.memories,

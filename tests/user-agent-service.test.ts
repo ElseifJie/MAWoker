@@ -949,4 +949,50 @@ describe("UserAgentService", () => {
     });
     expect(state.sessions[0]?.version).toBe("1");
   });
+
+  it("binds active MCP servers into the Ark Agent input", async () => {
+    const state = createRepository();
+    const ark = new InMemoryArkGateway();
+    const service = new UserAgentService({
+      repository: state.repository,
+      ark,
+      modelAllowlist: ["model-a"],
+      createId: () => personalAgentId,
+      mcpServers: {
+        listActive: async () => [
+          {
+            id: "00000000-0000-4000-8000-000000000010",
+            name: "Feishu",
+            url: "https://mcp.example.com/mcp",
+          },
+        ],
+      },
+    });
+
+    await service.create(input, { userId, requestId });
+
+    const call = ark.calls.find(
+      (candidate) => candidate.operation === "createAgent",
+    );
+    const arkInput = call?.input as {
+      mcpServers?: unknown;
+      tools?: Array<Record<string, unknown>>;
+    };
+    expect(arkInput.mcpServers).toEqual([
+      {
+        type: "url",
+        name: "mcp-000000000000",
+        url: "https://mcp.example.com/mcp",
+      },
+    ]);
+    expect(arkInput.tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "mcp_toolset",
+          mcpServerName: "mcp-000000000000",
+          defaultConfig: { permissionPolicy: { type: "always_ask" } },
+        }),
+      ]),
+    );
+  });
 });
