@@ -18,6 +18,8 @@
     "db:generate": "npm run db:generate -w @pwa/db",
     "db:check": "npm run db:check -w @pwa/db",
     "db:migrate": "npm run db:migrate -w @pwa/db",
+    "db:backup": "tsx --env-file=.env scripts/db-backup.ts",
+    "db:restore": "tsx --env-file=.env scripts/db-restore.ts",
     "admin:seed": "tsx --env-file=.env scripts/seed-admin.ts",
     "data:reset": "tsx --env-file=.env scripts/reset-data.ts",
     "sessions:backfill-events": "tsx --env-file=.env scripts/backfill-session-events.ts",
