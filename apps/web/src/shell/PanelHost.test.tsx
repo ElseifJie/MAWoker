@@ -1,7 +1,13 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelHost } from "./PanelHost.js";
@@ -47,6 +53,10 @@ describe("PanelHost", () => {
 
     await user.click(screen.getByRole("button", { name: "Close 方案.md" }));
     expect(view.onClose).toHaveBeenCalledWith("panel-1");
+    // Flush the deferred focus move so it cannot land in the next test.
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "报表.xlsx" })).toHaveFocus(),
+    );
   });
 
   it("moves the active panel with arrow, Home, and End keys", async () => {
@@ -88,5 +98,19 @@ describe("PanelHost", () => {
     fireEvent.drop(second, { dataTransfer });
 
     expect(view.onReorder).toHaveBeenCalledWith(0, 1);
+  });
+
+  it("[shell.focus.return] focuses the next tab after closing", async () => {
+    const view = props();
+    render(<PanelHost {...view} />);
+
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Close 方案.md" }));
+
+    expect(view.onClose).toHaveBeenCalledWith("panel-1");
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "报表.xlsx" })).toHaveFocus(),
+    );
   });
 });

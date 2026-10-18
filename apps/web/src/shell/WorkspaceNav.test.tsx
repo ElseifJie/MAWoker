@@ -113,4 +113,22 @@ describe("WorkspaceNav", () => {
     await userEvent.setup().click(close);
     expect(onCloseDrawer).toHaveBeenCalledTimes(1);
   });
+
+  it("[shell.menu] closes the account menu with Escape and returns focus", async () => {
+    renderNav();
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", {
+      name: "账号：user@example.com",
+    });
+
+    await user.click(trigger);
+    expect(
+      screen.getByRole("menuitem", { name: "退出登录" }),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menuitem", { name: "退出登录" })).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
 });

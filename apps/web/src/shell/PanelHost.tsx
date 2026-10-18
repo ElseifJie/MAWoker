@@ -40,10 +40,27 @@ export function PanelHost({
     if (target) onSelect(target.id);
   };
 
+  const focusAfterClose = (targetId?: string) => {
+    const focus = () => {
+      if (targetId) {
+        document.getElementById(`panel-tab-${targetId}`)?.focus();
+      } else {
+        document.querySelector<HTMLElement>(".ui-panel-host__empty")?.focus();
+      }
+    };
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(focus);
+    } else {
+      focus();
+    }
+  };
+
   if (panels.length === 0) {
     return (
       <section className="ui-panel-host" aria-label="Workspace panels">
-        <p className="ui-panel-host__empty">{emptyLabel}</p>
+        <p className="ui-panel-host__empty" tabIndex={-1}>
+          {emptyLabel}
+        </p>
       </section>
     );
   }
@@ -93,7 +110,11 @@ export function PanelHost({
                 type="button"
                 className="ui-panel-host__close"
                 aria-label={`Close ${panel.title}`}
-                onClick={() => onClose(panel.id)}
+                onClick={() => {
+                  const target = panels[index + 1] ?? panels[index - 1];
+                  onClose(panel.id);
+                  focusAfterClose(target?.id);
+                }}
               >
                 ×
               </button>

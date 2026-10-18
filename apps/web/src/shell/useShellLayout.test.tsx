@@ -185,4 +185,37 @@ describe("useShellLayout", () => {
     expect(result.current.state.panels[0]?.title).toBe("renamed.pdf");
     expect(result.current.state.activePanelId).toBe(panel.id);
   });
+
+  it("[shell.restore] loads persisted panels and the active tab", () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      SHELL_STATE_KEY,
+      JSON.stringify({
+        leftWidth: 300,
+        rightWidth: 520,
+        leftCollapsed: false,
+        rightOpen: true,
+        panels: [
+          {
+            id: "artifact:a",
+            type: "artifact",
+            title: "a.pdf",
+            resourceRef: "a",
+            conversationId: "session-1",
+          },
+        ],
+        activePanelId: "artifact:a",
+      }),
+    );
+
+    const { result } = renderHook(() =>
+      useShellLayout({ storage, viewport: 1440 }),
+    );
+
+    expect(result.current.state.leftWidth).toBe(300);
+    expect(result.current.state.rightOpen).toBe(true);
+    expect(result.current.state.panels).toHaveLength(1);
+    expect(result.current.state.activePanelId).toBe("artifact:a");
+    expect(result.current.layout.rightMode).toBe("panel");
+  });
 });
