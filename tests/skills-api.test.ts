@@ -274,7 +274,7 @@ describe("skills API", () => {
     await app.close();
   });
 
-  it("keeps skill routes tenant-scoped and rejects administrators", async () => {
+  it("keeps skill routes tenant-scoped and serves administrators their own skills", async () => {
     const service = skillService();
     const app = buildApp({ auth: auth(), skills: service });
     const adminCookies = { [AUTH_COOKIE_NAME]: "admin-token" };
@@ -284,7 +284,7 @@ describe("skills API", () => {
       url: "/api/v1/skills",
       cookies: adminCookies,
     });
-    expect(list.statusCode).toBe(404);
+    expect(list.statusCode).toBe(200);
     const upload = await app.inject({
       method: "POST",
       url: "/api/v1/skills",
@@ -299,9 +299,15 @@ describe("skills API", () => {
         return form;
       })(),
     });
-    expect(upload.statusCode).toBe(404);
-    expect(service.list).not.toHaveBeenCalled();
-    expect(service.upload).not.toHaveBeenCalled();
+    expect(upload.statusCode).toBe(201);
+    expect(service.list).toHaveBeenCalledWith(
+      "admin",
+      expect.objectContaining({ scope: "custom" }),
+    );
+    expect(service.upload).toHaveBeenCalledWith(
+      expect.objectContaining({ file: expect.anything() }),
+      expect.objectContaining({ userId: "admin" }),
+    );
 
     const unauthenticated = await app.inject({
       method: "GET",

@@ -27,6 +27,7 @@
     "healthcheck:api": "node scripts/container-healthcheck.mjs api",
     "healthcheck:worker": "node scripts/container-healthcheck.mjs worker",
     "memory:demo": "tsx scripts/memory-demo.ts",
+    "smoke:external": "tsx --env-file=.env scripts/smoke-external.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

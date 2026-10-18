@@ -102,6 +102,12 @@ export class TosArtifactStorage implements ArtifactStorage {
       stream.destroy();
       throw abortError();
     }
+    if (metadata.contentLength === undefined) {
+      // S3 streaming uploads send x-amz-decoded-content-length; without an
+      // explicit length the SDK builds an invalid header instead of a PUT.
+      stream.destroy();
+      throw new Error("TOS uploads require an explicit contentLength");
+    }
     const abort = () => stream.destroy();
     signal?.addEventListener("abort", abort, { once: true });
     try {

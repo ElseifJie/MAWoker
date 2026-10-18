@@ -89,7 +89,7 @@ describe("owned delivery records and notifications", () => {
     }
   });
 
-  it("checks user role at every new route including retry and unread mutation", async () => {
+  it("serves administrators the same owner-scoped delivery routes", async () => {
     const { app, delivery } = fixture();
     try {
       for (const request of [
@@ -104,17 +104,16 @@ describe("owned delivery records and notifications", () => {
           url: `/api/v1/notifications/${turnId}/read`,
         },
       ]) {
-        expect(
-          (
-            await app.inject({
-              ...request,
-              headers: { cookie: "pwa_session=admin" },
-            })
-          ).statusCode,
-        ).toBe(404);
+        const response = await app.inject({
+          ...request,
+          headers: { cookie: "pwa_session=admin" },
+        });
+        expect(response.statusCode).toBeLessThan(400);
       }
-      expect(delivery.requestSyncRetry).not.toHaveBeenCalled();
-      expect(delivery.listTurns).not.toHaveBeenCalled();
+      expect(delivery.listTurns).toHaveBeenCalledWith(owner, session);
+      expect(delivery.requestSyncRetry).toHaveBeenCalled();
+      expect(delivery.listNotifications).toHaveBeenCalled();
+      expect(delivery.markNotificationRead).toHaveBeenCalled();
     } finally {
       await app.close();
     }

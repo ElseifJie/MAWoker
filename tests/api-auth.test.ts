@@ -256,7 +256,7 @@ describe("Fastify authentication routes", () => {
 });
 
 describe("route authorization helpers", () => {
-  it("protects business routes and separates user content from admin APIs", async () => {
+  it("protects business routes and lets administrators use owner-scoped content", async () => {
     const auth = createAuthService();
     const app = buildApp({ auth });
     app.get("/api/v1/business", async (request) => ({
@@ -309,7 +309,8 @@ describe("route authorization helpers", () => {
 
     expect(unauthenticated.statusCode).toBe(401);
     expect(userAdminRequest.statusCode).toBe(403);
-    expect(adminContentRequest.statusCode).toBe(404);
+    expect(adminContentRequest.statusCode).toBe(200);
+    expect(adminContentRequest.json()).toEqual({ content: "private" });
     expect(adminRequest.statusCode).toBe(200);
     expect(forbiddenAdminContent.map(({ statusCode }) => statusCode)).toEqual([
       404, 404, 404,

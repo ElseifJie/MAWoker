@@ -314,6 +314,20 @@ export class UserAgentService {
         blocker: null,
       };
     }
+    // Administrators and legacy accounts may own personal agents without an
+    // assigned platform default. Select the oldest personal agent so the
+    // workspace can start rather than reporting NO_DEFAULT_AGENT.
+    const personal = agents.find((agent) => agent.kind === "personal");
+    if (personal) {
+      return {
+        agents,
+        selection: {
+          agentId: personal.id,
+          source: "personal_default" as const,
+        },
+        blocker: null,
+      };
+    }
     return {
       agents,
       selection: null,

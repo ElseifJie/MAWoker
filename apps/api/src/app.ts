@@ -2534,6 +2534,11 @@ export function requireAdmin(auth: ApiAuthService, isProduction = false) {
   return requirePermission(auth, "USER_MANAGE", isProduction);
 }
 
+/**
+ * User-content routes are owner-scoped, not role-scoped: an administrator has a
+ * personal workspace too, and every query still filters by the authenticated
+ * account. Admin-only APIs stay behind requireAdmin/permission checks.
+ */
 export function requireUser(auth: ApiAuthService, isProduction = false) {
   const authenticate = requireAuthenticated(auth, isProduction);
   return async function authorizeUserContent(
@@ -2541,12 +2546,7 @@ export function requireUser(auth: ApiAuthService, isProduction = false) {
     reply: Parameters<typeof authenticate>[1],
   ) {
     await authenticate(request, reply);
-    if (reply.sent) {
-      return reply;
-    }
-    if (request.auth?.role !== "user") {
-      return reply.code(404).send(resourceNotFoundError(request.id));
-    }
+    if (reply.sent) return reply;
   };
 }
 
@@ -2560,9 +2560,6 @@ export function requireTenantResource(
   ) {
     if (!request.auth) {
       return reply.code(401).send(authError(request.id));
-    }
-    if (request.auth.role !== "user") {
-      return reply.code(404).send(resourceNotFoundError(request.id));
     }
 
     try {

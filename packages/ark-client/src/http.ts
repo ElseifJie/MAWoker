@@ -184,6 +184,9 @@ function skillSnapshots(value: unknown): {
   value: ArkSessionConfigSnapshot["skills"];
   valid: boolean;
 } {
+  if (value === undefined || value === null) {
+    return { value: [], valid: true };
+  }
   if (!Array.isArray(value)) return { value: null, valid: false };
   let valid = true;
   const skills = value.map((item) => {
@@ -240,6 +243,9 @@ function toolSnapshots(value: unknown): {
   value: ArkSessionConfigSnapshot["tools"];
   valid: boolean;
 } {
+  if (value === undefined || value === null) {
+    return { value: [], valid: true };
+  }
   if (!Array.isArray(value)) return { value: null, valid: false };
   let valid = true;
   const tools = value.map((item) => {
@@ -437,12 +443,30 @@ const eventPageSchema = z.union([
 const fileSchema = z
   .object({
     id: z.string().min(1),
-    name: z.string(),
-    contentType: z.string(),
-    size: z.number().int().nonnegative(),
     purpose: z.literal("agent"),
+    // The live Files API uses filename/mime_type/bytes; older fixtures and
+    // the in-memory gateway use the camel-case fields.
+    name: z.string().optional(),
+    contentType: z.string().optional(),
+    size: z.number().int().nonnegative().optional(),
+    filename: z.string().optional(),
+    mime_type: z.string().optional(),
+    bytes: z.number().int().nonnegative().optional(),
   })
-  .strict();
+  .passthrough()
+  .transform((row, context) => {
+    const name = row.name ?? row.filename;
+    const contentType = row.contentType ?? row.mime_type;
+    const size = row.size ?? row.bytes;
+    if (name === undefined || contentType === undefined || size === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "File response is missing name, content type, or size",
+      });
+      return z.NEVER;
+    }
+    return { id: row.id, name, contentType, size, purpose: row.purpose };
+  });
 
 const resourceSchema = z
   .object({

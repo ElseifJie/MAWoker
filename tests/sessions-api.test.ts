@@ -787,7 +787,7 @@ describe("Session API", () => {
     },
   );
 
-  it("requires user authentication for every Session route", async () => {
+  it("requires authentication and serves administrators their own Session routes", async () => {
     const sessions = sessionService();
     const app = buildApp({ auth: auth(), sessions });
     const cookies = { [AUTH_COOKIE_NAME]: "admin-token" };
@@ -814,11 +814,13 @@ describe("Session API", () => {
         cookies,
         ...(payload ? { payload } : {}),
       });
-      expect(response.statusCode).toBe(404);
+      expect(response.statusCode).toBeLessThan(400);
     }
-    expect(
-      Object.values(sessions).every((call) => call.mock.calls.length === 0),
-    ).toBe(true);
+    expect(sessions.list).toHaveBeenCalledWith("admin", false);
+    expect(sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId }),
+      expect.objectContaining({ userId: "admin" }),
+    );
     await app.close();
   });
 

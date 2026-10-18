@@ -263,34 +263,59 @@ describe("user Agent API", () => {
     await app.close();
   });
 
-  it("forbids every user Agent route to administrators", async () => {
+  it("serves administrators every user Agent route for their own library", async () => {
     const service = userAgentService();
     const app = buildApp({ auth: auth(), userAgents: service });
     const cookies = { [AUTH_COOKIE_NAME]: "admin-token" };
-    const requests = [
-      ["GET", "/api/v1/agents", undefined],
-      [
-        "POST",
-        "/api/v1/agents",
-        { name: "A", modelId: "model-a", systemPrompt: "" },
-      ],
-      ["GET", `/api/v1/agents/${agentId}`, undefined],
-      ["PATCH", `/api/v1/agents/${agentId}`, { name: "B", arkVersion: "2" }],
-      ["DELETE", `/api/v1/agents/${agentId}`, undefined],
-    ] as const;
 
-    for (const [method, url, payload] of requests) {
-      const response = await app.inject({
-        method,
-        url,
-        cookies,
-        ...(payload ? { payload } : {}),
-      });
-      expect(response.statusCode).toBe(404);
-    }
-    expect(
-      Object.values(service).every((call) => call.mock.calls.length === 0),
-    ).toBe(true);
+    const list = await app.inject({
+      method: "GET",
+      url: "/api/v1/agents",
+      cookies,
+    });
+    expect(list.statusCode).toBe(200);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/agents",
+      cookies,
+      payload: { name: "A", modelId: "model-a", systemPrompt: "" },
+    });
+    expect(created.statusCode).toBe(201);
+    const get = await app.inject({
+      method: "GET",
+      url: `/api/v1/agents/${agentId}`,
+      cookies,
+    });
+    expect(get.statusCode).toBe(200);
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agents/${agentId}`,
+      cookies,
+      payload: { name: "B", arkVersion: "2" },
+    });
+    expect(updated.statusCode).toBe(200);
+    const deleted = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/agents/${agentId}`,
+      cookies,
+    });
+    expect(deleted.statusCode).toBe(204);
+
+    expect(service.list).toHaveBeenCalledWith("admin");
+    expect(service.create).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "A" }),
+      expect.objectContaining({ userId: "admin" }),
+    );
+    expect(service.get).toHaveBeenCalledWith("admin", agentId);
+    expect(service.update).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({ name: "B" }),
+      expect.objectContaining({ userId: "admin" }),
+    );
+    expect(service.delete).toHaveBeenCalledWith(
+      agentId,
+      expect.objectContaining({ userId: "admin" }),
+    );
     await app.close();
   });
 });

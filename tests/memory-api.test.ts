@@ -179,21 +179,21 @@ describe("personal memory API", () => {
       );
     }
   });
-  it("authenticates all routes and hides them from administrators", async () => {
+  it("authenticates all routes and serves administrators their own memory", async () => {
     const { app, memory } = setup();
     for (const route of routes) {
       expect((await app.inject(route)).statusCode).toBe(401);
-      expect(
-        (
-          await app.inject({
-            ...route,
-            cookies: { [AUTH_COOKIE_NAME]: "admin" },
-          })
-        ).statusCode,
-      ).toBe(404);
+      const admin = await app.inject({
+        ...route,
+        cookies: { [AUTH_COOKIE_NAME]: "admin" },
+      });
+      expect(admin.statusCode).toBeLessThan(400);
     }
-    for (const method of Object.values(memory))
-      expect(method).not.toHaveBeenCalled();
+    expect(memory.list).toHaveBeenCalledWith("admin");
+    expect(memory.write).toHaveBeenCalledWith("admin", {
+      path: "/memories/a.md",
+      content: "hello",
+    });
   });
   it("dispatches queued mutations and returns sanitized status", async () => {
     const { app, memory, cookies } = setup();

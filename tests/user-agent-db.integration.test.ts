@@ -315,6 +315,40 @@ describe("user Agent database integration", () => {
     await database.close();
   });
 
+  it("lets an administrator create and resolve a personal agent", async () => {
+    const database = await createTestDatabase();
+    const { adminId } = await seedUsers(database.client);
+    const repositories = createRepositories(database.db);
+    const agentId = id();
+
+    const created = await repositories.userAgents.createProvisioning({
+      id: agentId,
+      ownerUserId: adminId,
+      name: "Admin personal",
+      description: "",
+      modelId: "model-a",
+      systemPrompt: "Prompt",
+    });
+    expect(created).toMatchObject({
+      id: agentId,
+      status: "provisioning",
+      arkVersion: "0",
+    });
+
+    await repositories.userAgents.markProvisioned(agentId, adminId, {
+      arkAgentId: "ark-admin-personal",
+      arkVersion: "1",
+    });
+    await expect(
+      repositories.userAgents.findAvailableById(adminId, agentId),
+    ).resolves.toMatchObject({
+      id: agentId,
+      kind: "personal",
+      arkAgentId: "ark-admin-personal",
+    });
+    await database.close();
+  });
+
   it("atomically fails definite create jobs but retains unknown outcomes against quota", async () => {
     const database = await createTestDatabase();
     const { userId } = await seedUsers(database.client);

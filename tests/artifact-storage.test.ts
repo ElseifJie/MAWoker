@@ -37,6 +37,22 @@ describe("artifact storage adapters", () => {
     });
   });
 
+  it("requires an explicit content length for TOS writes", async () => {
+    const client = {
+      putObject: vi.fn(async () => undefined),
+      getObject: vi.fn(async () => ({ body: Readable.from([]) })),
+      deleteObject: vi.fn(async () => undefined),
+    };
+    const storage = new TosArtifactStorage({ client, bucket: "b" });
+
+    await expect(
+      storage.write("key", Readable.from([Buffer.from("x")]), {
+        contentType: "text/plain",
+      }),
+    ).rejects.toThrow(/contentLength/);
+    expect(client.putObject).not.toHaveBeenCalled();
+  });
+
   it("delegates object operations and preserves the TOS download stream", async () => {
     const body = Readable.from([Buffer.from([4]), Buffer.from([5])]);
     const client = {
@@ -212,7 +228,7 @@ describe("artifact storage adapters", () => {
         storage.write(
           "private/tenant/secret.txt",
           Readable.from([]),
-          { contentType: "text/plain" },
+          { contentType: "text/plain", contentLength: 0 },
           undefined,
         ),
       () => storage.openRead("private/tenant/secret.txt"),

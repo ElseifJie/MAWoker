@@ -100,7 +100,7 @@ describe("Task 18 production HTTP tenant matrix", () => {
     }
   });
 
-  it("scopes usage to each user and hides the user endpoint from admins", async () => {
+  it("scopes usage to each user and serves administrators their own usage", async () => {
     const harness = await createTask18HttpHarness();
     try {
       const first = await harness.app.inject({
@@ -123,12 +123,8 @@ describe("Task 18 production HTTP tenant matrix", () => {
       expect(second.statusCode).toBe(200);
       expect(first.json().usage.tokens).toBe(100);
       expect(second.json().usage.tokens).toBe(1);
-      expect(admin.statusCode).toBe(404);
-      expect(comparableError(admin.json())).toEqual({
-        code: "RESOURCE_NOT_FOUND",
-        message: "Resource not found",
-        retryable: false,
-      });
+      expect(admin.statusCode).toBe(200);
+      expect(admin.json().usage.tokens).toBe(0);
       expect(harness.externalCalls()).toEqual({ ark: 0, tos: 0 });
     } finally {
       await harness.close();

@@ -2184,7 +2184,7 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`select id from users
                  where id = ${input.ownerUserId}
-                   and role = 'user'
+                   and role in ('user', 'admin')
                    and status = 'active'
                  for update`,
           );
@@ -2931,7 +2931,7 @@ export function createRepositories(database: unknown) {
         return db.transaction(async (transaction) => {
           const owner = await first(
             transaction,
-            sql`select id from users where id=${input.ownerUserId} and role='user' and status='active' for update`,
+            sql`select id from users where id=${input.ownerUserId} and role in ('user', 'admin') and status='active' for update`,
           );
           if (!owner)
             throw Object.assign(new Error("Resource not found"), {
@@ -3083,7 +3083,7 @@ export function createRepositories(database: unknown) {
         return db.transaction(async (transaction) => {
           const owner = await first(
             transaction,
-            sql`select id from users where id=${userId} and status='active' and role='user' for update`,
+            sql`select id from users where id=${userId} and status='active' and role in ('user', 'admin') for update`,
           );
           if (!owner)
             throw Object.assign(new Error("Account unavailable"), {
@@ -3381,7 +3381,7 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`select id from users
                  where id = ${input.ownerUserId}
-                   and role = 'user'
+                   and role in ('user', 'admin')
                    and status = 'active'
                  for update`,
           );
@@ -3551,7 +3551,7 @@ export function createRepositories(database: unknown) {
               });
             const owner = await first(
               transaction,
-              sql`select id from users where id=${userId} and status='active' and role='user' for update`,
+              sql`select id from users where id=${userId} and status='active' and role in ('user', 'admin') for update`,
             );
             if (!owner) throw reject("ACCOUNT_DISABLED");
             const lease = await first(
@@ -4012,7 +4012,7 @@ export function createRepositories(database: unknown) {
             transaction,
             sql`select id from users
                  where id = ${userId}
-                   and role = 'user'
+                   and role in ('user', 'admin')
                    and status = 'active'
                  for update`,
           );

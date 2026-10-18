@@ -588,6 +588,44 @@ describe("HttpArkGateway", () => {
     });
   });
 
+  it("maps the live Files upload response keys", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        object: "file",
+        id: "file-1",
+        purpose: "agent",
+        filename: "brief.txt",
+        bytes: 2,
+        mime_type: "text/plain; charset=utf-8",
+        created_at: 1_792_289_371,
+        expire_at: 1_792_894_171,
+        status: "active",
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "secret",
+      fetch,
+      maxAttempts: 1,
+    });
+
+    await expect(
+      gateway.uploadFile({
+        name: "brief.txt",
+        contentType: "text/plain",
+        bytes: new Uint8Array([1, 2]),
+        purpose: "agent",
+      }),
+    ).resolves.toEqual({
+      id: "file-1",
+      name: "brief.txt",
+      contentType: "text/plain; charset=utf-8",
+      size: 2,
+      purpose: "agent",
+    });
+    expect(fetch.mock.calls[0]?.[1]?.method).toBe("POST");
+  });
+
   it("maps agent writes onto the Ark v3 model/instructions contract", async () => {
     const fetch = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
@@ -1027,8 +1065,8 @@ describe("HttpArkGateway", () => {
       ...normalizedSession,
       configSnapshot: {
         modelId: null,
-        skills: null,
-        tools: null,
+        skills: [],
+        tools: [],
         environment: {
           id: null,
           type: null,
@@ -1091,6 +1129,41 @@ describe("HttpArkGateway", () => {
       configSnapshot: {
         skills: [],
         tools: [],
+        completeness: "complete",
+      },
+    });
+  });
+
+  it("treats omitted optional sections on a live Session as empty", async () => {
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        id: "session-1",
+        status: "idle",
+        environment_id: "environment-1",
+        agent: {
+          id: "agent-1",
+          version: 1,
+          model: { id: "deepseek-v4-pro-ga-260813" },
+          tools: [{ type: "agent_toolset_20260701" }],
+        },
+        environment: {
+          id: "environment-1",
+          type: "environment",
+          config: { type: "cloud" },
+        },
+      }),
+    );
+    const gateway = new HttpArkGateway({
+      baseUrl: "https://ark.example.com",
+      apiKey: "ark-secret-value",
+      fetch,
+    });
+
+    await expect(gateway.getSession("session-1")).resolves.toMatchObject({
+      configSnapshot: {
+        modelId: "deepseek-v4-pro-ga-260813",
+        skills: [],
+        tools: [{ type: "agent_toolset_20260701" }],
         completeness: "complete",
       },
     });

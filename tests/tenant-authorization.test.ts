@@ -231,9 +231,8 @@ describe("tenant route guard", () => {
   );
 
   it.each(matrix)(
-    "does not grant an admin access to user $kind content",
+    "lets an admin access only their own $kind and hides foreign ids",
     async ({ kind, path }) => {
-      // Given an authenticated admin and a user-content route.
       const repositories = createRepositories();
       const service = new TenantAuthorizationService(repositories);
       const downstream = vi.fn();
@@ -247,24 +246,29 @@ describe("tenant route guard", () => {
         },
       );
 
-      // When the admin requests user-owned content.
-      const response = await app.inject({
+      const owned = await app.inject({
         method: "GET",
         url: `${path}/${ownedId}`,
         cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
       });
+      expect(owned.statusCode).toBe(200);
+      expect(owned.json()).toEqual({ exposed: true });
+      expect(downstream).toHaveBeenCalledOnce();
 
-      // Then authorization stops before repository or downstream access.
-      expect(response.statusCode).toBe(404);
+      downstream.mockClear();
+      const foreign = await app.inject({
+        method: "GET",
+        url: `${path}/${foreignId}`,
+        cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      });
+      const missing = await app.inject({
+        method: "GET",
+        url: `${path}/${missingId}`,
+        cookies: { [AUTH_COOKIE_NAME]: "admin-token" },
+      });
+      expect(foreign.statusCode).toBe(404);
+      expect(missing.statusCode).toBe(404);
       expect(downstream).not.toHaveBeenCalled();
-      expect(repositories.personalAgents.findOwned).not.toHaveBeenCalled();
-      expect(
-        repositories.platformAgents.findAssignedToUser,
-      ).not.toHaveBeenCalled();
-      expect(repositories.sessions.findOwned).not.toHaveBeenCalled();
-      expect(repositories.sessionInputs.findOwned).not.toHaveBeenCalled();
-      expect(repositories.artifacts.findOwned).not.toHaveBeenCalled();
-      expect(repositories.usage.findOwned).not.toHaveBeenCalled();
       await app.close();
     },
   );
