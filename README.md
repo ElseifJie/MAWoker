@@ -125,8 +125,9 @@ reachable TOS location remain recoverable failures. The next stages still cover 
 full notification/usage UX, resource limits and visual refinements.
 
 PostgreSQL contention tests create and remove their own schemas. Point them at a disposable
-database, then run `TEST_POSTGRES_URL=<test-url> npm test`. UI verification here uses component
-interactions and build checks; real cloud and browser layout acceptance are separate.
+database, then run `TEST_POSTGRES_URL=<test-url> npm run test:postgres`; the script runs the ten
+real-PostgreSQL suites serially and refuses to start without the URL. UI verification here uses
+component interactions and build checks; real cloud and browser layout acceptance are separate.
 
 ## Stage B workspace and file reuse
 

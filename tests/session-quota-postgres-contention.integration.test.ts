@@ -53,7 +53,9 @@ describeWithPostgres("Session quota ledger in real PostgreSQL", () => {
         personal_agent_limit integer not null,
         concurrent_session_limit integer not null,
         daily_session_limit integer not null,
-        monthly_token_limit bigint not null
+        monthly_token_limit bigint not null,
+        mode text not null default 'enforced',
+        version integer not null default 1
       );
       create table user_quota_overrides (
         user_id uuid primary key,

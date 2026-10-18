@@ -34,7 +34,7 @@
     "test:acceptance": "vitest run apps/web/src/Task18.acceptance.test.tsx",
     "test:acceptance:full": "vitest run apps/web/src/Task18.acceptance.test.tsx tests/task-18-isolation.integration.test.ts tests/task-18-recovery.acceptance.test.ts",
     "test:e2e": "playwright test",
-    "test:postgres": "vitest run tests/db-postgres-contention.integration.test.ts",
+    "test:postgres": "vitest run --config vitest.postgres.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc -b --pretty false",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build"

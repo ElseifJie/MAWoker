@@ -80,7 +80,9 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         personal_agent_limit integer not null,
         concurrent_session_limit integer not null,
         daily_session_limit integer not null,
-        monthly_token_limit bigint not null
+        monthly_token_limit bigint not null,
+        mode text not null default 'enforced',
+        version integer not null default 1
       );
       create table user_quota_overrides (
         user_id uuid primary key,
@@ -114,7 +116,10 @@ describeWithPostgres("personal memory contention in real PostgreSQL", () => {
         attempts integer not null,
         run_after timestamptz not null
       );
-      insert into quota_policies values ('default', 10, 10, 100, 100000);
+      insert into quota_policies
+        (key, personal_agent_limit, concurrent_session_limit,
+         daily_session_limit, monthly_token_limit)
+      values ('default', 10, 10, 100, 100000);
     `);
   });
 
