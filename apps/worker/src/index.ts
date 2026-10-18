@@ -24,6 +24,7 @@ import { startWorkerLivenessServer } from "./health.js";
 import { createWorkerLogger, logWorkerFailure } from "./logger.js";
 import { PersonalAgentReconciliationProcessor } from "./personal-agent-reconciliation.js";
 import { EventIngestorProcessor } from "./event-ingestor.js";
+import { createHistoryScanCoordinator } from "./history-scan-coordinator.js";
 import { startWorkerLanes } from "./lanes.js";
 import { createAutomationWorker } from "./automation.js";
 import { sendWebhookNotifications } from "@pwa/domain";
@@ -126,6 +127,7 @@ const sessionService = new SessionService({
   createId: randomUUID,
   memory,
 });
+const historyScans = createHistoryScanCoordinator(sessionService);
 const eventIngestorProcessor = new EventIngestorProcessor({
   repository: repositories.eventConsumers,
   sessions: sessionService,
@@ -137,7 +139,7 @@ const eventIngestorProcessor = new EventIngestorProcessor({
 });
 const sessionHistoryProcessor = new SessionHistoryProcessor({
   repository: repositories.sessionLifecycle,
-  service: sessionService,
+  service: historyScans,
   workerId: `history-worker:${process.pid}:${randomUUID()}`,
   enabled: config.reliability.historyEnabled,
   batchSize: config.reliability.historyBatchSize,
@@ -161,7 +163,7 @@ const artifacts = new ArtifactService({
 });
 const delivery = new SessionDeliveryService({
   repository: repositories.sessionDelivery,
-  sessions: sessionService,
+  sessions: historyScans,
   ark,
   artifacts,
   batchSize: config.reliability.deliveryBatchSize,

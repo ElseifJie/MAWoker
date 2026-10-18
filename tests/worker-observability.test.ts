@@ -43,4 +43,21 @@ describe("worker structured logging", () => {
       /new UsageReconciliationProcessor\(\{[\s\S]*?reportError: reportWorkerError,[\s\S]*?\}\)/,
     );
   });
+
+  it("shares one history scan between delivery and periodic repair", () => {
+    const entrypoint = readFileSync(
+      resolve(import.meta.dirname, "../apps/worker/src/index.ts"),
+      "utf8",
+    );
+
+    expect(entrypoint).toMatch(
+      /const historyScans = createHistoryScanCoordinator\(sessionService\)/,
+    );
+    expect(entrypoint).toMatch(
+      /new SessionHistoryProcessor\(\{[\s\S]*?service: historyScans,/,
+    );
+    expect(entrypoint).toMatch(
+      /new SessionDeliveryService\(\{[\s\S]*?sessions: historyScans,/,
+    );
+  });
 });
