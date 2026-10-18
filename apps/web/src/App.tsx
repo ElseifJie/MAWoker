@@ -19,8 +19,11 @@ import {
   Server,
   Settings as SettingsIcon,
   CalendarClock,
+  Shield,
 } from "lucide-react";
 import {
+  Suspense,
+  lazy,
   type ReactNode,
   type SyntheticEvent,
   useCallback,
@@ -47,7 +50,6 @@ import {
   type SyncChange,
   type UsageSummary,
 } from "./api.js";
-import { AdminWorkspace } from "./AdminPage.js";
 import { AgentEditorPage } from "./AgentEditorPage.js";
 import { AgentPage } from "./AgentPage.js";
 import { SessionIntro } from "./components/SessionIntro.js";
@@ -60,6 +62,8 @@ import { HistoryPage } from "./HistoryPage.js";
 import { MemoryPage, clearMemoryCache } from "./MemoryPage.js";
 import { SessionPage } from "./SessionPage.js";
 import { SkillsPage } from "./SkillsPage.js";
+import { WorkspaceFrame, useShellLayout } from "./shell/index.js";
+import { WorkspaceNav } from "./shell/WorkspaceNav.js";
 import {
   isThemePreference,
   useThemePreference,
@@ -67,7 +71,6 @@ import {
 } from "./theme.js";
 import {
   Alert,
-  AppShell,
   Button,
   EmptyState,
   Field,
@@ -104,11 +107,11 @@ function accountHandle(authSubject: string): string {
   return separator >= 0 ? authSubject.slice(separator + 1) : authSubject;
 }
 
-function LoadingScreen() {
+function LoadingScreen({ label = "加载工作区" }: { label?: string } = {}) {
   return (
     <main className="centered-page" aria-busy="true">
-      <Spinner label="加载工作区" />
-      <p>正在加载工作区...</p>
+      <Spinner label={label} />
+      <p>正在{label}...</p>
     </main>
   );
 }
@@ -270,7 +273,10 @@ const reservedNavigation: ReservedNavigation[] = [
   },
 ];
 
-function navigationFor(onSearch: () => void): NavigationItem[] {
+function navigationFor(
+  onSearch: () => void,
+  isAdmin = false,
+): NavigationItem[] {
   return [
     { to: "/", label: "新任务", icon: Plus },
     { to: "/history", label: "历史任务", icon: History },
@@ -278,6 +284,15 @@ function navigationFor(onSearch: () => void): NavigationItem[] {
     { to: "/automations", label: "自动化", icon: CalendarClock },
     { to: "/search", label: "搜索", icon: Search, onSelect: onSearch },
     { to: "/settings", label: "设置", icon: SettingsIcon },
+    ...(isAdmin
+      ? [
+          {
+            to: "/admin",
+            label: "管理后台",
+            icon: Shield,
+          } satisfies NavigationItem,
+        ]
+      : []),
   ];
 }
 
@@ -291,6 +306,32 @@ function LegacyCapabilityRedirect() {
 
 const ignoreStreamReady = () => {};
 
+const AdminWorkspace = lazy(() =>
+  import("./admin/AdminWorkspace.js").then((module) => ({
+    default: module.AdminWorkspace,
+  })),
+);
+
+function AdminRoute({
+  user,
+  onSignedOut,
+  onAuthRequired,
+}: {
+  user: CurrentUser;
+  onSignedOut: () => void;
+  onAuthRequired: () => void;
+}) {
+  return (
+    <Suspense fallback={<LoadingScreen label="加载管理工作台" />}>
+      <AdminWorkspace
+        user={user}
+        onSignedOut={onSignedOut}
+        onAuthRequired={onAuthRequired}
+      />
+    </Suspense>
+  );
+}
+
 function Workspace({
   user,
   theme,
@@ -299,6 +340,7 @@ function Workspace({
 }: WorkspaceProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const shell = useShellLayout();
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -571,208 +613,222 @@ function Workspace({
   if (!data) return <LoadingScreen />;
 
   return (
-    <AppShell
-      brand="Work Agent"
-      navigationLabel="工作区"
-      navigation={navigationFor(() => setSearchOpen((open) => !open))}
-      brandActions={
-        <TaskNotifications
-          sessions={[...data.sessions, ...data.archivedSessions]}
-          onAuthRequired={onAuthRequired}
-        />
-      }
-      navigationExtra={
-        <>
-          <SessionList
-            sessions={data.sessions}
-            archivedSessions={data.archivedSessions}
-            onSessionChanged={handleSessionChanged}
-            onAuthRequired={onAuthRequired}
-          />
-        </>
-      }
-      user={{ handle: accountHandle(user.authSubject) }}
-      openNavigationLabel="打开导航"
-      closeNavigationLabel="关闭导航"
-      backdropLabel="关闭导航"
-      onSignOut={signOut}
-    >
-      <Routes>
-        <Route path="/agents/*" element={<LegacyCapabilityRedirect />} />
-        <Route path="/skills" element={<LegacyCapabilityRedirect />} />
-        <Route
-          path="/history"
-          element={
-            <HistoryPage
-              sessions={data.sessions}
-              archivedSessions={data.archivedSessions}
-            />
-          }
-        />
-        <Route
-          path="/context"
-          element={
-            data.capabilities.memoryStores.available ? (
-              <MemoryPage
-                onAuthRequired={onAuthRequired}
-                account={user.authSubject}
-              />
-            ) : (
-              <Navigate to="/" replace />
-            )
-          }
-        />
-        <Route
-          path="/context/store"
-          element={
-            data.capabilities.memoryStores.available ? (
-              <MemoryPage
-                onAuthRequired={onAuthRequired}
-                account={user.authSubject}
-              />
-            ) : (
-              <Navigate to="/" replace />
-            )
-          }
-        />
-        <Route
-          path="/"
-          element={
-            <>
-              {!data.agents.selection ? (
-                <Alert tone="info">
-                  <p>还没有可用的默认助手。请先配置任务助手，再开始新任务。</p>
-                  <Link to="/settings/agents">配置任务助手</Link>
-                </Alert>
-              ) : null}
-              <SessionIntro
-                draftKey={`${user.userId}:new`}
-                agents={data.agents}
-                usage={data.usage}
-                onAuthRequired={onAuthRequired}
-                onSessionCreated={handleSessionCreated}
-              />
-            </>
-          }
-        />
-        <Route
-          path="/settings/agents"
-          element={
-            <AgentPage
-              agents={data.agents}
-              models={data.capabilities.personalAgentModels}
-              onAgentsChanged={(agents) =>
-                setData((current) =>
-                  current
-                    ? {
-                        ...current,
-                        agents: { ...current.agents, agents },
-                      }
-                    : current,
-                )
-              }
-              onAuthRequired={onAuthRequired}
-            />
-          }
-        />
-        <Route
-          path="/settings/agents/new"
-          element={
-            <AgentEditorPage
-              models={data.capabilities.personalAgentModels}
-              onAuthRequired={onAuthRequired}
-              onAgentSaved={(agent) => {
-                setData((current) => {
-                  if (!current) return current;
-                  const exists = current.agents.agents.some(
-                    (item) => item.id === agent.id,
-                  );
-                  return {
-                    ...current,
-                    agents: {
-                      ...current.agents,
-                      agents: exists
-                        ? current.agents.agents.map((item) =>
-                            item.id === agent.id ? agent : item,
-                          )
-                        : [...current.agents.agents, agent],
-                    },
-                  };
-                });
-              }}
-            />
-          }
-        />
-        <Route
-          path="/settings/agents/:agentId/edit"
-          element={
-            <AgentEditorPage
-              models={data.capabilities.personalAgentModels}
-              onAuthRequired={onAuthRequired}
-              onAgentSaved={(agent) => {
-                setData((current) =>
-                  current
-                    ? {
-                        ...current,
-                        agents: {
-                          ...current.agents,
-                          agents: current.agents.agents.map((item) =>
-                            item.id === agent.id ? agent : item,
-                          ),
-                        },
-                      }
-                    : current,
-                );
-              }}
-            />
-          }
-        />
-        <Route
-          path="/settings/skills"
-          element={
-            data.capabilities.skills.available ? (
-              <SkillsPage onAuthRequired={onAuthRequired} />
-            ) : (
-              <Navigate to="/settings" replace />
-            )
-          }
-        />
-        <Route
-          path="/automations"
-          element={<AutomationsPage onAuthRequired={onAuthRequired} />}
-        />
-        <Route
-          path="/files"
-          element={
-            <FilesPage
+    <WorkspaceFrame
+      shell={shell}
+      leftLabel="工作区导航"
+      left={
+        <WorkspaceNav
+          brand="Work Agent"
+          navigationLabel="工作区"
+          navigation={navigationFor(
+            () => setSearchOpen((open) => !open),
+            user.role === "admin",
+          )}
+          brandActions={
+            <TaskNotifications
               sessions={[...data.sessions, ...data.archivedSessions]}
               onAuthRequired={onAuthRequired}
             />
           }
-        />
-        <Route
-          path="/settings"
-          element={
-            <SettingsPage
-              user={user}
-              theme={theme}
-              capabilities={data.capabilities}
-            />
-          }
-        />
-        <Route
-          path="/sessions/:sessionId"
-          element={
-            <SessionPage
-              userId={user.userId}
-              onStreamReady={ignoreStreamReady}
+          navigationExtra={
+            <SessionList
+              sessions={data.sessions}
+              archivedSessions={data.archivedSessions}
               onSessionChanged={handleSessionChanged}
               onAuthRequired={onAuthRequired}
             />
           }
+          user={{ handle: accountHandle(user.authSubject) }}
+          onSignOut={signOut}
+          collapsed={shell.layout.leftMode === "collapsed"}
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      }
+      panels={[]}
+      activePanelId={null}
+      onSelectPanel={() => {}}
+      onClosePanel={() => {}}
+      renderPanel={() => null}
+    >
+      <div className="workspace-main">
+        <Routes>
+          <Route path="/agents/*" element={<LegacyCapabilityRedirect />} />
+          <Route path="/skills" element={<LegacyCapabilityRedirect />} />
+          <Route
+            path="/history"
+            element={
+              <HistoryPage
+                sessions={data.sessions}
+                archivedSessions={data.archivedSessions}
+              />
+            }
+          />
+          <Route
+            path="/context"
+            element={
+              data.capabilities.memoryStores.available ? (
+                <MemoryPage
+                  onAuthRequired={onAuthRequired}
+                  account={user.authSubject}
+                />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/context/store"
+            element={
+              data.capabilities.memoryStores.available ? (
+                <MemoryPage
+                  onAuthRequired={onAuthRequired}
+                  account={user.authSubject}
+                />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/"
+            element={
+              <>
+                {!data.agents.selection ? (
+                  <Alert tone="info">
+                    <p>
+                      还没有可用的默认助手。请先配置任务助手，再开始新任务。
+                    </p>
+                    <Link to="/settings/agents">配置任务助手</Link>
+                  </Alert>
+                ) : null}
+                <SessionIntro
+                  draftKey={`${user.userId}:new`}
+                  agents={data.agents}
+                  usage={data.usage}
+                  onAuthRequired={onAuthRequired}
+                  onSessionCreated={handleSessionCreated}
+                />
+              </>
+            }
+          />
+          <Route
+            path="/settings/agents"
+            element={
+              <AgentPage
+                agents={data.agents}
+                models={data.capabilities.personalAgentModels}
+                onAgentsChanged={(agents) =>
+                  setData((current) =>
+                    current
+                      ? {
+                          ...current,
+                          agents: { ...current.agents, agents },
+                        }
+                      : current,
+                  )
+                }
+                onAuthRequired={onAuthRequired}
+              />
+            }
+          />
+          <Route
+            path="/settings/agents/new"
+            element={
+              <AgentEditorPage
+                models={data.capabilities.personalAgentModels}
+                onAuthRequired={onAuthRequired}
+                onAgentSaved={(agent) => {
+                  setData((current) => {
+                    if (!current) return current;
+                    const exists = current.agents.agents.some(
+                      (item) => item.id === agent.id,
+                    );
+                    return {
+                      ...current,
+                      agents: {
+                        ...current.agents,
+                        agents: exists
+                          ? current.agents.agents.map((item) =>
+                              item.id === agent.id ? agent : item,
+                            )
+                          : [...current.agents.agents, agent],
+                      },
+                    };
+                  });
+                }}
+              />
+            }
+          />
+          <Route
+            path="/settings/agents/:agentId/edit"
+            element={
+              <AgentEditorPage
+                models={data.capabilities.personalAgentModels}
+                onAuthRequired={onAuthRequired}
+                onAgentSaved={(agent) => {
+                  setData((current) =>
+                    current
+                      ? {
+                          ...current,
+                          agents: {
+                            ...current.agents,
+                            agents: current.agents.agents.map((item) =>
+                              item.id === agent.id ? agent : item,
+                            ),
+                          },
+                        }
+                      : current,
+                  );
+                }}
+              />
+            }
+          />
+          <Route
+            path="/settings/skills"
+            element={
+              data.capabilities.skills.available ? (
+                <SkillsPage onAuthRequired={onAuthRequired} />
+              ) : (
+                <Navigate to="/settings" replace />
+              )
+            }
+          />
+          <Route
+            path="/automations"
+            element={<AutomationsPage onAuthRequired={onAuthRequired} />}
+          />
+          <Route
+            path="/files"
+            element={
+              <FilesPage
+                sessions={[...data.sessions, ...data.archivedSessions]}
+                onAuthRequired={onAuthRequired}
+              />
+            }
+          />
+          <Route
+            path="/settings"
+            element={
+              <SettingsPage
+                user={user}
+                theme={theme}
+                capabilities={data.capabilities}
+              />
+            }
+          />
+          <Route
+            path="/sessions/:sessionId"
+            element={
+              <SessionPage
+                userId={user.userId}
+                onStreamReady={ignoreStreamReady}
+                onSessionChanged={handleSessionChanged}
+                onAuthRequired={onAuthRequired}
+              />
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
       <CommandPalette
         open={paletteOpen}
         commands={commands}
@@ -785,7 +841,7 @@ function Workspace({
         onClose={() => setSearchOpen(false)}
         onSelect={(session) => navigate(`/sessions/${session.id}`)}
       />
-    </AppShell>
+    </WorkspaceFrame>
   );
 }
 
@@ -935,6 +991,7 @@ function SettingsPage({
 export function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
   const theme = useThemePreference();
+  const location = useLocation();
   // Mirrors the signed-in subject so the leave-authentication callback stays
   // referentially stable without capturing stale auth state.
   const signedInSubjectRef = useRef<string | null>(null);
@@ -974,13 +1031,31 @@ export function App() {
     return <Login onAuthenticated={loadCurrentUser} />;
   }
   if (auth.user.role === "admin") {
+    const adminPath =
+      location.pathname === "/admin" || location.pathname.startsWith("/admin/");
+    if (adminPath) {
+      return (
+        <AdminRoute
+          user={auth.user}
+          onSignedOut={leaveAuthenticatedState}
+          onAuthRequired={leaveAuthenticatedState}
+        />
+      );
+    }
     return (
-      <AdminWorkspace
+      <Workspace
         user={auth.user}
+        theme={theme}
         onSignedOut={leaveAuthenticatedState}
         onAuthRequired={leaveAuthenticatedState}
       />
     );
+  }
+  if (
+    location.pathname === "/admin" ||
+    location.pathname.startsWith("/admin/")
+  ) {
+    return <Navigate to="/" replace />;
   }
   return (
     <Workspace

@@ -379,15 +379,20 @@ describe("admin console walkthrough", () => {
       name: "个人工作区使用指引",
     });
     expect(
+      within(guide).getByRole("link", { name: "进入个人工作区" }),
+    ).toHaveAttribute("href", "/");
+    expect(
       within(guide).getByRole("link", { name: "配置平台助手" }),
     ).toHaveAttribute("href", "/admin/platform-agents");
     expect(
-      within(guide).getByRole("link", { name: "创建个人账户并分配默认助手" }),
-    ).toHaveAttribute("href", "/admin/users");
-    expect(within(guide).getByText(/管理员账户用于配置/)).toBeInTheDocument();
+      within(guide).getByRole("link", { name: "管理邀请" }),
+    ).toHaveAttribute("href", "/admin/invites");
+    expect(
+      within(guide).getByText(/管理员账户同样可以使用个人工作区/),
+    ).toBeInTheDocument();
     await userEvent
       .setup()
-      .click(within(guide).getByRole("button", { name: "返回登录" }));
+      .click(within(guide).getByRole("button", { name: "退出登录" }));
     await waitFor(() => expect(signedOut).toHaveBeenCalledOnce());
   });
 

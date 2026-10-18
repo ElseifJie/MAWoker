@@ -158,6 +158,53 @@ function adminHandler() {
     if (path === `/api/v1/admin/users/${userId}` && method === "GET") {
       return json(adminUserDetail());
     }
+    if (path === "/api/v1/agents") {
+      return json({
+        agents: [
+          {
+            id: "00000000-0000-4000-8000-000000000010",
+            name: "Research assistant",
+            description: "Company research",
+            modelId: "model-a",
+            version: "1",
+            status: "active",
+            kind: "platform",
+            editable: false,
+          },
+        ],
+        selection: {
+          agentId: "00000000-0000-4000-8000-000000000010",
+          source: "default",
+        },
+        blocker: null,
+      });
+    }
+    if (path === "/api/v1/sessions") return json({ sessions: [] });
+    if (path === "/api/v1/usage") {
+      return json({
+        period: {
+          startsAt: "2026-09-01T00:00:00.000Z",
+          endsAt: "2026-10-01T00:00:00.000Z",
+        },
+        quota: adminUsers.users[0]!.quota,
+        usage: {
+          personalAgents: 0,
+          concurrentSessions: 0,
+          dailySessions: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          tokens: 0,
+          runtimeMs: 0,
+          toolCalls: 0,
+        },
+        exhausted: {
+          personalAgents: false,
+          concurrentSessions: false,
+          dailySessions: false,
+          monthlyTokens: false,
+        },
+      });
+    }
     if (path === "/api/v1/capabilities") {
       return json({
         skills: { available: false },
@@ -292,7 +339,7 @@ describe("administrator role routing", () => {
   it("renders an isolated admin shell and fetches no user-content resources", async () => {
     vi.stubGlobal("fetch", vi.fn(adminHandler()));
 
-    renderApp("/files");
+    renderApp("/admin/users");
 
     expect(
       await screen.findByRole("heading", { name: "用户管理" }),
@@ -325,6 +372,33 @@ describe("administrator role routing", () => {
     expect(requestedPaths).not.toContain("/api/v1/sessions");
     expect(requestedPaths).not.toContain("/api/v1/artifacts");
     expect(requestedPaths).not.toContain("/api/v1/uploads");
+  });
+
+  it("keeps the personal workspace for administrators and links to the admin console", async () => {
+    vi.stubGlobal("fetch", vi.fn(adminHandler()));
+    renderApp("/");
+    const user = userEvent.setup();
+
+    expect(
+      await screen.findByRole("heading", { name: "新任务" }),
+    ).toBeInTheDocument();
+    const navigation = screen.getByRole("navigation", { name: "工作区" });
+    const adminLink = within(navigation).getByRole("link", {
+      name: "管理后台",
+    });
+    expect(adminLink).toHaveAttribute("href", "/admin");
+
+    await user.click(adminLink);
+
+    expect(
+      await screen.findByRole("heading", { name: "用户管理" }),
+    ).toBeInTheDocument();
+    const adminNavigation = screen.getByRole("navigation", {
+      name: "管理工作台",
+    });
+    expect(
+      within(adminNavigation).getByRole("link", { name: "个人工作区" }),
+    ).toHaveAttribute("href", "/");
   });
 
   it("never renders or requests admin resources for an ordinary user", async () => {

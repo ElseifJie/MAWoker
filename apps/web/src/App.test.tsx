@@ -395,11 +395,19 @@ function setMobileViewport(matches: boolean) {
   );
 }
 
+function setViewportWidth(width: number) {
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: width,
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   MockEventSource.instances = [];
   vi.stubGlobal("EventSource", MockEventSource);
   setMobileViewport(false);
+  setViewportWidth(1024);
 });
 
 afterEach(() => {
@@ -539,10 +547,9 @@ describe("authentication", () => {
 });
 
 describe("workspace shell", () => {
-  it("shows compact navigation, active Sessions, and keyboard-operable drawer state", async () => {
+  it("shows compact navigation, active Sessions, and the workspace frame", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp();
-    const user = userEvent.setup();
 
     expect(
       await screen.findByRole("heading", { name: "新任务" }),
@@ -568,17 +575,14 @@ describe("workspace shell", () => {
     expect(within(navigation).getByText("Quarterly plan")).toBeInTheDocument();
     expect(within(navigation).getByText("执行中")).toBeInTheDocument();
 
-    const menu = screen.getByRole("button", { name: "打开导航" });
-    const sidebar = screen.getByRole("complementary");
-    expect(sidebar).toHaveAttribute("id", menu.getAttribute("aria-controls"));
-    expect(menu).toHaveAttribute("title", "打开导航");
-    expect(menu).toHaveAttribute("aria-expanded", "false");
-    await user.click(menu);
-    expect(menu).toHaveAttribute("aria-expanded", "true");
-    expect(menu).toHaveAttribute("aria-label", "关闭导航");
-    expect(menu).toHaveAttribute("title", "关闭导航");
-    await user.keyboard("{Escape}");
-    expect(menu).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".ui-app-frame")).toHaveAttribute(
+      "data-left-mode",
+      "expanded",
+    );
+    expect(
+      screen.getByRole("complementary", { name: "工作区导航" }),
+    ).toContainElement(navigation);
+    expect(screen.queryByRole("button", { name: "打开导航" })).toBeNull();
   });
 
   it("opens task search from the sidebar and opens a chosen task", async () => {
@@ -610,51 +614,31 @@ describe("workspace shell", () => {
     expect(screen.queryByRole("combobox", { name: "搜索任务" })).toBeNull();
   });
 
-  it("removes the closed mobile drawer from the accessibility tree and tab order", async () => {
-    setMobileViewport(true);
+  it("keeps navigation reachable in the collapsed rail on narrow screens", async () => {
+    setViewportWidth(600);
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp();
-    const user = userEvent.setup();
 
     await screen.findByRole("heading", { name: "新任务" });
-    const sidebar = screen.getByRole("complementary", { hidden: true });
-    const menu = screen.getByRole("button", { name: "打开导航" });
+    const frame = document.querySelector(".ui-app-frame");
+    expect(frame).toHaveAttribute("data-left-mode", "collapsed");
 
-    expect(sidebar).toHaveAttribute("aria-hidden", "true");
-    expect(sidebar).toHaveAttribute("inert");
-    await user.tab();
-    expect(menu).toHaveFocus();
-
-    await user.click(menu);
-    expect(sidebar).not.toHaveAttribute("aria-hidden");
-    expect(sidebar).not.toHaveAttribute("inert");
-    const closeNavigationControls = screen.getAllByRole("button", {
-      name: "关闭导航",
+    const sidebar = screen.getByRole("complementary", {
+      name: "工作区导航",
     });
-    expect(closeNavigationControls).toHaveLength(2);
-    await user.click(closeNavigationControls[1]!);
-    expect(sidebar).toHaveAttribute("aria-hidden", "true");
-    expect(menu).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(menu);
-    (document.activeElement as HTMLElement).blur();
-    await user.tab();
-    expect(screen.getByRole("link", { name: "新任务" })).toHaveFocus();
-
-    await user.keyboard("{Escape}");
-    expect(sidebar).toHaveAttribute("aria-hidden", "true");
-    expect(sidebar).toHaveAttribute("inert");
-    (document.activeElement as HTMLElement).blur();
-    await user.tab();
-    expect(menu).toHaveFocus();
-
-    await user.click(menu);
-    await user.click(screen.getByRole("link", { name: /Quarterly plan/ }));
-    expect(sidebar).toHaveAttribute("aria-hidden", "true");
-    expect(menu).toHaveAttribute("aria-expanded", "false");
-    expect(screen.getByLabelText("Current location")).toHaveTextContent(
-      `/sessions/${sessionId}`,
-    );
+    const navigation = within(sidebar).getByRole("navigation", {
+      name: "工作区",
+    });
+    expect(
+      within(navigation).getByRole("link", { name: "新任务" }),
+    ).toBeInTheDocument();
+    expect(
+      within(navigation).getByRole("link", { name: "历史任务" }),
+    ).toBeInTheDocument();
+    // The session list belongs to the expanded rail.
+    expect(within(navigation).queryByText("Quarterly plan")).toBeNull();
+    // The old drawer trigger is gone; the rail stays in the tree.
+    expect(screen.queryByRole("button", { name: "打开导航" })).toBeNull();
   });
 
   it("blocks task creation when no default Agent is available", async () => {

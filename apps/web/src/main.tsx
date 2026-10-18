@@ -5,7 +5,6 @@ import { App } from "./App.js";
 import { InvitePage } from "./InvitePage.js";
 import { registerServiceWorker } from "./pwa.js";
 import "./styles.css";
-import "./admin/admin.css";
 
 const root = document.querySelector("#root");
 

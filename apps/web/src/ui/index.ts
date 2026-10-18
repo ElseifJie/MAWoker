@@ -40,9 +40,11 @@ export {
 export { DataTable, type DataTableProps } from "./DataTable.js";
 export {
   AppShell,
+  UserMenu,
   type AppShellProps,
   type AppShellUser,
   type NavigationItem,
+  type UserMenuProps,
 } from "./AppShell.js";
 export {
   RowActionsMenu,

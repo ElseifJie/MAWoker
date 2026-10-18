@@ -74,7 +74,7 @@ function initialFor(user: AppShellUser): string {
   return source.charAt(0).toUpperCase() || "?";
 }
 
-interface UserMenuProps {
+export interface UserMenuProps {
   user: AppShellUser;
   tabIndex: number | undefined;
   onSignOut: () => void;
@@ -85,7 +85,7 @@ interface UserMenuProps {
  * action. The trigger is the whole footer so the account identity, not just a
  * trailing icon, is the affordance.
  */
-function UserMenu({ user, tabIndex, onSignOut }: UserMenuProps) {
+export function UserMenu({ user, tabIndex, onSignOut }: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const [panelStyle, setPanelStyle] = useState<CSSProperties>();
   const containerRef = useRef<HTMLDivElement>(null);

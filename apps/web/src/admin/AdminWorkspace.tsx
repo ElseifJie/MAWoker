@@ -2,6 +2,7 @@ import {
   Activity,
   Bot,
   ChartNoAxesColumn,
+  Home,
   MailPlus,
   ScrollText,
   Settings,
@@ -16,6 +17,7 @@ import {
   type CurrentUser,
 } from "../api.js";
 import { AppShell, Button } from "../ui/index.js";
+import "./admin.css";
 import { AdminAuditPage } from "./AdminAuditPage.js";
 import { AdminInvitesPage } from "./AdminInvitesPage.js";
 import { AdminSystemPage } from "./AdminSystemPage.js";
@@ -85,6 +87,7 @@ export function AdminWorkspace({
       brand="管理工作台"
       navigationLabel="管理工作台"
       navigation={[
+        { to: "/", label: "个人工作区", icon: Home },
         { to: "/admin/users", label: "用户管理", icon: Users },
         { to: "/admin/invites", label: "邀请", icon: MailPlus },
         { to: "/admin/usage", label: "用量", icon: ChartNoAxesColumn },
@@ -172,16 +175,18 @@ export function AdminWorkspace({
         <details>
           <summary>开始使用个人工作区</summary>
           <p>
-            管理员账户用于配置。完成平台助手配置后，请创建个人使用账户并分配默认助手，
-            再返回登录，以个人账户发起任务。
+            管理员账户同样可以使用个人工作区。完成平台助手配置后，切换到个人工作区即可发起任务；
+            新用户通过邀请开通。
           </p>
           <p>
+            <Link to="/">进入个人工作区</Link>
+            {" · "}
             <Link to="/admin/platform-agents">配置平台助手</Link>
             {" · "}
-            <Link to="/admin/users">创建个人账户并分配默认助手</Link>
+            <Link to="/admin/invites">管理邀请</Link>
           </p>
           <Button variant="secondary" onClick={() => void signOut()}>
-            返回登录
+            退出登录
           </Button>
         </details>
       </section>

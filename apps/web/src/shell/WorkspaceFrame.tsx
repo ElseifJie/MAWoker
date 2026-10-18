@@ -7,7 +7,9 @@ import type { ShellLayoutController } from "./useShellLayout.js";
 export interface WorkspaceFrameProps {
   shell: ShellLayoutController;
   left: ReactNode;
-  center: ReactNode;
+  /** Center content; `children` is accepted as an alias for routing trees. */
+  center?: ReactNode;
+  children?: ReactNode;
   panels: readonly PanelDescriptor[];
   activePanelId: string | null;
   onSelectPanel(panelId: string): void;
@@ -27,6 +29,7 @@ export function WorkspaceFrame({
   shell,
   left,
   center,
+  children,
   panels,
   activePanelId,
   onSelectPanel,
@@ -52,7 +55,7 @@ export function WorkspaceFrame({
     <AppFrame
       layout={shell.layout}
       left={left}
-      center={center}
+      center={center ?? children}
       right={right}
       leftLabel={leftLabel}
       rightLabel={rightLabel}
