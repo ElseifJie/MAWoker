@@ -14,6 +14,9 @@ export interface WorkspaceFrameProps {
   activePanelId: string | null;
   onSelectPanel(panelId: string): void;
   onClosePanel(panelId: string): void;
+  onReorderPanels?(fromIndex: number, toIndex: number): void;
+  /** Overrides the persisted right-panel state for the current view. */
+  rightVisible?: boolean;
   renderPanel(panel: PanelDescriptor): ReactNode;
   leftLabel?: string;
   rightLabel?: string;
@@ -34,26 +37,37 @@ export function WorkspaceFrame({
   activePanelId,
   onSelectPanel,
   onClosePanel,
+  onReorderPanels,
+  rightVisible,
   renderPanel,
   leftLabel = "Navigation",
   rightLabel = "Workspace panel",
   emptyPanelLabel = "Open a file or result to see it here.",
 }: WorkspaceFrameProps) {
-  const right =
-    shell.layout.rightMode === "closed" ? undefined : (
-      <PanelHost
-        panels={panels}
-        activeId={activePanelId}
-        onSelect={onSelectPanel}
-        onClose={onClosePanel}
-        renderPanel={renderPanel}
-        emptyLabel={emptyPanelLabel}
-      />
-    );
+  const showRight = rightVisible ?? shell.layout.rightMode !== "closed";
+  const layout = showRight
+    ? shell.layout
+    : {
+        ...shell.layout,
+        rightMode: "closed" as const,
+        rightWidth: 0,
+        centerWidth: shell.layout.centerWidth + shell.layout.rightWidth,
+      };
+  const right = !showRight ? undefined : (
+    <PanelHost
+      panels={panels}
+      activeId={activePanelId}
+      onSelect={onSelectPanel}
+      onClose={onClosePanel}
+      {...(onReorderPanels ? { onReorder: onReorderPanels } : {})}
+      renderPanel={renderPanel}
+      emptyLabel={emptyPanelLabel}
+    />
+  );
 
   return (
     <AppFrame
-      layout={shell.layout}
+      layout={layout}
       left={left}
       center={center ?? children}
       right={right}

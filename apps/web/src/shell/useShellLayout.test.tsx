@@ -112,4 +112,77 @@ describe("useShellLayout", () => {
     expect(result.current.layout.leftMode).toBe("collapsed");
     expect(result.current.layout.rightWidth).toBe(344);
   });
+
+  it("opens, activates, reorders, and closes workspace panels", () => {
+    const storage = memoryStorage();
+    const { result } = renderHook(() =>
+      useShellLayout({ storage, viewport: 1440 }),
+    );
+    const first = {
+      id: "artifact:a",
+      type: "artifact",
+      title: "a.pdf",
+      resourceRef: "a",
+      conversationId: "session-1",
+    };
+    const second = {
+      id: "artifact:b",
+      type: "artifact",
+      title: "b.pdf",
+      resourceRef: "b",
+      conversationId: "session-1",
+    };
+
+    act(() => result.current.openPanel(first));
+    expect(result.current.state.panels).toEqual([first]);
+    expect(result.current.state.activePanelId).toBe(first.id);
+    expect(result.current.layout.rightMode).toBe("panel");
+
+    act(() => result.current.openPanel(second));
+    expect(result.current.state.panels.map((panel) => panel.id)).toEqual([
+      first.id,
+      second.id,
+    ]);
+    expect(result.current.state.activePanelId).toBe(second.id);
+
+    act(() => result.current.reorderPanels(0, 1));
+    expect(result.current.state.panels.map((panel) => panel.id)).toEqual([
+      second.id,
+      first.id,
+    ]);
+
+    act(() => result.current.setActivePanel(first.id));
+    expect(result.current.state.activePanelId).toBe(first.id);
+
+    act(() => result.current.closePanel(first.id));
+    expect(result.current.state.panels.map((panel) => panel.id)).toEqual([
+      second.id,
+    ]);
+    expect(result.current.state.activePanelId).toBe(second.id);
+
+    act(() => result.current.closePanel(second.id));
+    expect(result.current.state.panels).toEqual([]);
+    expect(result.current.state.activePanelId).toBeNull();
+    expect(result.current.layout.rightMode).toBe("closed");
+  });
+
+  it("updates a panel descriptor without duplicating its tab", () => {
+    const { result } = renderHook(() =>
+      useShellLayout({ storage: memoryStorage(), viewport: 1440 }),
+    );
+    const panel = {
+      id: "artifact:a",
+      type: "artifact",
+      title: "a.pdf",
+      resourceRef: "a",
+      conversationId: "session-1",
+    };
+
+    act(() => result.current.openPanel(panel));
+    act(() => result.current.openPanel({ ...panel, title: "renamed.pdf" }));
+
+    expect(result.current.state.panels).toHaveLength(1);
+    expect(result.current.state.panels[0]?.title).toBe("renamed.pdf");
+    expect(result.current.state.activePanelId).toBe(panel.id);
+  });
 });

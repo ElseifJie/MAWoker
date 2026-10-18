@@ -1083,30 +1083,27 @@ describe("Session page", () => {
     expect(composerRule?.style.borderRadius).toBe("var(--ui-radius-composer)");
   });
 
-  it("resizes the side panel by drag and by keyboard", async () => {
+  it("restores an artifact panel from the URL and closes it", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp(`/sessions/${sessionId}?artifact=${artifactId}`);
-    const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Quarterly plan" });
 
-    const rail = screen.getByRole("complementary", {
-      name: "Session side panel",
+    const panel = await screen.findByRole("complementary", {
+      name: "Workspace panel",
     });
-    const resizer = screen.getByRole("separator", {
-      name: "Resize side panel",
+    const tab = within(panel).getByRole("tab", {
+      name: "quarterly-plan.pdf",
     });
-    expect(resizer).toHaveAttribute("aria-orientation", "vertical");
-    expect(resizer).toHaveAttribute("aria-valuenow", "340");
+    expect(tab).toHaveAttribute("aria-selected", "true");
 
-    resizer.focus();
-    expect(resizer).toHaveFocus();
-    await user.keyboard("{ArrowLeft}");
-    // Widening the right-anchored panel moves the separator leftward.
-    expect(resizer).toHaveAttribute("aria-valuenow", "364");
-    expect(rail).toHaveStyle({ width: "364px" });
-
-    await user.keyboard("{ArrowRight}{ArrowRight}");
-    expect(resizer).toHaveAttribute("aria-valuenow", "316");
+    await userEvent.setup().click(
+      within(panel).getByRole("button", {
+        name: "Close quarterly-plan.pdf",
+      }),
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "Workspace panel" }),
+    ).toBeNull();
   });
 
   it("shows composer focus on the card instead of a clipped textarea outline", () => {
@@ -2485,7 +2482,7 @@ describe("artifact chips in replies", () => {
     ).toBeInTheDocument();
 
     expect(
-      screen.queryByRole("complementary", { name: "Session side panel" }),
+      screen.queryByRole("complementary", { name: "Workspace panel" }),
     ).toBeNull();
     expect(screen.queryByRole("button", { name: /打开成果面板/ })).toBeNull();
     await waitFor(() =>
@@ -2502,13 +2499,16 @@ describe("artifact chips in replies", () => {
       .click(within(timeline).getByRole("button", { name: "report.html" }));
 
     expect(
+      await screen.findByRole("tab", { name: "report.html" }),
+    ).toBeInTheDocument();
+    expect(
       await screen.findByRole("region", { name: "Preview of report.html" }),
     ).toBeInTheDocument();
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: "Hide side panel" }));
+      .click(screen.getByRole("button", { name: "Close report.html" }));
     expect(
-      screen.queryByRole("complementary", { name: "Session side panel" }),
+      screen.queryByRole("complementary", { name: "Workspace panel" }),
     ).toBeNull();
     await userEvent
       .setup()

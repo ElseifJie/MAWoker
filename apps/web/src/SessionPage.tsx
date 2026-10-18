@@ -38,10 +38,7 @@ import {
   type SessionFeedback,
 } from "./components/SessionComposer.js";
 import { useSessionTimeline } from "./timeline/useSessionTimeline.js";
-import {
-  RAIL_DEFAULT_WIDTH,
-  WorkspaceRail,
-} from "./components/WorkspaceRail.js";
+import type { PanelDescriptor } from "./shell/shell-state.js";
 import {
   Alert,
   Badge,
@@ -82,22 +79,15 @@ interface SessionPageProps {
   onStreamReady: (sessionId: string) => void;
   onSessionChanged: (session: SessionSummary) => void;
   onAuthRequired: () => void;
+  /** Opens the artifact in the workspace panel instead of a page-local rail. */
+  onOpenArtifactPanel?: (panel: PanelDescriptor) => void;
 }
 
 export function SessionPage(props: SessionPageProps) {
   const { sessionId } = useParams();
-  // Held above the keyed content so the chosen panel width survives moving
-  // between Sessions rather than snapping back on every navigation.
-  const [railWidth, setRailWidth] = useState(RAIL_DEFAULT_WIDTH);
   if (!sessionId) return null;
   return (
-    <SessionPageContent
-      key={sessionId}
-      {...props}
-      sessionId={sessionId}
-      railWidth={railWidth}
-      onRailWidthChange={setRailWidth}
-    />
+    <SessionPageContent key={sessionId} {...props} sessionId={sessionId} />
   );
 }
 
@@ -106,13 +96,10 @@ function SessionPageContent({
   onStreamReady,
   onSessionChanged,
   onAuthRequired,
+  onOpenArtifactPanel,
   sessionId,
-  railWidth,
-  onRailWidthChange,
 }: SessionPageProps & {
   sessionId: string;
-  railWidth: number;
-  onRailWidthChange: (width: number) => void;
 }) {
   const [session, setSession] = useState<SessionDetail | null>(null);
   const navigate = useNavigate();
@@ -125,7 +112,6 @@ function SessionPageContent({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
-  const [railOpen, setRailOpen] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [turns, setTurns] = useState<SessionTurn[]>([]);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -283,12 +269,9 @@ function SessionPageContent({
   const artifactRefreshKey = `${writeCount}:${timeline.status ?? "unknown"}`;
 
   const [artifacts, setArtifacts] = useState<ArtifactSummary[]>([]);
-  const [artifactsError, setArtifactsError] = useState(false);
-  const [artifactsSyncError, setArtifactsSyncError] = useState(false);
 
   const loadArtifacts = useCallback(() => {
     let active = true;
-    setArtifactsError(false);
     void apiClient
       .listArtifacts(sessionId)
       .then((result) => {
@@ -298,9 +281,7 @@ function SessionPageContent({
         if (!active) return;
         if (error instanceof ApiClientError && error.isAuthRequired) {
           onAuthRequired();
-          return;
         }
-        setArtifactsError(true);
       });
     return () => {
       active = false;
@@ -309,13 +290,27 @@ function SessionPageContent({
 
   useEffect(() => loadArtifacts(), [artifactRefreshKey, loadArtifacts]);
 
+  const openArtifactPanel = useCallback(
+    (artifact: ArtifactSummary) => {
+      onOpenArtifactPanel?.({
+        id: `artifact:${artifact.id}`,
+        type: "artifact",
+        title: artifact.name,
+        resourceRef: artifact.id,
+        conversationId: sessionId,
+      });
+    },
+    [onOpenArtifactPanel, sessionId],
+  );
+
   useEffect(() => {
-    setRailOpen(Boolean(selectedArtifactId));
-  }, [selectedArtifactId]);
+    if (!selectedArtifactId) return;
+    const artifact = artifacts.find((item) => item.id === selectedArtifactId);
+    if (artifact) openArtifactPanel(artifact);
+  }, [artifacts, openArtifactPanel, selectedArtifactId]);
 
   const selectArtifact = useCallback(
     (artifactId: string | null) => {
-      setRailOpen(Boolean(artifactId));
       setSearchParams(
         (current) => {
           const next = new URLSearchParams(current);
@@ -325,8 +320,11 @@ function SessionPageContent({
         },
         { replace: true },
       );
+      if (!artifactId) return;
+      const artifact = artifacts.find((item) => item.id === artifactId);
+      if (artifact) openArtifactPanel(artifact);
     },
-    [setSearchParams],
+    [artifacts, openArtifactPanel, setSearchParams],
   );
 
   // Manual refresh and artifact links share one in-flight synchronization.
@@ -342,16 +340,10 @@ function SessionPageContent({
           await apiClient.syncArtifacts(sessionId);
           const result = await apiClient.listArtifacts(sessionId);
           setArtifacts(result.artifacts);
-          setArtifactsError(false);
-          setArtifactsSyncError(false);
           return result.artifacts;
         } catch (error) {
           if (error instanceof ApiClientError && error.isAuthRequired) {
             onAuthRequired();
-          } else {
-            // Silence here used to hide a broken sync entirely; the rail now
-            // says so and offers a retry.
-            setArtifactsSyncError(true);
           }
           return null;
         } finally {
@@ -927,23 +919,6 @@ function SessionPageContent({
           </div>
         </Dialog>
       </div>
-      {railOpen ? (
-        <WorkspaceRail
-          artifacts={artifacts}
-          artifactsError={artifactsError}
-          artifactsSyncError={artifactsSyncError}
-          onRetryArtifacts={() => {
-            setArtifactsSyncError(false);
-            void syncArtifactsNow();
-            loadArtifacts();
-          }}
-          selectedArtifactId={selectedArtifactId}
-          onSelectArtifact={selectArtifact}
-          onClose={() => selectArtifact(null)}
-          width={railWidth}
-          onWidthChange={onRailWidthChange}
-        />
-      ) : null}
     </div>
   );
 }

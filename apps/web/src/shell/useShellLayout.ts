@@ -8,6 +8,7 @@ import {
   DEFAULT_SHELL_STATE,
   loadShellState,
   saveShellState,
+  type PanelDescriptor,
   type ShellState,
   type ShellStorage,
 } from "./shell-state.js";
@@ -21,6 +22,10 @@ export interface ShellLayoutController {
   setRightOpen(open: boolean): void;
   toggleLeft(): void;
   toggleRight(): void;
+  openPanel(panel: PanelDescriptor): void;
+  closePanel(panelId: string): void;
+  setActivePanel(panelId: string): void;
+  reorderPanels(fromIndex: number, toIndex: number): void;
 }
 
 function currentViewportWidth(): number {
@@ -117,6 +122,73 @@ export function useShellLayout(
       setState((current) => ({ ...current, rightOpen: !current.rightOpen })),
     [],
   );
+  const openPanel = useCallback((panel: PanelDescriptor) => {
+    setState((current) => {
+      const existing = current.panels.find((item) => item.id === panel.id);
+      if (
+        existing &&
+        existing.type === panel.type &&
+        existing.title === panel.title &&
+        existing.resourceRef === panel.resourceRef &&
+        existing.conversationId === panel.conversationId &&
+        current.activePanelId === panel.id &&
+        current.rightOpen
+      ) {
+        return current;
+      }
+      const panels = existing
+        ? current.panels.map((item) => (item.id === panel.id ? panel : item))
+        : [...current.panels, panel];
+      return {
+        ...current,
+        panels,
+        activePanelId: panel.id,
+        rightOpen: true,
+      };
+    });
+  }, []);
+  const closePanel = useCallback((panelId: string) => {
+    setState((current) => {
+      const index = current.panels.findIndex((panel) => panel.id === panelId);
+      if (index < 0) return current;
+      const panels = current.panels.filter((panel) => panel.id !== panelId);
+      const activePanelId =
+        current.activePanelId === panelId
+          ? (panels[Math.min(index, panels.length - 1)]?.id ?? null)
+          : current.activePanelId;
+      return {
+        ...current,
+        panels,
+        activePanelId,
+        rightOpen: panels.length > 0 && current.rightOpen,
+      };
+    });
+  }, []);
+  const setActivePanel = useCallback((panelId: string) => {
+    setState((current) =>
+      current.panels.some((panel) => panel.id === panelId)
+        ? { ...current, activePanelId: panelId, rightOpen: true }
+        : current,
+    );
+  }, []);
+  const reorderPanels = useCallback((fromIndex: number, toIndex: number) => {
+    setState((current) => {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= current.panels.length ||
+        toIndex >= current.panels.length
+      ) {
+        return current;
+      }
+      const panels = [...current.panels];
+      const [moved] = panels.splice(fromIndex, 1);
+      if (!moved) return current;
+      panels.splice(toIndex, 0, moved);
+      return { ...current, panels };
+    });
+  }, []);
 
   return {
     layout,
@@ -127,5 +199,9 @@ export function useShellLayout(
     setRightOpen,
     toggleLeft,
     toggleRight,
+    openPanel,
+    closePanel,
+    setActivePanel,
+    reorderPanels,
   };
 }

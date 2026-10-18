@@ -52,6 +52,7 @@ import {
 } from "./api.js";
 import { AgentEditorPage } from "./AgentEditorPage.js";
 import { AgentPage } from "./AgentPage.js";
+import { ArtifactPanel } from "./components/ArtifactPanel.js";
 import { SessionIntro } from "./components/SessionIntro.js";
 import { CommandPalette, type Command } from "./components/CommandPalette.js";
 import { SessionList } from "./components/SessionList.js";
@@ -63,6 +64,7 @@ import { MemoryPage, clearMemoryCache } from "./MemoryPage.js";
 import { SessionPage } from "./SessionPage.js";
 import { SkillsPage } from "./SkillsPage.js";
 import { WorkspaceFrame, useShellLayout } from "./shell/index.js";
+import type { PanelDescriptor } from "./shell/index.js";
 import { WorkspaceNav } from "./shell/WorkspaceNav.js";
 import {
   isThemePreference,
@@ -341,6 +343,47 @@ function Workspace({
   const navigate = useNavigate();
   const location = useLocation();
   const shell = useShellLayout();
+  const currentSessionId = location.pathname.startsWith("/sessions/")
+    ? decodeURIComponent(location.pathname.split("/")[2] ?? "")
+    : null;
+  const visiblePanels = shell.state.panels.filter(
+    (panel) =>
+      panel.type !== "artifact" ||
+      !panel.conversationId ||
+      panel.conversationId === currentSessionId,
+  );
+  const closeWorkspacePanel = useCallback(
+    (panelId: string) => {
+      const panel = shell.state.panels.find((item) => item.id === panelId);
+      shell.closePanel(panelId);
+      if (panel?.type !== "artifact" || !panel.resourceRef) return;
+      const params = new URLSearchParams(location.search);
+      if (params.get("artifact") !== panel.resourceRef) return;
+      params.delete("artifact");
+      navigate(
+        { pathname: location.pathname, search: params.toString() },
+        { replace: true },
+      );
+    },
+    [
+      location.pathname,
+      location.search,
+      navigate,
+      shell.closePanel,
+      shell.state.panels,
+    ],
+  );
+  const renderWorkspacePanel = useCallback(
+    (panel: PanelDescriptor) =>
+      panel.type === "artifact" ? (
+        <ArtifactPanel
+          panel={panel}
+          onClose={() => closeWorkspacePanel(panel.id)}
+          onAuthRequired={onAuthRequired}
+        />
+      ) : null,
+    [closeWorkspacePanel, onAuthRequired],
+  );
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -643,11 +686,13 @@ function Workspace({
           collapsed={shell.layout.leftMode === "collapsed"}
         />
       }
-      panels={[]}
-      activePanelId={null}
-      onSelectPanel={() => {}}
-      onClosePanel={() => {}}
-      renderPanel={() => null}
+      panels={visiblePanels}
+      activePanelId={shell.state.activePanelId}
+      onSelectPanel={shell.setActivePanel}
+      onClosePanel={closeWorkspacePanel}
+      onReorderPanels={shell.reorderPanels}
+      rightVisible={shell.state.rightOpen && visiblePanels.length > 0}
+      renderPanel={renderWorkspacePanel}
     >
       <div className="workspace-main">
         <Routes>
@@ -823,6 +868,7 @@ function Workspace({
                 onStreamReady={ignoreStreamReady}
                 onSessionChanged={handleSessionChanged}
                 onAuthRequired={onAuthRequired}
+                onOpenArtifactPanel={shell.openPanel}
               />
             }
           />

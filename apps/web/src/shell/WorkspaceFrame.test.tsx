@@ -96,6 +96,27 @@ describe("WorkspaceFrame", () => {
     ).not.toBeNull();
   });
 
+  it("hides the right host when the current view has no visible panels", () => {
+    const shell = controller(1440);
+    shell.layout = solveShellLayout({ viewportWidth: 1440, rightOpen: true });
+    const { container } = render(
+      <WorkspaceFrame
+        shell={shell}
+        left={<nav>导航</nav>}
+        center={<article>会话</article>}
+        panels={panels}
+        activePanelId="panel-1"
+        onSelectPanel={vi.fn()}
+        onClosePanel={vi.fn()}
+        renderPanel={(panel) => <div>预览：{panel.title}</div>}
+        rightVisible={false}
+      />,
+    );
+
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(container.querySelector(".ui-app-frame__right")).toBeNull();
+  });
+
   it("keeps the hook-composed controller usable with the frame", () => {
     function Harness() {
       const shell = useShellLayout({
