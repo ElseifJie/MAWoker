@@ -7,6 +7,10 @@
   height: 100vh;
   height: 100dvh;
   min-height: 0;
+  /* The frame owns the viewport. Only the center (and an open panel) scrolls,
+     so a deep, absolutely positioned descendant such as a table's sr-only
+     caption can never add a second, page-level scrollbar. */
+  overflow: hidden;
   background: var(--ui-color-surface-canvas);
   color: var(--ui-color-text);
 }
@@ -28,11 +32,13 @@
 }
 
 .ui-app-frame__center {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .ui-app-frame__right {
@@ -227,8 +233,57 @@
   flex-direction: column;
 }
 
+/* The rail is a compact index, not a marketing page: keep the brand, the
+   primary destinations and the session list on a tighter vertical rhythm so
+   more of the current work stays visible without scrolling. */
+.workspace-nav .ui-app-shell__brand {
+  min-height: 56px;
+  padding-inline: var(--ui-space-3);
+}
+
 .workspace-nav .ui-app-shell__navigation {
   min-height: 0;
+  padding: var(--ui-space-1) var(--ui-space-2) var(--ui-space-2);
+}
+
+.workspace-nav .ui-app-shell__navigation-primary {
+  gap: 2px;
+}
+
+.workspace-nav .ui-app-shell__navigation-link {
+  min-height: 2.25rem;
+  padding-block: var(--ui-space-1);
+}
+
+.workspace-nav .ui-app-shell__navigation-extra {
+  margin-top: var(--ui-space-3);
+  padding-top: var(--ui-space-3);
+}
+
+.workspace-nav .ui-app-shell__footer {
+  padding: var(--ui-space-1) var(--ui-space-2) var(--ui-space-2);
+}
+
+.workspace-nav .session-list {
+  gap: var(--ui-space-2);
+}
+
+.workspace-nav .session-group__list {
+  gap: 1px;
+}
+
+.workspace-nav .session-row__link {
+  min-height: 2.25rem;
+  padding-block: var(--ui-space-1);
+}
+
+/* Touch keeps comfortable targets even though the desktop rail is denser. */
+@media (pointer: coarse) {
+  .workspace-nav .ui-app-shell__navigation-link,
+  .workspace-nav .session-row__link {
+    min-height: var(--ui-control-height-default);
+    padding-block: var(--ui-space-2);
+  }
 }
 
 .workspace-nav__compact-actions {

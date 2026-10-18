@@ -1585,10 +1585,21 @@ select:not(.ui-select):hover {
   overflow-wrap: anywhere;
 }
 
+.settings-page {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--ui-space-4);
+}
+
+.settings-page > .ui-page-header {
+  margin-bottom: 0;
+}
+
 .settings-section {
   display: grid;
-  margin-top: var(--ui-space-6);
-  gap: var(--ui-space-3);
+  min-width: 0;
+  gap: var(--ui-space-4);
   padding: var(--ui-space-6);
   border: 1px solid var(--ui-color-border);
   border-radius: var(--ui-radius-large);
@@ -1599,12 +1610,49 @@ select:not(.ui-select):hover {
   margin: 0;
   color: var(--ui-color-text);
   font-size: var(--ui-font-size-section);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .settings-section > p {
   margin: 0;
+  color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-control);
+  line-height: var(--ui-line-height-body);
+}
+
+.settings-section > .ui-button {
+  justify-self: start;
+}
+
+.settings-section--account {
+  gap: var(--ui-space-2);
+  padding-block: var(--ui-space-4);
+}
+
+/* One record rhythm for every settings module: copy, fields, then actions. */
+.settings-panel {
+  display: grid;
+  min-width: 0;
+  gap: var(--ui-space-3);
+}
+
+.settings-panel > p {
+  margin: 0;
+}
+
+.settings-panel > .ui-button {
+  justify-self: start;
+}
+
+.settings-form {
+  display: grid;
+  width: 100%;
+  max-width: 40rem;
+  gap: var(--ui-space-4);
+}
+
+.settings-form > .ui-button {
+  justify-self: start;
 }
 
 .command-palette {
@@ -3236,10 +3284,10 @@ select:not(.ui-select):hover {
 .settings-list > div {
   display: grid;
   min-width: 0;
-  min-height: 50px;
+  min-height: 46px;
   grid-template-columns: minmax(0, 150px) minmax(0, 1fr);
   gap: var(--ui-space-4);
-  padding-block: var(--ui-space-3);
+  padding-block: var(--ui-space-2);
   align-items: center;
   border-bottom: 1px solid var(--ui-color-border);
 }
@@ -3324,6 +3372,28 @@ select:not(.ui-select):hover {
   .page {
     min-height: calc(100vh - 58px);
     padding: var(--ui-space-8) var(--ui-space-4);
+  }
+
+  .settings-page {
+    gap: var(--ui-space-3);
+  }
+
+  .settings-page .settings-section {
+    gap: var(--ui-space-3);
+    padding: var(--ui-space-4);
+  }
+
+  .settings-form {
+    gap: var(--ui-space-3);
+  }
+
+  .automations-card {
+    gap: var(--ui-space-3);
+    padding: var(--ui-space-4);
+  }
+
+  .automations-empty {
+    padding: var(--ui-space-4);
   }
 
   .page-heading {
@@ -4556,32 +4626,98 @@ select:not(.ui-select):hover {
   }
 }
 
-.automation-form-row {
+.automations-page {
+  container-name: automations;
+  container-type: inline-size;
+}
+
+.automations-page > .ui-page-header {
+  margin-bottom: var(--ui-space-6);
+}
+
+.automations-layout {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  min-width: 0;
   gap: var(--ui-space-4);
+}
+
+.automations-card {
+  display: grid;
+  min-width: 0;
+  gap: var(--ui-space-4);
+  padding: var(--ui-space-6);
+  border: 1px solid var(--ui-color-border);
+  border-radius: var(--ui-radius-large);
+  background: var(--ui-color-surface);
+}
+
+.automations-card__heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ui-space-2) var(--ui-space-3);
+}
+
+.automations-card__heading h2 {
+  margin: 0;
+  color: var(--ui-color-text);
+  font-size: var(--ui-font-size-section);
+  font-weight: 600;
+}
+
+.automations-card__count {
+  color: var(--ui-color-text-muted);
+  font-size: var(--ui-font-size-aux);
+  font-variant-numeric: tabular-nums;
+}
+
+.automation-form {
+  display: grid;
+  min-width: 0;
+  gap: var(--ui-space-4);
+}
+
+.automation-form__grid {
+  display: grid;
+  grid-template-columns:
+    repeat(3, minmax(0, 1fr))
+    minmax(0, 1.2fr);
+  gap: var(--ui-space-4);
+  align-items: start;
+}
+
+.automation-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ui-space-2);
 }
 
 .automation-weekdays {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--ui-space-3);
-  margin: 0 0 var(--ui-space-4);
-  padding: var(--ui-space-3);
+  align-items: center;
+  gap: var(--ui-space-2) var(--ui-space-4);
+  margin: 0;
+  padding: var(--ui-space-3) var(--ui-space-4);
   border: 1px solid var(--ui-color-border);
-  border-radius: 8px;
+  border-radius: var(--ui-radius-medium);
+  background: var(--ui-color-surface-subtle);
 }
 
 .automation-weekdays legend {
   padding: 0 var(--ui-space-1);
-  color: var(--ui-color-text-secondary);
+  color: var(--ui-color-text-muted);
   font-size: var(--ui-font-size-control);
+  font-weight: 500;
 }
 
 .automation-weekdays label {
   display: flex;
   align-items: center;
-  gap: var(--ui-space-1);
+  gap: 6px;
+  color: var(--ui-color-text-secondary);
   font-size: var(--ui-font-size-control);
 }
 
@@ -4591,10 +4727,43 @@ select:not(.ui-select):hover {
   gap: var(--ui-space-2);
 }
 
+.automations-empty {
+  margin: 0;
+  padding: var(--ui-space-6);
+  border: 1px dashed var(--ui-color-border-strong);
+  border-radius: var(--ui-radius-medium);
+  color: var(--ui-color-text-muted);
+  background: var(--ui-color-surface-subtle);
+  font-size: var(--ui-font-size-control);
+  line-height: var(--ui-line-height-control);
+  text-align: center;
+}
+
+@container automations (max-width: 56rem) {
+  .automation-form__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container automations (max-width: 30rem) {
+  .automations-card {
+    gap: var(--ui-space-3);
+    padding: var(--ui-space-4);
+  }
+
+  .automation-form__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .privacy-consents {
   display: grid;
   gap: var(--ui-space-3);
   min-width: 0;
+}
+
+.privacy-consents > p {
+  margin: 0;
 }
 
 .privacy-consents__list {

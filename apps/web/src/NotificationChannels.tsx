@@ -115,12 +115,12 @@ export function NotificationChannels({
   }
 
   return (
-    <div>
+    <div className="settings-panel">
       <p className="muted">
         添加飞书机器人或通用 Webhook。到期提醒与定时任务启动时会推送；
         地址创建后只显示掩码。
       </p>
-      <form onSubmit={add}>
+      <form className="settings-form" onSubmit={add}>
         <Field label="名称">
           <Input
             value={name}

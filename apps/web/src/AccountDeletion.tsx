@@ -33,11 +33,11 @@ export function AccountDeletion({
   }
 
   return (
-    <div className="account-deletion">
+    <div className="settings-panel account-deletion">
       <p className="muted">
         注销后账号会立即停用并匿名化，连接器与记忆会被删除。任务与用量记录按合规要求保留。
       </p>
-      <form onSubmit={remove}>
+      <form className="settings-form" onSubmit={remove}>
         <Field label="当前密码">
           <PasswordInput
             value={password}

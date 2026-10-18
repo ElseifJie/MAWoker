@@ -936,13 +936,15 @@ function PageFrame({
   children,
   title,
   description,
+  className,
 }: {
   children?: ReactNode;
   title: string;
   description?: string;
+  className?: string;
 }) {
   return (
-    <div className="page">
+    <div className={className ? `page ${className}` : "page"}>
       <PageHeader title={title} {...(description ? { description } : {})} />
       {children}
     </div>
@@ -963,60 +965,21 @@ function SettingsPage({
   const pwa = usePwaInstall();
   return (
     <PageFrame
+      className="settings-page"
       title="设置"
-      description="管理账户与外观，按需调整助手、记忆和技能。"
+      description="管理账户、外观与通知，按需配置助手、连接器和数据。"
     >
-      <dl className="settings-list">
-        <div>
-          <dt>账号</dt>
-          <dd>{accountHandle(user.authSubject)}</dd>
-        </div>
-      </dl>
-
       <section
-        className="settings-section"
-        aria-labelledby="connectors-heading"
+        className="settings-section settings-section--account"
+        aria-labelledby="account-heading"
       >
-        <h2 id="connectors-heading">连接器</h2>
-        <McpServers />
-      </section>
-
-      <section className="settings-section" aria-labelledby="privacy-heading">
-        <h2 id="privacy-heading">隐私与数据</h2>
-        <PrivacyConsents onAuthRequired={onAuthRequired} />
-      </section>
-
-      <section className="settings-section" aria-labelledby="delete-heading">
-        <h2 id="delete-heading">注销账号</h2>
-        <AccountDeletion />
-      </section>
-
-      <section className="settings-section" aria-labelledby="channels-heading">
-        <h2 id="channels-heading">通知渠道</h2>
-        <NotificationChannels />
-      </section>
-
-      <section className="settings-section" aria-labelledby="sessions-heading">
-        <h2 id="sessions-heading">登录设备</h2>
-        <AccountSessions />
-      </section>
-
-      <section className="settings-section" aria-labelledby="export-heading">
-        <h2 id="export-heading">我的数据</h2>
-        <AccountExportButton />
-      </section>
-
-      <section className="settings-section" aria-labelledby="install-heading">
-        <h2 id="install-heading">安装应用</h2>
-        {pwa.installed ? (
-          <p className="muted">已安装到桌面，可从应用列表直接打开。</p>
-        ) : pwa.canInstall ? (
-          <Button onClick={() => void pwa.install()}>安装到桌面</Button>
-        ) : (
-          <p className="muted">
-            在浏览器菜单中选择“安装应用”或“添加到主屏幕”，即可像本地应用一样打开。
-          </p>
-        )}
+        <h2 id="account-heading">账号</h2>
+        <dl className="settings-list">
+          <div>
+            <dt>当前账号</dt>
+            <dd>{accountHandle(user.authSubject)}</dd>
+          </div>
+        </dl>
       </section>
 
       <section
@@ -1077,6 +1040,52 @@ function SettingsPage({
               </div>
             ))}
         </dl>
+      </section>
+
+      <section className="settings-section" aria-labelledby="channels-heading">
+        <h2 id="channels-heading">通知渠道</h2>
+        <NotificationChannels />
+      </section>
+
+      <section
+        className="settings-section"
+        aria-labelledby="connectors-heading"
+      >
+        <h2 id="connectors-heading">连接器</h2>
+        <McpServers />
+      </section>
+
+      <section className="settings-section" aria-labelledby="sessions-heading">
+        <h2 id="sessions-heading">登录设备</h2>
+        <AccountSessions />
+      </section>
+
+      <section className="settings-section" aria-labelledby="export-heading">
+        <h2 id="export-heading">我的数据</h2>
+        <AccountExportButton />
+      </section>
+
+      <section className="settings-section" aria-labelledby="install-heading">
+        <h2 id="install-heading">安装应用</h2>
+        {pwa.installed ? (
+          <p className="muted">已安装到桌面，可从应用列表直接打开。</p>
+        ) : pwa.canInstall ? (
+          <Button onClick={() => void pwa.install()}>安装到桌面</Button>
+        ) : (
+          <p className="muted">
+            在浏览器菜单中选择“安装应用”或“添加到主屏幕”，即可像本地应用一样打开。
+          </p>
+        )}
+      </section>
+
+      <section className="settings-section" aria-labelledby="privacy-heading">
+        <h2 id="privacy-heading">隐私与数据</h2>
+        <PrivacyConsents onAuthRequired={onAuthRequired} />
+      </section>
+
+      <section className="settings-section" aria-labelledby="delete-heading">
+        <h2 id="delete-heading">注销账号</h2>
+        <AccountDeletion />
       </section>
     </PageFrame>
   );

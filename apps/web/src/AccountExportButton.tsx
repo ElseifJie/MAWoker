@@ -45,7 +45,7 @@ export function AccountExportButton({
   }
 
   return (
-    <div className="account-export">
+    <div className="settings-panel account-export">
       <p className="muted">
         导出账号资料、任务、文件元数据、提醒与技能。导出不包含密码、令牌或云存储密钥。
       </p>

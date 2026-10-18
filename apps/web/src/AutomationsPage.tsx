@@ -245,180 +245,193 @@ export function AutomationsPage({
   }
 
   return (
-    <div className="page">
+    <div className="page automations-page">
       <PageHeader
         title="自动化"
         description="按固定时间提醒你。提醒会出现在任务通知中。"
         headingRef={headingRef}
       />
 
-      <section aria-label="新建提醒">
-        <h2>新建提醒</h2>
-        <form onSubmit={create}>
-          <Field label="提醒内容">
-            <Input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="例如：下午三点起来走动"
-              maxLength={120}
-              required
-              disabled={pending}
-            />
-          </Field>
-          <Field label="类型">
-            <Select
-              value={kind}
-              onChange={(event) =>
-                setKind(event.target.value as "reminder" | "execute")
-              }
-              disabled={pending}
-            >
-              <option value="reminder">提醒</option>
-              <option value="execute">执行任务</option>
-            </Select>
-          </Field>
-          {kind === "execute" ? (
-            <Field label="任务内容" hint="到期后用默认助手创建并执行">
-              <Textarea
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                rows={4}
-                maxLength={8000}
-                required
-                disabled={pending}
-              />
-            </Field>
-          ) : null}
-          <div className="automation-form-row">
-            <Field label="重复">
-              <Select
-                value={type}
-                onChange={(event) =>
-                  setType(event.target.value as ScheduleType)
-                }
-                disabled={pending}
-              >
-                <option value="daily">每天</option>
-                <option value="weekly">每周</option>
-                <option value="once">仅一次</option>
-              </Select>
-            </Field>
-            {type === "once" ? (
-              <Field label="提醒时间">
-                <Input
-                  type="datetime-local"
-                  value={onceAt}
-                  onChange={(event) => setOnceAt(event.target.value)}
-                  required
-                  disabled={pending}
-                />
-              </Field>
-            ) : (
-              <Field label="时间">
-                <Input
-                  type="time"
-                  value={time}
-                  onChange={(event) => setTime(event.target.value)}
-                  required
-                  disabled={pending}
-                />
-              </Field>
-            )}
-            <Field label="时区">
-              <Input
-                value={timezone}
-                onChange={(event) => setTimezone(event.target.value)}
-                required
-                disabled={pending}
-              />
-            </Field>
+      <div className="automations-layout">
+        <section className="automations-card" aria-label="新建提醒">
+          <div className="automations-card__heading">
+            <h2>新建提醒</h2>
           </div>
-          {type === "weekly" ? (
-            <fieldset className="automation-weekdays">
-              <legend>星期</legend>
-              {WEEKDAYS.map((day) => (
-                <label key={day.value}>
-                  <input
-                    type="checkbox"
-                    checked={weekdays.includes(day.value)}
-                    onChange={(event) =>
-                      setWeekdays((current) =>
-                        event.target.checked
-                          ? [...current, day.value]
-                          : current.filter((value) => value !== day.value),
-                      )
-                    }
+          <form className="automation-form" onSubmit={create}>
+            <Field label="提醒内容">
+              <Input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="例如：下午三点起来走动"
+                maxLength={120}
+                required
+                disabled={pending}
+              />
+            </Field>
+            <div className="automation-form__grid">
+              <Field label="类型">
+                <Select
+                  value={kind}
+                  onChange={(event) =>
+                    setKind(event.target.value as "reminder" | "execute")
+                  }
+                  disabled={pending}
+                >
+                  <option value="reminder">提醒</option>
+                  <option value="execute">执行任务</option>
+                </Select>
+              </Field>
+              <Field label="重复">
+                <Select
+                  value={type}
+                  onChange={(event) =>
+                    setType(event.target.value as ScheduleType)
+                  }
+                  disabled={pending}
+                >
+                  <option value="daily">每天</option>
+                  <option value="weekly">每周</option>
+                  <option value="once">仅一次</option>
+                </Select>
+              </Field>
+              {type === "once" ? (
+                <Field label="提醒时间">
+                  <Input
+                    type="datetime-local"
+                    value={onceAt}
+                    onChange={(event) => setOnceAt(event.target.value)}
+                    required
                     disabled={pending}
                   />
-                  {day.label}
-                </label>
-              ))}
-            </fieldset>
+                </Field>
+              ) : (
+                <Field label="时间">
+                  <Input
+                    type="time"
+                    value={time}
+                    onChange={(event) => setTime(event.target.value)}
+                    required
+                    disabled={pending}
+                  />
+                </Field>
+              )}
+              <Field label="时区">
+                <Input
+                  value={timezone}
+                  onChange={(event) => setTimezone(event.target.value)}
+                  required
+                  disabled={pending}
+                />
+              </Field>
+            </div>
+            {kind === "execute" ? (
+              <Field label="任务内容" hint="到期后用默认助手创建并执行">
+                <Textarea
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  rows={4}
+                  maxLength={8000}
+                  required
+                  disabled={pending}
+                />
+              </Field>
+            ) : null}
+            {type === "weekly" ? (
+              <fieldset className="automation-weekdays">
+                <legend>星期</legend>
+                {WEEKDAYS.map((day) => (
+                  <label key={day.value}>
+                    <input
+                      type="checkbox"
+                      checked={weekdays.includes(day.value)}
+                      onChange={(event) =>
+                        setWeekdays((current) =>
+                          event.target.checked
+                            ? [...current, day.value]
+                            : current.filter((value) => value !== day.value),
+                        )
+                      }
+                      disabled={pending}
+                    />
+                    {day.label}
+                  </label>
+                ))}
+              </fieldset>
+            ) : null}
+            <div className="automation-form__actions">
+              <Button type="submit" loading={pending}>
+                <Plus size={16} aria-hidden="true" />
+                {kind === "execute" ? "创建任务" : "创建提醒"}
+              </Button>
+            </div>
+          </form>
+          {feedback ? (
+            <Alert tone={feedback.tone}>{feedback.message}</Alert>
           ) : null}
-          <Button type="submit" loading={pending}>
-            <Plus size={16} aria-hidden="true" />
-            {kind === "execute" ? "创建任务" : "创建提醒"}
-          </Button>
-        </form>
-        {feedback ? (
-          <Alert tone={feedback.tone}>{feedback.message}</Alert>
-        ) : null}
-      </section>
+        </section>
 
-      <section aria-label="提醒列表">
-        <h2>提醒列表</h2>
-        {items.length === 0 ? (
-          <p>还没有提醒。</p>
-        ) : (
-          <DataTable caption="提醒列表">
-            <thead>
-              <tr>
-                <th scope="col">内容</th>
-                <th scope="col">类型</th>
-                <th scope="col">规则</th>
-                <th scope="col">下次提醒</th>
-                <th scope="col">状态</th>
-                <th scope="col">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.title}</td>
-                  <td>{item.kind === "execute" ? "执行任务" : "提醒"}</td>
-                  <td>{scheduleLabel(item.schedule)}</td>
-                  <td>
-                    {new Date(item.nextRunAt).toLocaleString("zh-CN")}
-                    <span>（{item.timezone}）</span>
-                  </td>
-                  <td>{item.enabled ? "已启用" : "已暂停"}</td>
-                  <td>
-                    <div className="automation-actions">
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        loading={busyId === item.id}
-                        onClick={() => void toggle(item)}
-                      >
-                        {item.enabled ? "暂停" : "恢复"}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() => void remove(item)}
-                        disabled={busyId !== null}
-                      >
-                        <Trash2 size={15} aria-hidden="true" />
-                        删除
-                      </Button>
-                    </div>
-                  </td>
+        <section className="automations-card" aria-label="提醒列表">
+          <div className="automations-card__heading">
+            <h2>提醒列表</h2>
+            {items.length > 0 ? (
+              <span className="automations-card__count">
+                {items.length} 个提醒
+              </span>
+            ) : null}
+          </div>
+          {items.length === 0 ? (
+            <p className="automations-empty">还没有提醒。</p>
+          ) : (
+            <DataTable caption="提醒列表">
+              <thead>
+                <tr>
+                  <th scope="col">内容</th>
+                  <th scope="col">类型</th>
+                  <th scope="col">规则</th>
+                  <th scope="col">下次提醒</th>
+                  <th scope="col">状态</th>
+                  <th scope="col">操作</th>
                 </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        )}
-      </section>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.title}</td>
+                    <td>{item.kind === "execute" ? "执行任务" : "提醒"}</td>
+                    <td>{scheduleLabel(item.schedule)}</td>
+                    <td>
+                      {new Date(item.nextRunAt).toLocaleString("zh-CN")}
+                      <span>（{item.timezone}）</span>
+                    </td>
+                    <td>{item.enabled ? "已启用" : "已暂停"}</td>
+                    <td>
+                      <div className="automation-actions">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          loading={busyId === item.id}
+                          onClick={() => void toggle(item)}
+                        >
+                          {item.enabled ? "暂停" : "恢复"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => void remove(item)}
+                          disabled={busyId !== null}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          删除
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

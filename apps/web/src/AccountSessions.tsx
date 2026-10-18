@@ -57,7 +57,7 @@ export function AccountSessions({
   }
 
   return (
-    <div>
+    <div className="settings-panel">
       <DataTable caption="登录设备">
         <thead>
           <tr>

@@ -2002,6 +2002,33 @@ describe("artifact management", () => {
   });
 });
 
+describe("settings workspace", () => {
+  it("orders settings modules by everyday use and leaves deletion last", async () => {
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp("/settings");
+
+    await screen.findByRole("heading", { name: "设置" });
+    const settingsPage = document.querySelector<HTMLElement>(".settings-page");
+    expect(settingsPage).not.toBeNull();
+    expect(
+      within(settingsPage!)
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual([
+      "账号",
+      "外观",
+      "工作区能力",
+      "通知渠道",
+      "连接器",
+      "登录设备",
+      "我的数据",
+      "安装应用",
+      "隐私与数据",
+      "注销账号",
+    ]);
+  });
+});
+
 describe("unavailable capabilities", () => {
   it("hides unavailable capabilities and keeps assistant setup under settings", async () => {
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
@@ -2174,6 +2201,18 @@ describe("migrated CSS contracts", () => {
     expect([
       ...new Set(required.filter((token) => !declared.has(token))),
     ]).toEqual([]);
+  });
+
+  it("keeps the workspace frame as the only page-level scroll boundary", () => {
+    const shellCss = readCss("src/shell/shell.css");
+    const rule = (selector: string) =>
+      new RegExp(`${selector}\\s*\\{([^}]*)\\}`).exec(shellCss)?.[1] ?? "";
+
+    expect(rule("\\.ui-app-frame")).toMatch(/overflow:\s*hidden/);
+    expect(rule("\\.ui-app-frame__center")).toMatch(/position:\s*relative/);
+    expect(rule("\\.ui-app-frame__center")).toMatch(
+      /overscroll-behavior:\s*contain/,
+    );
   });
 
   it("keeps the approved radius range and typography viewport-independent", () => {

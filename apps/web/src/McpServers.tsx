@@ -107,12 +107,12 @@ export function McpServers({
   }
 
   return (
-    <div>
+    <div className="settings-panel">
       <p className="muted">
         添加远程 MCP 服务地址。地址必须使用 HTTPS
         且指向公网；本版本先保存注册信息， 工具绑定将在后续版本启用。
       </p>
-      <form onSubmit={add}>
+      <form className="settings-form" onSubmit={add}>
         <Field label="名称">
           <Input
             value={name}
