@@ -32,6 +32,12 @@ export interface AdminSystemSnapshot {
   automations: { active: number; pending: number; overdue: number };
   notifications: { unread: number };
   users: { active: number; disabled: number };
+  eventIngestors: {
+    consumers: number;
+    expiredLeases: number;
+    lastConsumedSecondsAgo: number | null;
+    oldestConsumedSecondsAgo: number | null;
+  };
 }
 
 function countOf(rows: Array<{ count: number | string }>): number {
@@ -56,6 +62,10 @@ export function createAdminSystemRepository(db: Database) {
         unreadNotifications,
         activeUsers,
         disabledUsers,
+        eventConsumers,
+        expiredEventLeases,
+        latestEventConsumption,
+        oldestEventConsumption,
       ] = await Promise.all([
         db.execute<{ count: number | string }>(
           sql`select count(*)::int as count from background_jobs
@@ -101,6 +111,23 @@ export function createAdminSystemRepository(db: Database) {
         db.execute<{ count: number | string }>(
           sql`select count(*)::int as count from users where status = 'disabled'`,
         ),
+        db.execute<{ count: number | string }>(
+          sql`select count(*)::int as count from session_event_consumers`,
+        ),
+        db.execute<{ count: number | string }>(
+          sql`select count(*)::int as count from session_event_consumers
+               where lease_until <= ${now}`,
+        ),
+        db.execute<{ seconds: number | string | null }>(
+          sql`select extract(epoch from (${now} - max(last_consumed_at))) as seconds
+               from session_event_consumers
+               where last_consumed_at is not null`,
+        ),
+        db.execute<{ seconds: number | string | null }>(
+          sql`select extract(epoch from (${now} - min(last_consumed_at))) as seconds
+               from session_event_consumers
+               where last_consumed_at is not null`,
+        ),
       ]);
 
       const runs = Object.fromEntries(
@@ -114,6 +141,12 @@ export function createAdminSystemRepository(db: Database) {
         }
       }
       const oldestSeconds = oldestJob.rows[0]?.seconds;
+      const secondsAgo = (
+        value: number | string | null | undefined,
+      ): number | null =>
+        value === null || value === undefined
+          ? null
+          : Math.max(0, Math.floor(Number(value)));
       return {
         generatedAt: now.toISOString(),
         database: { latencyMs: Date.now() - started },
@@ -137,6 +170,16 @@ export function createAdminSystemRepository(db: Database) {
         users: {
           active: countOf(activeUsers.rows),
           disabled: countOf(disabledUsers.rows),
+        },
+        eventIngestors: {
+          consumers: countOf(eventConsumers.rows),
+          expiredLeases: countOf(expiredEventLeases.rows),
+          lastConsumedSecondsAgo: secondsAgo(
+            latestEventConsumption.rows[0]?.seconds,
+          ),
+          oldestConsumedSecondsAgo: secondsAgo(
+            oldestEventConsumption.rows[0]?.seconds,
+          ),
         },
       };
     },

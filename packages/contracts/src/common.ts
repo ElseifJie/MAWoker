@@ -7,6 +7,7 @@ export const errorCodeSchema = z.enum([
   "RESOURCE_NOT_FOUND",
   "VALIDATION_FAILED",
   "INVITE_INVALID",
+  "CONSENT_INVALID",
   "MCP_URL_UNSAFE",
   "MCP_NAME_CONFLICT",
   "CHANNEL_URL_UNSAFE",

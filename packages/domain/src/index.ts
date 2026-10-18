@@ -110,3 +110,4 @@ export * from "./notification-channels.js";
 export * from "./webhook-notifier.js";
 export * from "./account-deletion.js";
 export * from "./credential-cipher.js";
+export * from "./consents.js";

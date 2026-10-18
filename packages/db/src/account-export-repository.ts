@@ -24,6 +24,7 @@ export function createAccountExportRepository(db: Database) {
         memories,
         automations,
         skills,
+        consents,
       ] = await Promise.all([
         db.execute(
           sql`select id, email, role, status, created_at as "createdAt"
@@ -106,6 +107,11 @@ export function createAccountExportRepository(db: Database) {
                order by created_at, id
                limit 500`,
         ),
+        db.execute(
+          sql`select document, version, accepted_at as "acceptedAt"
+                from user_consents where user_id = ${userId}
+               order by accepted_at desc, document`,
+        ),
       ]);
       return {
         user: users.rows[0] ?? null,
@@ -118,6 +124,7 @@ export function createAccountExportRepository(db: Database) {
         memoryStore: memories.rows[0] ?? null,
         automations: automations.rows,
         skills: skills.rows,
+        consents: consents.rows,
       };
     },
   };

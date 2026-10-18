@@ -604,6 +604,25 @@ interface BuildAppOptions {
   accountExport?: {
     export(userId: string): PromiseLike<Record<string, unknown>>;
   };
+  consents?: {
+    list(userId: string): PromiseLike<{
+      consents: Array<{
+        document: string;
+        version: string;
+        acceptedAt: Date;
+      }>;
+      currentVersion: string;
+      documents: readonly string[];
+    }>;
+    accept(
+      userId: string,
+      input: { document: unknown; version: unknown },
+    ): PromiseLike<{
+      document: string;
+      version: string;
+      acceptedAt: Date;
+    }>;
+  };
   adminSystem?: {
     snapshot(now?: Date): PromiseLike<unknown>;
   };
@@ -3172,6 +3191,50 @@ export function buildApp(options: BuildAppOptions = {}) {
           new Date(),
         ),
       }));
+    }
+
+    if (options.consents) {
+      const consents = options.consents;
+      app.get("/api/v1/account/consents", async (request) => {
+        const result = await consents.list(request.auth!.userId);
+        return {
+          ...result,
+          consents: result.consents.map((record) => ({
+            ...record,
+            acceptedAt: record.acceptedAt.toISOString(),
+          })),
+        };
+      });
+      app.post("/api/v1/account/consents", async (request, reply) => {
+        const body = request.body as
+          { document?: unknown; version?: unknown } | undefined;
+        try {
+          const record = await consents.accept(request.auth!.userId, {
+            document: body?.document,
+            version: body?.version,
+          });
+          return {
+            consent: {
+              ...record,
+              acceptedAt: record.acceptedAt.toISOString(),
+            },
+          };
+        } catch (error) {
+          if (hasErrorName(error, "ConsentInvalidError")) {
+            return reply
+              .code(400)
+              .send(
+                applicationError(
+                  request.id,
+                  "CONSENT_INVALID",
+                  "Consent document or version is not current",
+                  false,
+                ),
+              );
+          }
+          throw error;
+        }
+      });
     }
 
     if (options.notificationChannels) {

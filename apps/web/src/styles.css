@@ -4590,3 +4590,31 @@ select:not(.ui-select):hover {
   flex-wrap: wrap;
   gap: var(--ui-space-2);
 }
+
+.privacy-consents {
+  display: grid;
+  gap: var(--ui-space-3);
+  min-width: 0;
+}
+
+.privacy-consents__list {
+  display: grid;
+  gap: var(--ui-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.privacy-consents__list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-2) 0;
+  border-bottom: 1px solid var(--ui-color-border);
+}
+
+.privacy-consents__list li:last-child {
+  border-bottom: 0;
+}

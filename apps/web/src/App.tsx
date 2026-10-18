@@ -3,6 +3,7 @@ import { AccountExportButton } from "./AccountExportButton.js";
 import { AccountSessions } from "./AccountSessions.js";
 import { McpServers } from "./McpServers.js";
 import { NotificationChannels } from "./NotificationChannels.js";
+import { PrivacyConsents } from "./PrivacyConsents.js";
 import { useAccountSync } from "./useAccountSync.js";
 import { AutomationsPage } from "./AutomationsPage.js";
 import { usePwaInstall } from "./usePwaInstall.js";
@@ -896,6 +897,7 @@ function Workspace({
                 user={user}
                 theme={theme}
                 capabilities={data.capabilities}
+                onAuthRequired={onAuthRequired}
               />
             }
           />
@@ -951,10 +953,12 @@ function SettingsPage({
   user,
   theme,
   capabilities,
+  onAuthRequired,
 }: {
   user: CurrentUser;
   theme: ThemeState;
   capabilities: ClientCapabilities;
+  onAuthRequired: () => void;
 }) {
   const pwa = usePwaInstall();
   return (
@@ -975,6 +979,11 @@ function SettingsPage({
       >
         <h2 id="connectors-heading">连接器</h2>
         <McpServers />
+      </section>
+
+      <section className="settings-section" aria-labelledby="privacy-heading">
+        <h2 id="privacy-heading">隐私与数据</h2>
+        <PrivacyConsents onAuthRequired={onAuthRequired} />
       </section>
 
       <section className="settings-section" aria-labelledby="delete-heading">

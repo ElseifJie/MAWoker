@@ -302,6 +302,13 @@
       "when": 1792259108823,
       "tag": "0042_smart_scarlet_witch",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1792286884416,
+      "tag": "0043_spicy_leo",
+      "breakpoints": true
     }
   ]
 }

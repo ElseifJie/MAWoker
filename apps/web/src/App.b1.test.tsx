@@ -76,6 +76,11 @@ beforeEach(() => {
   vi.spyOn(apiClient, "getUsage").mockResolvedValue(
     {} as Awaited<ReturnType<typeof apiClient.getUsage>>,
   );
+  vi.spyOn(apiClient, "listAccountConsents").mockResolvedValue({
+    consents: [],
+    currentVersion: "2026-10-18",
+    documents: ["terms", "privacy"],
+  });
 });
 afterEach(() => {
   cleanup();

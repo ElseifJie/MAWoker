@@ -10,6 +10,10 @@ function duration(seconds: number | null): string {
   return `${Math.floor(seconds / 3600)} 小时`;
 }
 
+function ago(seconds: number | null): string {
+  return seconds === null ? "—" : `${duration(seconds)}前`;
+}
+
 const RUN_LABELS: Record<string, string> = {
   queued: "排队",
   starting: "启动中",
@@ -121,6 +125,22 @@ export function AdminSystemPage({
         <div>
           <dt>最老待处理</dt>
           <dd>{duration(snapshot.jobs.oldestPendingSeconds)}</dd>
+        </div>
+        <div>
+          <dt>事件消费者</dt>
+          <dd>{snapshot.eventIngestors.consumers}</dd>
+        </div>
+        <div>
+          <dt>过期租约</dt>
+          <dd>{snapshot.eventIngestors.expiredLeases}</dd>
+        </div>
+        <div>
+          <dt>最后消费</dt>
+          <dd>{ago(snapshot.eventIngestors.lastConsumedSecondsAgo)}</dd>
+        </div>
+        <div>
+          <dt>最久未消费</dt>
+          <dd>{ago(snapshot.eventIngestors.oldestConsumedSecondsAgo)}</dd>
         </div>
         <div>
           <dt>活跃 Run</dt>

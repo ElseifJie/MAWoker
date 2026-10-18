@@ -12,6 +12,7 @@ import {
   AssistantProfileService,
   AccountDeletionService,
   AccountExportService,
+  ConsentService,
   AutomationService,
   InviteCodeService,
   McpServerService,
@@ -137,6 +138,9 @@ const accountDeletionService = new AccountDeletionService({
 const accountExportService = new AccountExportService({
   repository: repositories.accountExport,
 });
+const consentService = new ConsentService({
+  repository: repositories.consents,
+});
 const automationService = new AutomationService({
   repository: repositories.automations,
   createId: randomUUID,
@@ -193,6 +197,7 @@ const app = buildApp({
   automations: automationService,
   accountDeletion: accountDeletionService,
   accountExport: accountExportService,
+  consents: consentService,
   adminSystem: repositories.adminSystem,
   mcpServers,
   notificationChannels,

@@ -59,6 +59,12 @@ describe("admin system snapshot", () => {
     expect(snapshot.notifications.unread).toBe(1);
     expect(snapshot.users.active).toBe(1);
     expect(snapshot.runs.queued).toBe(0);
+    expect(snapshot.eventIngestors).toEqual({
+      consumers: 0,
+      expiredLeases: 0,
+      lastConsumedSecondsAgo: null,
+      oldestConsumedSecondsAgo: null,
+    });
     await database.close();
   });
 });

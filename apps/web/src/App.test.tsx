@@ -360,6 +360,26 @@ function authenticatedHandler(
     if (path === "/api/v1/capabilities") {
       return json(overrides.capabilities ?? capabilitiesResponse);
     }
+    if (path === "/api/v1/account/consents" && method === "GET") {
+      return json({
+        consents: [],
+        currentVersion: "2026-10-18",
+        documents: ["terms", "privacy"],
+      });
+    }
+    if (path === "/api/v1/account/consents" && method === "POST") {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        document?: string;
+        version?: string;
+      };
+      return json({
+        consent: {
+          document: body.document ?? "privacy",
+          version: body.version ?? "2026-10-18",
+          acceptedAt: "2026-10-18T00:00:00.000Z",
+        },
+      });
+    }
     if (path === "/api/v1/auth/logout") return noContent();
     throw new Error(`Unexpected request: ${method} ${path}`);
   };

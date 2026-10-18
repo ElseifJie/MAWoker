@@ -30,6 +30,12 @@ const snapshot = {
   automations: { active: 4, pending: 2, overdue: 1 },
   notifications: { unread: 7 },
   users: { active: 5, disabled: 1 },
+  eventIngestors: {
+    consumers: 2,
+    expiredLeases: 1,
+    lastConsumedSecondsAgo: 15,
+    oldestConsumedSecondsAgo: 240,
+  },
 };
 
 function json(body: unknown) {
@@ -63,6 +69,10 @@ describe("AdminSystemPage", () => {
     expect(screen.getByText("12 ms")).toBeVisible();
     expect(screen.getByText("最老待处理")).toBeVisible();
     expect(screen.getByText("2 分钟")).toBeVisible();
+    expect(screen.getByText("事件消费者")).toBeVisible();
+    expect(screen.getByText("过期租约")).toBeVisible();
+    expect(screen.getByText("15 秒前")).toBeVisible();
+    expect(screen.getByText("4 分钟前")).toBeVisible();
     expect(screen.getByText("逾期提醒")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Run 状态分布" })).toBeVisible();
     expect(screen.getByRole("table")).toHaveTextContent("运行中");

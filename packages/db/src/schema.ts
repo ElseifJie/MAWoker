@@ -1434,3 +1434,28 @@ export const notificationChannels = pgTable(
     ),
   ],
 );
+
+/**
+ * Versioned privacy/terms acceptance. Keeping one row per document version
+ * preserves the historical record when a document is revised.
+ */
+export const userConsents = pgTable(
+  "user_consents",
+  {
+    userId: uuid("user_id").notNull(),
+    document: text("document").notNull(),
+    version: text("version").notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.userId, table.document, table.version] }),
+    foreignKey({
+      name: "user_consents_user_fk",
+      columns: [table.userId],
+      foreignColumns: [users.id],
+    }).onDelete("cascade"),
+    index("user_consents_user_idx").on(table.userId),
+  ],
+);

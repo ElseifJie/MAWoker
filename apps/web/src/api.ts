@@ -280,6 +280,18 @@ export interface AccountSession {
   expiresAt: string;
 }
 
+export interface AccountConsent {
+  document: string;
+  version: string;
+  acceptedAt: string;
+}
+
+export interface AccountConsents {
+  consents: AccountConsent[];
+  currentVersion: string;
+  documents: string[];
+}
+
 export type AutomationSchedule =
   | { type: "once"; at: string }
   | { type: "daily"; time: string }
@@ -404,6 +416,12 @@ export interface AdminSystemSnapshot {
   automations: { active: number; pending: number; overdue: number };
   notifications: { unread: number };
   users: { active: number; disabled: number };
+  eventIngestors: {
+    consumers: number;
+    expiredLeases: number;
+    lastConsumedSecondsAgo: number | null;
+    oldestConsumedSecondsAgo: number | null;
+  };
 }
 
 export interface AdminInvite {
@@ -951,6 +969,12 @@ export const apiClient = {
       body: JSON.stringify({ password, confirmation: "DELETE" }),
     }),
   exportAccount: () => request<Record<string, unknown>>("/account/export"),
+  listAccountConsents: () => request<AccountConsents>("/account/consents"),
+  acceptAccountConsent: (document: string, version: string) =>
+    request<{ consent: AccountConsent }>("/account/consents", {
+      method: "POST",
+      body: JSON.stringify({ document, version }),
+    }),
   listAutomations: () =>
     request<{ automations: AutomationRecord[] }>("/automations"),
   createAutomation: (input: {

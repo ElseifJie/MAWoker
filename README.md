@@ -190,9 +190,9 @@ The current product adds the following customer-facing flows on top of the Stage
 - **Invite-only onboarding.** Administrators create one-time invite links; invitees set a password
   at `/invite?code=…`. Only hashed codes are stored, and invite create/revoke/accept are audited.
 - **Account controls.** Settings exposes active login devices with “sign out other devices”, a
-  full owner-scoped JSON export, and self-service account deletion (password + `DELETE`
+  full owner-scoped JSON export, self-service account deletion (password + `DELETE`
   confirmation; the account is anonymized, sessions are revoked, and connector/memory rows are
-  removed).
+  removed), and versioned privacy/terms acceptance with retention guidance.
 - **Automations.** Daily/weekly/once reminders and scheduled tasks. Reminders create deduplicated
   in-app notifications; tasks run with the user's current default Agent. Optional webhook channels
   deliver Feishu text or generic JSON payloads.
@@ -201,13 +201,16 @@ The current product adds the following customer-facing flows on top of the Stage
   update.
 - **PWA and cross-browser sync.** Installable manifest/service worker, install prompt, and a
   per-browser account cursor that polls `/sync/changes` and refreshes session lists.
-- **Operations.** Admin system status (queue/Run/reminder backlog), prompt-injection-safe audit
-  views, and `db:backup` / `db:restore` scripts with credential-redacted logs.
+- **Operations.** Admin system status (queue/Run/reminder backlog, event-ingestor leases and lag),
+  prompt-injection-safe audit views, and `db:backup` / `db:restore` scripts with credential-redacted
+  logs.
 
 Known gaps are tracked in the implementation plan and checkpoint appendices (git-ignored):
 
-- The Harness `WorkspaceFrame` components exist and are tested, but the existing Workspace pages
-  are not migrated to the new three-pane shell yet.
+- The production shell now runs on `WorkspaceFrame` with a narrow drawer and resizable rails.
+  Split/floating panels and a full artifact-list panel are still pending.
+- The event ingestor shadow/local switch is code-complete but defaults to upstream; the operator
+  checklist lives in `docs/runbooks/event-ingestor-cutover.md`.
 - Ark Vault, OAuth, and the live Feishu read/write loop are not implemented; MCP registration and
   Agent tool binding are.
 - Account deletion is an anonymizing soft delete. TOS/Ark physical purge and retention policy are

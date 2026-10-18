@@ -14,6 +14,7 @@ import { createAdminSystemRepository } from "./admin-system-repository.js";
 import { createMcpServerRepository } from "./mcp-server-repository.js";
 import { createNotificationChannelRepository } from "./notification-channel-repository.js";
 import { createAccountDeletionRepository } from "./account-deletion-repository.js";
+import { createConsentRepository } from "./consent-repository.js";
 import {
   appendAccountChange,
   createSyncRepository,
@@ -1030,6 +1031,7 @@ export function createRepositories(database: unknown) {
     mcpServers: createMcpServerRepository(db),
     notificationChannels: createNotificationChannelRepository(db),
     accountDeletion: createAccountDeletionRepository(db),
+    consents: createConsentRepository(db),
     sync: createSyncRepository(db),
     sessionDelivery: createSessionDeliveryRepository(db),
     fileReuse: createFileReuseRepository(db),
