@@ -35,6 +35,8 @@ export interface ShellLayoutResult {
   centerWidth: number;
   leftMode: ShellLeftMode;
   rightMode: ShellRightMode;
+  /** Below the 768px overlay boundary the shell switches to drawer mode. */
+  mobile: boolean;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -44,7 +46,7 @@ function clamp(value: number, min: number, max: number): number {
 
 export function solveShellLayout(input: ShellLayoutInput): ShellLayoutResult {
   const viewport = Math.max(0, Math.floor(input.viewportWidth));
-  const narrow = viewport < SHELL_LAYOUT.overlayBelow;
+  const mobile = viewport < SHELL_LAYOUT.overlayBelow;
   const collapsed =
     input.leftCollapsed ?? viewport < SHELL_LAYOUT.autoCollapseBelow;
   const leftMode: ShellLeftMode = collapsed ? "collapsed" : "expanded";
@@ -71,10 +73,11 @@ export function solveShellLayout(input: ShellLayoutInput): ShellLayoutResult {
       centerWidth: Math.max(0, viewport - leftWidth),
       leftMode,
       rightMode: "closed",
+      mobile,
     };
   }
 
-  if (narrow) {
+  if (mobile) {
     const requested = input.requestedRightWidth ?? viewport;
     const rightWidth = clamp(
       requested,
@@ -87,6 +90,7 @@ export function solveShellLayout(input: ShellLayoutInput): ShellLayoutResult {
       centerWidth: Math.max(0, viewport - leftWidth),
       leftMode,
       rightMode: "overlay",
+      mobile,
     };
   }
 
@@ -105,5 +109,6 @@ export function solveShellLayout(input: ShellLayoutInput): ShellLayoutResult {
     centerWidth: Math.max(0, viewport - leftWidth - rightWidth),
     leftMode,
     rightMode: "panel",
+    mobile,
   };
 }

@@ -1,6 +1,8 @@
+import { Menu, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import {
+  IconButton,
   UserMenu,
   type AppShellUser,
   type NavigationItem,
@@ -15,6 +17,10 @@ export interface WorkspaceNavProps {
   user: AppShellUser;
   onSignOut(): void;
   collapsed?: boolean;
+  /** Rendered on the collapsed mobile rail to open the navigation drawer. */
+  onOpenDrawer?(): void;
+  /** Replaces the collapsed trigger while the drawer is open. */
+  onCloseDrawer?(): void;
 }
 
 /**
@@ -32,6 +38,8 @@ export function WorkspaceNav({
   user,
   onSignOut,
   collapsed = false,
+  onOpenDrawer,
+  onCloseDrawer,
 }: WorkspaceNavProps) {
   return (
     <div
@@ -48,9 +56,31 @@ export function WorkspaceNav({
         {!collapsed && brandActions ? (
           <div className="ui-app-shell__brand-actions">{brandActions}</div>
         ) : null}
+        {onCloseDrawer ? (
+          <IconButton
+            label="关闭导航"
+            size="small"
+            data-drawer-trigger="true"
+            onClick={onCloseDrawer}
+          >
+            <X size={16} aria-hidden="true" />
+          </IconButton>
+        ) : null}
       </div>
-      {collapsed && brandActions ? (
-        <div className="workspace-nav__compact-actions">{brandActions}</div>
+      {collapsed && (brandActions || onOpenDrawer) ? (
+        <div className="workspace-nav__compact-actions">
+          {onOpenDrawer ? (
+            <IconButton
+              label="打开导航"
+              size="small"
+              data-drawer-trigger="true"
+              onClick={onOpenDrawer}
+            >
+              <Menu size={16} aria-hidden="true" />
+            </IconButton>
+          ) : null}
+          {brandActions}
+        </div>
       ) : null}
       <nav aria-label={navigationLabel} className="ui-app-shell__navigation">
         <div className="ui-app-shell__navigation-primary">

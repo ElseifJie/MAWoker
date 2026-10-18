@@ -384,13 +384,39 @@ function Workspace({
       ) : null,
     [closeWorkspacePanel, onAuthRequired],
   );
+  const closeOverlay = useCallback(() => {
+    const activeId = shell.state.activePanelId;
+    if (activeId) closeWorkspacePanel(activeId);
+    else shell.setRightOpen(false);
+  }, [closeWorkspacePanel, shell.setRightOpen, shell.state.activePanelId]);
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const mobile = shell.layout.mobile;
+  const previousPathRef = useRef(location.pathname);
   const themeResolved = theme.resolved;
   const setThemePreference = theme.setPreference;
+
+  useEffect(() => {
+    if (previousPathRef.current === location.pathname) return;
+    previousPathRef.current = location.pathname;
+    if (!drawerOpen) return;
+    setDrawerOpen(false);
+    const focusMain = () =>
+      document.querySelector<HTMLElement>(".ui-app-frame__center")?.focus();
+    if (typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(focusMain);
+    } else {
+      focusMain();
+    }
+  }, [drawerOpen, location.pathname]);
+
+  useEffect(() => {
+    if (!mobile) setDrawerOpen(false);
+  }, [mobile]);
 
   const commands = useMemo<Command[]>(() => {
     const next = themeResolved === "dark" ? "light" : "dark";
@@ -683,7 +709,13 @@ function Workspace({
           }
           user={{ handle: accountHandle(user.authSubject) }}
           onSignOut={signOut}
-          collapsed={shell.layout.leftMode === "collapsed"}
+          collapsed={
+            shell.layout.leftMode === "collapsed" && !(mobile && drawerOpen)
+          }
+          {...(mobile ? { onOpenDrawer: () => setDrawerOpen(true) } : {})}
+          {...(mobile && drawerOpen
+            ? { onCloseDrawer: () => setDrawerOpen(false) }
+            : {})}
         />
       }
       panels={visiblePanels}
@@ -693,6 +725,13 @@ function Workspace({
       onReorderPanels={shell.reorderPanels}
       rightVisible={shell.state.rightOpen && visiblePanels.length > 0}
       renderPanel={renderWorkspacePanel}
+      drawerOpen={mobile && drawerOpen}
+      drawerLabel="关闭导航"
+      onCloseDrawer={() => setDrawerOpen(false)}
+      onCloseOverlay={closeOverlay}
+      overlayCloseLabel="关闭面板"
+      onLeftWidthChange={shell.setLeftWidth}
+      onRightWidthChange={shell.setRightWidth}
     >
       <div className="workspace-main">
         <Routes>

@@ -614,10 +614,11 @@ describe("workspace shell", () => {
     expect(screen.queryByRole("combobox", { name: "搜索任务" })).toBeNull();
   });
 
-  it("keeps navigation reachable in the collapsed rail on narrow screens", async () => {
+  it("[shell.narrow] opens and closes the navigation drawer with focus return", async () => {
     setViewportWidth(600);
     vi.mocked(fetch).mockImplementation(authenticatedHandler());
     renderApp();
+    const user = userEvent.setup();
 
     await screen.findByRole("heading", { name: "新任务" });
     const frame = document.querySelector(".ui-app-frame");
@@ -637,8 +638,52 @@ describe("workspace shell", () => {
     ).toBeInTheDocument();
     // The session list belongs to the expanded rail.
     expect(within(navigation).queryByText("Quarterly plan")).toBeNull();
-    // The old drawer trigger is gone; the rail stays in the tree.
-    expect(screen.queryByRole("button", { name: "打开导航" })).toBeNull();
+
+    const open = screen.getByRole("button", { name: "打开导航" });
+    await user.click(open);
+    expect(frame).toHaveAttribute("data-drawer", "open");
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(within(sidebar).getByText("Work Agent")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Quarterly plan")).toBeInTheDocument();
+
+    await user.click(within(sidebar).getByRole("button", { name: "关闭导航" }));
+    expect(frame).not.toHaveAttribute("data-drawer");
+    expect(document.body.style.overflow).toBe("");
+    expect(screen.getByRole("button", { name: "打开导航" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "打开导航" }));
+    await user.keyboard("{Escape}");
+    expect(frame).not.toHaveAttribute("data-drawer");
+    expect(document.body.style.overflow).toBe("");
+    expect(screen.getByRole("button", { name: "打开导航" })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "打开导航" }));
+    await user.click(within(sidebar).getByRole("link", { name: "历史任务" }));
+    expect(frame).not.toHaveAttribute("data-drawer");
+    expect(
+      await screen.findByRole("heading", { name: "历史任务" }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
+  });
+
+  it("[panel.overlay] closes the artifact overlay on narrow screens", async () => {
+    setViewportWidth(600);
+    vi.mocked(fetch).mockImplementation(authenticatedHandler());
+    renderApp(`/sessions/${sessionId}?artifact=${artifactId}`);
+    const user = userEvent.setup();
+
+    await screen.findByRole("heading", { name: "Quarterly plan" });
+    const panel = await screen.findByRole("complementary", {
+      name: "Workspace panel",
+    });
+    expect(panel).toHaveClass("ui-app-frame__right--overlay");
+
+    await user.click(screen.getByRole("button", { name: "关闭面板" }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("complementary", { name: "Workspace panel" }),
+      ).toBeNull(),
+    );
   });
 
   it("blocks task creation when no default Agent is available", async () => {

@@ -14,7 +14,13 @@ const navigation = [
 ];
 
 function renderNav(
-  options: { collapsed?: boolean; path?: string; onSignOut?: () => void } = {},
+  options: {
+    collapsed?: boolean;
+    path?: string;
+    onSignOut?: () => void;
+    onOpenDrawer?: () => void;
+    onCloseDrawer?: () => void;
+  } = {},
 ) {
   return render(
     <MemoryRouter initialEntries={[options.path ?? "/"]}>
@@ -26,6 +32,12 @@ function renderNav(
         user={{ handle: "user@example.com" }}
         onSignOut={options.onSignOut ?? vi.fn()}
         collapsed={options.collapsed}
+        {...(options.onOpenDrawer
+          ? { onOpenDrawer: options.onOpenDrawer }
+          : {})}
+        {...(options.onCloseDrawer
+          ? { onCloseDrawer: options.onCloseDrawer }
+          : {})}
       />
     </MemoryRouter>,
   );
@@ -79,5 +91,26 @@ describe("WorkspaceNav", () => {
     );
     await user.click(screen.getByRole("menuitem", { name: "退出登录" }));
     expect(onSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it("[shell.narrow] offers the drawer trigger on the collapsed rail", async () => {
+    const onOpenDrawer = vi.fn();
+    renderNav({ collapsed: true, onOpenDrawer });
+    const trigger = screen.getByRole("button", { name: "打开导航" });
+
+    expect(trigger).toHaveAttribute("data-drawer-trigger");
+    await userEvent.setup().click(trigger);
+    expect(onOpenDrawer).toHaveBeenCalledTimes(1);
+  });
+
+  it("[shell.narrow] shows the close control while the drawer is open", async () => {
+    const onCloseDrawer = vi.fn();
+    renderNav({ onCloseDrawer });
+    const close = screen.getByRole("button", { name: "关闭导航" });
+
+    expect(screen.getByText("Work Agent")).toBeInTheDocument();
+    expect(close).toHaveAttribute("data-drawer-trigger");
+    await userEvent.setup().click(close);
+    expect(onCloseDrawer).toHaveBeenCalledTimes(1);
   });
 });

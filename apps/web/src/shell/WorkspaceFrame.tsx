@@ -18,6 +18,13 @@ export interface WorkspaceFrameProps {
   /** Overrides the persisted right-panel state for the current view. */
   rightVisible?: boolean;
   renderPanel(panel: PanelDescriptor): ReactNode;
+  drawerOpen?: boolean;
+  onCloseDrawer?(): void;
+  drawerLabel?: string;
+  onCloseOverlay?(): void;
+  overlayCloseLabel?: string;
+  onLeftWidthChange?(width: number): void;
+  onRightWidthChange?(width: number): void;
   leftLabel?: string;
   rightLabel?: string;
   emptyPanelLabel?: string;
@@ -40,6 +47,13 @@ export function WorkspaceFrame({
   onReorderPanels,
   rightVisible,
   renderPanel,
+  drawerOpen = false,
+  onCloseDrawer,
+  drawerLabel = "Close navigation",
+  onCloseOverlay,
+  overlayCloseLabel = "Close panel",
+  onLeftWidthChange,
+  onRightWidthChange,
   leftLabel = "Navigation",
   rightLabel = "Workspace panel",
   emptyPanelLabel = "Open a file or result to see it here.",
@@ -73,6 +87,13 @@ export function WorkspaceFrame({
       right={right}
       leftLabel={leftLabel}
       rightLabel={rightLabel}
+      drawerOpen={drawerOpen}
+      drawerLabel={drawerLabel}
+      {...(onCloseDrawer ? { onCloseDrawer } : {})}
+      {...(onCloseOverlay ? { onCloseOverlay } : {})}
+      overlayCloseLabel={overlayCloseLabel}
+      {...(onLeftWidthChange ? { onLeftWidthChange } : {})}
+      {...(onRightWidthChange ? { onRightWidthChange } : {})}
     />
   );
 }

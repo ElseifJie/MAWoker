@@ -9,6 +9,7 @@ describe("shell layout solver", () => {
       centerWidth: 512,
       leftMode: "expanded",
       rightMode: "panel",
+      mobile: false,
     });
   });
 
@@ -60,6 +61,7 @@ describe("shell layout solver", () => {
       rightWidth: 767,
       centerWidth: 711,
       rightMode: "overlay",
+      mobile: true,
     });
   });
 
@@ -71,6 +73,7 @@ describe("shell layout solver", () => {
         centerWidth: 1160,
         leftMode: "expanded",
         rightMode: "closed",
+        mobile: false,
       },
     );
   });

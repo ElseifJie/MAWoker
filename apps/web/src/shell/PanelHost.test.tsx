@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelHost } from "./PanelHost.js";
@@ -69,5 +69,24 @@ describe("PanelHost", () => {
 
     expect(screen.getByText("No panels are open.")).toBeVisible();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  });
+
+  it("[panel.drag] reorders tabs on drop", () => {
+    const view = props();
+    render(<PanelHost {...view} />);
+    const first = screen.getByRole("tab", { name: "方案.md" });
+    const second = screen.getByRole("tab", { name: "报表.xlsx" });
+    const store = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: "move",
+      setData: (type: string, value: string) => store.set(type, value),
+      getData: (type: string) => store.get(type) ?? "",
+    };
+
+    fireEvent.dragStart(first, { dataTransfer });
+    fireEvent.dragOver(second, { dataTransfer });
+    fireEvent.drop(second, { dataTransfer });
+
+    expect(view.onReorder).toHaveBeenCalledWith(0, 1);
   });
 });
