@@ -26,6 +26,14 @@ quotas.
 Sessions and events are authoritative on Ark; MAWork keeps a local projection for fast reads and stores
 only what it must (identifiers, ownership, status, quotas, audit).
 
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Architecture diagrams](docs/assets/diagrams/README.md)
+- [Backup and restore](docs/runbooks/backup-restore.md)
+- [Event ingestor cutover](docs/runbooks/event-ingestor-cutover.md)
+- [Shell and panel parity checklist](docs/ui/harness-parity.md)
+
 ## Stage A reliability
 
 The browser submits the first message with session creation (`submissionId`, `content`,

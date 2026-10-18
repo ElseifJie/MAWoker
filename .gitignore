@@ -13,5 +13,13 @@ test-results/
 /debug-*.md
 .superpowers/
 .zcode/
-docs/
+# Durable docs are committed selectively; working records stay local.
+docs/*
+!docs/README.md
+!docs/runbooks/
+!docs/research/
+!docs/ui/
+!docs/assets/
 specs/
+/diagrams/
+.screenshots/

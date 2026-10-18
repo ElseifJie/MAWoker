@@ -1,0 +1,56 @@
+{
+  "date": "2026-10-17",
+  "kind": "architecture-static-analysis",
+  "local_head": "5f2c5400d824aada4a6aac24723a73be3100f82f",
+  "working_tree": "Existing tracked and untracked changes preserved. Hashes describe files at evidence recording, not a runtime-tested tree.",
+  "reference_commits": {
+    "deepseek-ai/deepseek-harness": "687f282e8625c6b8d11ff58211a90524be2e4317",
+    "chyroc/open-muse": "499570f9f723f2a923ea10d39cad96c709440571"
+  },
+  "source_sha256": {
+    "package.json": "646973aeccbab9ee4ebe2341be0d6ec1724dddd6c982db5d90f2fa258f9c7110",
+    "AGENTS.md": "b779fae47d27c0e1a7166113bc7a896f42dcfcc5d450da9dfb4bf63045d32436",
+    "apps/api/src/app.ts": "029861a01571615c92e0e79b2df409ee7e0889025500dace0926be52acc77784",
+    "apps/api/src/index.ts": "88d7fc0ec73d62dfbee99baf29ae90641d24b27a467c0acee56258fa37e26348",
+    "apps/worker/src/index.ts": "9ba637fd0bd4d3f8d0bf3839bfe51077216466ccec02980049ac394d0fe8b849",
+    "apps/worker/src/poll.ts": "02562c681fb3b2cc094978b4d8c15f78bd1d8dc2c3bd80f2bbd1c77c76866a22",
+    "apps/web/src/App.tsx": "9b08e710c9c7f2073057c80480ba753bd804acdb2e3d8bb83aa4d24cdff858c8",
+    "apps/web/src/SessionPage.tsx": "18bbbe282d97e9a9648cf47092a5f762b09fbb13a40404ce95b5954bf58e2404",
+    "apps/web/src/main.tsx": "4a0473c532819a6927e1fb20eb458d3f843427ebedf7d32367b63fd1be5db53e",
+    "apps/web/src/ui/AppShell.tsx": "26cd366903edb426e71660ff643fceb129b0cfa6d360ca70e03cf6051f5cfade",
+    "apps/web/src/components/WorkspaceRail.tsx": "7e84bf1cee1573ea3a24cb7ef699203573ebf1c8e0fd251f2c263818fd988ae1",
+    "apps/web/src/components/TaskNotifications.tsx": "a41992051f091281bbdd268915a162d6009147b6f339ae9573d277a4776ac713",
+    "apps/web/src/timeline/useSessionTimeline.ts": "3fba1a27eac393012640ba3e188f9bbe461758faa011539ef463259aab702776",
+    "packages/contracts/src/index.ts": "9e7f5c2eb51c8d9f41aae1349fc8fac4c55e3619771561a2140b3ec032db383c",
+    "packages/db/src/schema.ts": "0edf38506accddea34372543f44868a0d3ef36127816614f6d526ce976b7a703",
+    "packages/db/src/repositories.ts": "152096ddad5a1f303e6553a614f2e1675d1f598778a14ae3b8d8ed41b9d26495",
+    "packages/domain/src/sessions.ts": "a7387701da86fda79ec01189438bc0b3af59e7777d20d77cca3ae7e444317877",
+    "packages/domain/src/session-delivery.ts": "869b72bfae47352abba629eb64b2e4942ba28669b8b76bc96ff73573ddd34e77",
+    "packages/domain/src/skills.ts": "e4178ccf91345706f7393973201a116a2e81f4cfce4096c14bc62f85b529ee00",
+    "packages/domain/src/user-agents.ts": "3b8a05443196718de5188316339a08a1012590e2e7f69cc3bc4b4a928bc69665",
+    "packages/domain/src/memory.ts": "0088e53860902777e8bae7727213aff83c512b20f9ef0daee6db68c8d00131a8",
+    "packages/domain/src/quota-policy.ts": "ad4d0b9e53126ad572050494fe7769e008e330fb75a3a5a8acc4a7610c16510f",
+    "packages/domain/src/notifications.ts": "a630a8a97174f2401fb4c90d48adf64627c35efcdd1d988e47ccf2eed5b26ac7",
+    "packages/ark-client/src/types.ts": "95b414cff26a8e001d058f7476d76b4125ad784fae6cb11ecd9f83fc47669fc4",
+    "packages/ark-client/src/http.ts": "86a5ba667a07fc6c1bb0182e42378822355101c83ff19ec96621b343146c5461",
+    "packages/auth/src/index.ts": "9d4178a9bf70390edde707d6286ee5d481338d602338b7fe3003a4da4cdecbad"
+  },
+  "report": "docs/research/MAWork-个人助手目标架构与重构建议-2026-10-17.md",
+  "report_sha256": "6ceb3762d65697ec912cf0430011c681f146ee498c509dad1cffab0c097028ce",
+  "checks": [
+    {
+      "command": "prettier --ignore-path /dev/null --check docs/research/MAWork-个人助手目标架构与重构建议-2026-10-17.md",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --no-index --check /dev/null docs/research/MAWork-个人助手目标架构与重构建议-2026-10-17.md",
+      "result": "No whitespace findings; git diff --no-index returns 1 because the new document differs from /dev/null."
+    }
+  ],
+  "skipped": [
+    "Runtime tests/typecheck/build: no application changes",
+    "Real PostgreSQL/cloud/MCP/device experiments: research only",
+    "Screenshots/browser visual checks: user preference"
+  ],
+  "dev_servers_started": false
+}

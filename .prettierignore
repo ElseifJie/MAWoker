@@ -8,6 +8,3 @@ packages/db/migrations/*.sql
 
 # editor/agent scratch state
 .zcode
-
-# generated diagram artifacts (PNG/SVG/raw JSON dumps)
-diagrams
